@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+# ============================================================
+#  NetOps Automation — Ubuntu 一键部署脚本
+#  用法:  chmod +x deploy-ubuntu.sh && ./deploy-ubuntu.sh
+#  支持:  Ubuntu 20.04 / 22.04 / 24.04 (x86_64 / arm64)
+# ============================================================
+
+set -euo pipefail
+
+# ---------- 颜色输出 ----------
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+info()  { echo -e "${CYAN}[INFO]${NC}  $*"; }
+ok()    { echo -e "${GREEN}[OK]${NC}    $*"; }
+warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+fail()  { echo -e "${RED}[FAIL]${NC}  $*"; exit 1; }
+
+# ---------- 配置 ----------
+NODE_MAJOR=20                       # Node.js LTS 大版本
+PYTHON_MIN="3.10"                   # 最低 Python 版本
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VENV_DIR="$PROJECT_DIR/.venv"
+SERVICE_NAME="netops"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+BACKEND_PORT=8003
+
+# ---------- 检查是否以 root 运行 ----------
+if [ "$EUID" -eq 0 ]; then
+    warn "当前以 root 身份运行，服务将以 root 用户启动"
+    warn "生产环境建议使用普通用户执行此脚本"
+    RUN_USER="root"
+else
+    RUN_USER="$USER"
+fi
+
+echo ""
+echo "========================================"
+echo "  NetOps Automation 一键部署"
+echo "  目标目录: $PROJECT_DIR"
+echo "========================================"
+echo ""
+
+# ============================================================
+# 0. 修正可能的 Windows 行尾符（CRLF → LF）
+# ============================================================
+if file "$0" | grep -q CRLF 2>/dev/null; then
+    info "检测到 CRLF 行尾，自动转换..."
+    sed -i 's/\r$//' "$0"
+    exec bash "$0" "$@"
+fi
+
+# ============================================================
+# 1. 系统依赖
+# ============================================================
+info "安装系统依赖..."
+sudo apt-get update -qq
+sudo apt-get install -y -qq \
+    python3 python3-venv python3-dev \
+    build-essential libffi-dev libssl-dev \
+    curl git ca-certificates > /dev/null 2>&1
+ok "系统依赖安装完成"
+
+# ============================================================
+# 2. Python 版本检查
+# ============================================================
+PYTHON_BIN=$(command -v python3 || true)
+if [ -z "$PYTHON_BIN" ]; then
+    fail "未找到 python3，请先安装 Python >= $PYTHON_MIN"
+fi
+
+PY_VER=$($PYTHON_BIN -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+PY_OK=$($PYTHON_BIN -c "import sys; print(1 if sys.version_info >= (3,10) else 0)")
+if [ "$PY_OK" != "1" ]; then
+    fail "Python 版本 $PY_VER 过低，需要 >= $PYTHON_MIN"
+fi
+ok "Python $PY_VER"
+
+# ============================================================
+# 3. Node.js 安装 / 检查
+# ============================================================
+if command -v node &> /dev/null; then
+    NODE_VER=$(node -v | tr -d 'v')
+    NODE_MAJOR_CUR=$(echo "$NODE_VER" | cut -d. -f1)
+    if [ "$NODE_MAJOR_CUR" -ge 18 ]; then
+        ok "Node.js v$NODE_VER (已安装)"
+    else
+        warn "Node.js v$NODE_VER 版本过低，将安装 v${NODE_MAJOR}"
+        NEED_NODE=1
+    fi
+else
+    info "未检测到 Node.js，将安装 v${NODE_MAJOR}"
+    NEED_NODE=1
+fi
+
+if [ "${NEED_NODE:-0}" = "1" ]; then
+    info "通过 NodeSource 安装 Node.js ${NODE_MAJOR}..."
+    curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | sudo -E bash - > /dev/null 2>&1
+    sudo apt-get install -y -qq nodejs > /dev/null 2>&1
+    ok "Node.js $(node -v) 安装完成"
+fi
+
+# ============================================================
+# 4. Python 虚拟环境
+# ============================================================
+cd "$PROJECT_DIR"
+
+if [ ! -d "$VENV_DIR" ]; then
+    info "创建 Python 虚拟环境..."
+    $PYTHON_BIN -m venv "$VENV_DIR"
+    ok "虚拟环境创建于 $VENV_DIR"
+else
+    ok "虚拟环境已存在"
+fi
+
+info "安装 Python 依赖..."
+"$VENV_DIR/bin/pip" install --upgrade pip -q
+"$VENV_DIR/bin/pip" install -r backend/requirements.txt -q
+ok "Python 依赖安装完成"
+
+# ============================================================
+# 5. Node.js 依赖
+# ============================================================
+info "安装 Node.js 依赖..."
+npm install --silent 2>&1 | tail -1
+ok "Node.js 依赖安装完成"
+
+# ============================================================
+# 6. 构建前端
+# ============================================================
+info "构建前端生产版本..."
+npm run build --silent
+ok "前端构建完成 (dist/)"
+
+# ============================================================
+# 7. 环境文件
+# ============================================================
+if [ ! -f "$PROJECT_DIR/.env" ] && [ -f "$PROJECT_DIR/.env.example" ]; then
+    cp "$PROJECT_DIR/.env.example" "$PROJECT_DIR/.env"
+    ok "已从 .env.example 创建 .env（请按需修改）"
+fi
+
+# ============================================================
+# 8. 数据目录
+# ============================================================
+mkdir -p "$PROJECT_DIR/data"
+mkdir -p "$PROJECT_DIR/backup"
+ok "数据目录就绪"
+
+# ============================================================
+# 9. 设置 ping3 RAW 权限
+# ============================================================
+VENV_PYTHON=$(readlink -f "$VENV_DIR/bin/python")
+CURRENT_CAPS=$(getcap "$VENV_PYTHON" 2>/dev/null || true)
+if echo "$CURRENT_CAPS" | grep -q cap_net_raw; then
+    ok "Python 已具备 CAP_NET_RAW 权限"
+else
+    info "设置 CAP_NET_RAW 权限 (用于 ICMP ping)..."
+    sudo setcap cap_net_raw+ep "$VENV_PYTHON"
+    ok "CAP_NET_RAW 权限设置完成"
+fi
+
+# ============================================================
+# 10. 调整 inotify 限制（避免 Vite watcher 报错）
+# ============================================================
+CURRENT_WATCHES=$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo 0)
+if [ "$CURRENT_WATCHES" -lt 524288 ]; then
+    info "调整 inotify watcher 限制..."
+    echo fs.inotify.max_user_watches=524288 | sudo tee -a /etc/sysctl.conf > /dev/null
+    echo fs.inotify.max_user_instances=1024 | sudo tee -a /etc/sysctl.conf > /dev/null
+    sudo sysctl -p > /dev/null 2>&1
+    ok "inotify 限制已调整"
+else
+    ok "inotify watcher 限制已足够 ($CURRENT_WATCHES)"
+fi
+
+# ============================================================
+# 11. 防火墙
+# ============================================================
+if command -v ufw &> /dev/null; then
+    UFW_STATUS=$(sudo ufw status | head -1)
+    if echo "$UFW_STATUS" | grep -qi "active"; then
+        info "开放端口 $BACKEND_PORT/tcp..."
+        sudo ufw allow "$BACKEND_PORT/tcp" > /dev/null 2>&1
+        ok "UFW 已放行端口 $BACKEND_PORT"
+    else
+        ok "UFW 未启用，跳过防火墙配置"
+    fi
+else
+    ok "未检测到 UFW，跳过防火墙配置"
+fi
+
+# ============================================================
+# 12. 创建 systemd 服务
+# ============================================================
+info "配置 systemd 服务..."
+
+sudo tee "$SERVICE_FILE" > /dev/null <<EOF
+[Unit]
+Description=NetOps Automation Platform
+After=network.target
+
+[Service]
+Type=simple
+User=$RUN_USER
+WorkingDirectory=$PROJECT_DIR
+ExecStart=$VENV_DIR/bin/python backend/main.py
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=PYTHONPATH=backend
+AmbientCapabilities=CAP_NET_RAW
+
+# Security hardening
+ProtectSystem=strict
+ReadWritePaths=$PROJECT_DIR/data $PROJECT_DIR/backup
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable "$SERVICE_NAME" > /dev/null 2>&1
+ok "systemd 服务 [$SERVICE_NAME] 已创建并设为开机启动"
+
+# ============================================================
+# 13. 启动服务
+# ============================================================
+info "启动 $SERVICE_NAME 服务..."
+sudo systemctl restart "$SERVICE_NAME"
+sleep 3
+
+if sudo systemctl is-active --quiet "$SERVICE_NAME"; then
+    ok "$SERVICE_NAME 服务已启动"
+else
+    warn "服务启动可能失败，查看日志: sudo journalctl -u $SERVICE_NAME -f"
+fi
+
+# ============================================================
+# 完成
+# ============================================================
+echo ""
+echo "========================================"
+echo -e "  ${GREEN}部署完成！${NC}"
+echo "========================================"
+echo ""
+echo "  访问地址:  http://<服务器IP>:${BACKEND_PORT}"
+echo "  默认账号:  admin / admin"
+echo "  (首次登录后请立即修改为强密码)"
+echo ""
+echo "  常用命令:"
+echo "    查看状态:  sudo systemctl status $SERVICE_NAME"
+echo "    查看日志:  sudo journalctl -u $SERVICE_NAME -f"
+echo "    重启服务:  sudo systemctl restart $SERVICE_NAME"
+echo "    停止服务:  sudo systemctl stop $SERVICE_NAME"
+echo ""

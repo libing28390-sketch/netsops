@@ -1,0 +1,120 @@
+import time
+from typing import List, Dict, Any
+try:
+    from scrapli import Scrapli
+    HAS_SCRAPLI = True
+except ImportError:
+    HAS_SCRAPLI = False
+from .base import BaseDriver, CommandResult
+
+class ScrapliDriver(BaseDriver):
+    """基于 Scrapli (同步) 的驱动实现"""
+    
+    def __init__(self, device_info: Dict[str, Any]):
+        super().__init__(device_info)
+        self.conn = None
+        # 映射平台
+        self.platform_type = self._map_platform(self.platform)
+
+    def _map_platform(self, platform: str) -> str:
+        mapping = {
+            'cisco_ios': 'cisco_iosxe',
+            'huawei_vrp': 'huawei_vrp',
+            'h3c_comware': 'hp_comware',
+            'juniper_junos': 'juniper_junos',
+            'arista_eos': 'arista_eos'
+        }
+        return mapping.get(platform, 'cisco_iosxe')
+
+    def connect(self):
+        import logging
+        import platform as platform_module
+        import paramiko
+        
+        logger = logging.getLogger(__name__)
+        
+        # 基础设备参数
+        device_params = {
+            'host': self.host,
+            'auth_username': self.username,
+            'auth_password': self.password,
+            'port': self.port,
+            'platform': self.platform_type,
+            'auth_strict_key': False,
+        }
+        
+        # 检测操作系统，在 Windows 上使用 paramiko 传输
+        if platform_module.system() == 'Windows':
+            logger.debug(f"Windows detected, using paramiko transport")
+            device_params['transport'] = 'paramiko'
+            # 配置 paramiko SSH 选项
+            device_params['transport_options'] = {
+                'paramiko_open_options': {
+                    'look_for_keys': False,
+                    'allow_agent': False,
+                }
+            }
+        else:
+            # Linux/Mac 上使用 system transport，并支持较老的 SSH 算法
+            device_params['transport_options'] = {
+                'open_cmd': [
+                    '-o', 'KexAlgorithms=+diffie-hellman-group1-sha1,diffie-hellman-group-exchange-sha1',
+                    '-o', 'HostKeyAlgorithms=+ssh-rsa',
+                    '-o', 'PubkeyAcceptedAlgorithms=+ssh-rsa'
+                ]
+            }
+        
+        try:
+            logger.debug(f"Connecting to {self.host}:{self.port} with platform {self.platform_type}")
+            self.conn = Scrapli(**device_params)
+            self.conn.open()
+            logger.info(f"Successfully connected to {self.host}")
+        except Exception as e:
+            logger.error(f"Scrapli connection failed to {self.host}: {str(e)}", exc_info=True)
+            raise Exception(f"Scrapli connection failed to {self.host}: {str(e)}")
+
+    def disconnect(self):
+        if self.conn:
+            self.conn.close()
+
+    def send_command(self, command: str) -> CommandResult:
+        start_time = time.time()
+        try:
+            response = self.conn.send_command(command)
+            return CommandResult(
+                success=True,
+                output=response.result,
+                hostname=self.device_info.get('hostname', self.host),
+                command=command,
+                execution_time=time.time() - start_time
+            )
+        except Exception as e:
+            return CommandResult(
+                success=False,
+                output="",
+                error=str(e),
+                hostname=self.device_info.get('hostname', self.host),
+                command=command,
+                execution_time=time.time() - start_time
+            )
+
+    def send_config(self, configs: List[str]) -> CommandResult:
+        start_time = time.time()
+        try:
+            response = self.conn.send_configs(configs)
+            return CommandResult(
+                success=True,
+                output=response.result,
+                hostname=self.device_info.get('hostname', self.host),
+                command="\n".join(configs),
+                execution_time=time.time() - start_time
+            )
+        except Exception as e:
+            return CommandResult(
+                success=False,
+                output="",
+                error=str(e),
+                hostname=self.device_info.get('hostname', self.host),
+                command="\n".join(configs),
+                execution_time=time.time() - start_time
+            )
