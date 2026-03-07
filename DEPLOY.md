@@ -271,12 +271,33 @@ ALERT_NOTIFY_WEBHOOK_URL=
 
 ## 一键部署（推荐）
 
+### 方式 A：已克隆项目
+
 ```bash
+cd netops-automation
 chmod +x deploy-ubuntu.sh
 ./deploy-ubuntu.sh
 ```
 
-脚本会自动完成：Python/Node 安装、依赖、前端构建、Nginx 反向代理、systemd 服务注册。
+### 方式 B：全新服务器（真正一键）
+
+无需手动 git clone，脚本自动完成克隆 + 部署：
+
+```bash
+# 一行命令，什么都不用装
+curl -fsSL https://raw.githubusercontent.com/libing28390-sketch/netsops/main/deploy-ubuntu.sh | bash
+```
+
+或者手动指定安装目录：
+
+```bash
+# 下载脚本后执行（默认安装到 /opt/netops-automation）
+curl -fsSL -o deploy.sh https://raw.githubusercontent.com/libing28390-sketch/netsops/main/deploy-ubuntu.sh
+chmod +x deploy.sh
+INSTALL_DIR=/opt ./deploy.sh
+```
+
+脚本会自动完成：Git 安装 → 项目克隆 → Python/Node 安装 → 依赖 → 前端构建 → Nginx 反向代理 → systemd 服务注册。
 
 部署完成后通过 `http://<服务器IP>` 访问（Nginx 80 端口 → 后端 8003）。
 
@@ -284,16 +305,32 @@ chmod +x deploy-ubuntu.sh
 
 ## Docker 部署
 
-### 快速启动
+### 快速启动（已有代码）
 
 ```bash
-# 1. 先构建前端（Nginx 容器需要 dist/）
+cd netops-automation
 npm install && npm run build
+docker compose up -d --build
+```
 
-# 2. 启动所有服务
+### 全新服务器一键 Docker 部署
+
+```bash
+# 1. 安装 Docker（如未安装）
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+# 重新登录使 docker 组生效，或执行: newgrp docker
+
+# 2. 安装 Git 并克隆项目
+sudo apt-get update -qq && sudo apt-get install -y -qq git nodejs npm
+git clone https://github.com/libing28390-sketch/netsops.git netops-automation
+cd netops-automation
+
+# 3. 构建前端 + 启动容器
+npm install && npm run build
 docker compose up -d --build
 
-# 3. 查看状态
+# 4. 查看状态
 docker compose ps
 docker compose logs -f
 ```

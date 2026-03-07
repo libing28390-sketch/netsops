@@ -2,7 +2,7 @@
 import { motion } from 'motion/react';
 import { Routes, Route, useLocation, useNavigate, Navigate } from 'react-router-dom';
 import * as htmlToImage from 'html-to-image';
-import { Plus, Server, CheckCircle, XCircle, RotateCcw, Play, Activity, LayoutDashboard, Database, Zap, ShieldCheck, History, LogOut, Search, Bell, Settings, Download, Upload, FileText, ChevronLeft, ChevronRight, Filter, Globe, TrendingUp, PieChart as PieChartIcon, Clock, AlertTriangle, X, Edit2, AlertCircle, FolderOpen, Eye, EyeOff, Sun, Moon, User, ChevronDown, Copy } from 'lucide-react';
+import { Plus, Server, CheckCircle, XCircle, RotateCcw, Play, Activity, LayoutDashboard, Database, Zap, ShieldCheck, History, LogOut, Search, Bell, Settings, Download, Upload, FileText, ChevronLeft, ChevronRight, Filter, Globe, TrendingUp, PieChart as PieChartIcon, Clock, AlertTriangle, X, Edit2, AlertCircle, FolderOpen, Eye, EyeOff, Sun, Moon, User, ChevronDown, Copy, Menu, PanelLeftClose } from 'lucide-react';
 import { useI18n } from './i18n.tsx';
 import * as XLSX from 'xlsx';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from 'recharts';
@@ -533,6 +533,8 @@ const App: React.FC = () => {
   const [configGroupOpen, setConfigGroupOpen] = useState(() => location.pathname.startsWith('/config'));
   const [automationGroupOpen, setAutomationGroupOpen] = useState(() => location.pathname.startsWith('/automation'));
   const [inventoryGroupOpen, setInventoryGroupOpen] = useState(() => location.pathname.startsWith('/inventory'));
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarPulseHidden, setSidebarPulseHidden] = useState(false);
   // Playbook state
   const [scenarios, setScenarios] = useState<any[]>([]);
   const [platforms, setPlatforms] = useState<Record<string, any>>({});
@@ -3604,12 +3606,21 @@ const App: React.FC = () => {
     <AppRuntimeBoundary language={language}>
       <div className="app-shell flex h-screen text-[#141414] font-sans overflow-hidden">
       {/* Sidebar */}
-      <aside className="theme-sidebar w-64 flex flex-col shadow-2xl z-20">
-        <div className="p-6 border-b border-white/5 flex items-center gap-3">
-          <div className="w-8 h-8 bg-[#00bceb] rounded-lg flex items-center justify-center text-white shadow-lg shadow-[#00bceb]/20">
-            <Activity size={18} />
+      <aside className={`theme-sidebar flex flex-col shadow-2xl z-20 transition-all duration-300 ease-in-out ${sidebarCollapsed ? 'w-0 min-w-0 overflow-hidden opacity-0' : 'w-64'}`}>
+        <div className="p-6 border-b border-white/5 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 bg-[#00bceb] rounded-lg flex items-center justify-center text-white shadow-lg shadow-[#00bceb]/20">
+              <Activity size={18} />
+            </div>
+            <h1 className="font-bold tracking-tight text-white whitespace-nowrap">NetAxis</h1>
           </div>
-          <h1 className="font-bold tracking-tight text-white">NetAxis</h1>
+          <button
+            onClick={() => setSidebarCollapsed(true)}
+            title={language === 'zh' ? '收起侧栏' : 'Collapse sidebar'}
+            className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/10 transition-all"
+          >
+            <PanelLeftClose size={16} />
+          </button>
         </div>
 
         <nav className="sidebar-nav-scroll flex-1 p-4 space-y-0.5 mt-2 overflow-y-auto">
@@ -3818,17 +3829,26 @@ const App: React.FC = () => {
           ))}
         </nav>
 
-        <div className="p-4 pt-0">
+        <div className={`p-4 pt-0 transition-all duration-200 ${sidebarPulseHidden ? 'hidden' : ''}`}>
           <div className="rounded-2xl border border-white/10 bg-white/[0.035] shadow-[0_18px_40px_rgba(0,0,0,0.18)] overflow-hidden">
-            <div className="px-4 py-3 border-b border-white/8 flex items-center justify-between">
-              <div>
+            <div className="px-4 py-3 border-b border-white/8 flex items-center justify-between gap-2">
+              <div className="min-w-0">
                 <p className="text-[11px] font-semibold tracking-wide text-white/92">{t('networkPulse')}</p>
                 <p className="text-[10px] text-white/42">{t('networkPulseSub')}</p>
               </div>
-              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold ${sidebarHealthBadgeClass} ${sidebarHealthLevel === 'critical' ? 'animate-pulse' : ''}`}>
-                <span className={`h-1.5 w-1.5 rounded-full ${sidebarHealthDotClass}`} />
-                {sidebarHealthLabel}
-              </span>
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold ${sidebarHealthBadgeClass} ${sidebarHealthLevel === 'critical' ? 'animate-pulse' : ''}`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${sidebarHealthDotClass}`} />
+                  {sidebarHealthLabel}
+                </span>
+                <button
+                  onClick={() => setSidebarPulseHidden(true)}
+                  title={language === 'zh' ? '隐藏面板' : 'Hide panel'}
+                  className="p-1 rounded-md text-white/25 hover:text-white/70 hover:bg-white/10 transition-all"
+                >
+                  <X size={12} />
+                </button>
+              </div>
             </div>
 
             <div className="px-2 py-2">
@@ -3896,6 +3916,17 @@ const App: React.FC = () => {
             </div>
           </div>
         </div>
+        {sidebarPulseHidden && (
+          <div className="p-4 pt-0">
+            <button
+              onClick={() => setSidebarPulseHidden(false)}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl border border-white/8 text-white/35 hover:text-white/60 hover:bg-white/5 transition-all text-[11px]"
+            >
+              <Activity size={13} />
+              <span>{language === 'zh' ? '显示网络状态' : 'Show Network Pulse'}</span>
+            </button>
+          </div>
+        )}
 
       </aside>
 
@@ -3904,6 +3935,13 @@ const App: React.FC = () => {
         {/* Top Header */}
         <header className="theme-header h-16 shadow-sm px-8 flex items-center justify-between z-10">
           <div className="flex items-center gap-4 flex-1">
+            <button
+              onClick={() => setSidebarCollapsed(v => !v)}
+              title={language === 'zh' ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar')}
+              className={`p-2 rounded-lg transition-all ${resolvedTheme === 'dark' ? 'text-white/55 hover:text-white hover:bg-white/10' : 'text-black/45 hover:text-black hover:bg-black/5'}`}
+            >
+              <Menu size={20} />
+            </button>
             <div>
               <h2 className={`text-lg font-semibold tracking-tight ${resolvedTheme === 'dark' ? 'text-white/92' : 'text-black/85'}`}>
                 {pageTitle}
@@ -4025,35 +4063,99 @@ const App: React.FC = () => {
                 initial={{ opacity: 0, y: -6, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 transition={{ duration: 0.16, ease: 'easeOut' }}
-                className={`absolute top-14 right-0 w-64 rounded-xl shadow-2xl z-50 overflow-hidden ${resolvedTheme === 'dark' ? 'bg-[#121c2d] border border-white/10' : 'bg-white border border-black/10'}`}
+                className={`absolute top-14 right-0 w-[300px] rounded-xl shadow-2xl z-50 overflow-hidden ${resolvedTheme === 'dark' ? 'bg-[#161b22] border border-white/[0.12]' : 'bg-white border border-black/[0.12] shadow-lg'}`}
               >
-                <div className={`px-4 py-3 border-b ${resolvedTheme === 'dark' ? 'border-white/10 bg-white/5' : 'border-black/5 bg-black/[0.02]'}`}>
-                  <div className="mb-2 flex justify-center">
-                    <div className={`w-14 h-14 rounded-full border overflow-hidden flex items-center justify-center ${resolvedTheme === 'dark' ? 'bg-white/10 border-white/10 text-white/70' : 'bg-black/10 border-black/5 text-black/60'}`}>
-                      {renderAvatarContent(currentAvatar, 24)}
-                    </div>
+                {/* Header: avatar + signed in as */}
+                <div className={`flex items-center gap-3 px-4 py-3 border-b ${resolvedTheme === 'dark' ? 'border-white/[0.08]' : 'border-black/[0.06]'}`}>
+                  <div className={`w-9 h-9 rounded-full border overflow-hidden flex-shrink-0 flex items-center justify-center ${resolvedTheme === 'dark' ? 'bg-white/10 border-white/10 text-white/70' : 'bg-black/10 border-black/5 text-black/60'}`}>
+                    {renderAvatarContent(currentAvatar, 18)}
                   </div>
-                  <p className={`text-sm font-semibold truncate ${resolvedTheme === 'dark' ? 'text-white/90' : 'text-black/80'}`}>{currentUser.username}</p>
-                  <p className={`text-[11px] mt-0.5 ${resolvedTheme === 'dark' ? 'text-white/50' : 'text-black/45'}`}>{currentUser.role || 'Administrator'}</p>
-                  <p className={`text-[10px] mt-1 ${resolvedTheme === 'dark' ? 'text-white/35' : 'text-black/35'}`}>Last login: {currentUserLastLogin}</p>
+                  <div className="min-w-0">
+                    <p className={`text-[13px] font-semibold truncate leading-tight ${resolvedTheme === 'dark' ? 'text-white/90' : 'text-black/85'}`}>{currentUser.username}</p>
+                    <p className={`text-[11px] truncate ${resolvedTheme === 'dark' ? 'text-white/45' : 'text-black/45'}`}>{currentUser.role || 'Administrator'}</p>
+                  </div>
                 </div>
 
-                <div className={`px-2 py-2 border-b ${resolvedTheme === 'dark' ? 'border-white/10' : 'border-black/5'}`}>
+                {/* Navigation shortcuts */}
+                <div className={`py-1 border-b ${resolvedTheme === 'dark' ? 'border-white/[0.08]' : 'border-black/[0.06]'}`}>
                   <button
                     onClick={openProfileModal}
-                    className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${resolvedTheme === 'dark' ? 'text-white/80 hover:bg-white/10' : 'text-black/70 hover:bg-black/[0.04]'}`}
+                    className={`w-full flex items-center gap-3 px-4 py-[7px] text-[13px] transition-colors ${resolvedTheme === 'dark' ? 'text-white/80 hover:bg-white/[0.06]' : 'text-black/70 hover:bg-black/[0.03]'}`}
                   >
-                    <User size={15} />
-                    Profile
+                    <User size={16} className="flex-shrink-0 opacity-70" />
+                    {language === 'zh' ? '个人资料' : 'Your profile'}
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab('dashboard'); setShowUserMenu(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-[7px] text-[13px] transition-colors ${resolvedTheme === 'dark' ? 'text-white/80 hover:bg-white/[0.06]' : 'text-black/70 hover:bg-black/[0.03]'}`}
+                  >
+                    <LayoutDashboard size={16} className="flex-shrink-0 opacity-70" />
+                    {language === 'zh' ? '仪表盘' : 'Dashboard'}
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab('monitoring'); setShowUserMenu(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-[7px] text-[13px] transition-colors ${resolvedTheme === 'dark' ? 'text-white/80 hover:bg-white/[0.06]' : 'text-black/70 hover:bg-black/[0.03]'}`}
+                  >
+                    <Activity size={16} className="flex-shrink-0 opacity-70" />
+                    {language === 'zh' ? '监控中心' : 'Monitoring'}
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab('history'); setShowUserMenu(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-[7px] text-[13px] transition-colors ${resolvedTheme === 'dark' ? 'text-white/80 hover:bg-white/[0.06]' : 'text-black/70 hover:bg-black/[0.03]'}`}
+                  >
+                    <History size={16} className="flex-shrink-0 opacity-70" />
+                    {language === 'zh' ? '审计日志' : 'Audit logs'}
                   </button>
                 </div>
 
-                <div className="p-2">
+                {/* Settings & Appearance */}
+                <div className={`py-1 border-b ${resolvedTheme === 'dark' ? 'border-white/[0.08]' : 'border-black/[0.06]'}`}>
+                  <button
+                    onClick={() => { setActiveTab('configuration'); setShowUserMenu(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-[7px] text-[13px] transition-colors ${resolvedTheme === 'dark' ? 'text-white/80 hover:bg-white/[0.06]' : 'text-black/70 hover:bg-black/[0.03]'}`}
+                  >
+                    <Settings size={16} className="flex-shrink-0 opacity-70" />
+                    {language === 'zh' ? '系统设置' : 'Settings'}
+                  </button>
+                  <div className={`w-full flex items-center justify-between px-4 py-[7px] text-[13px] ${resolvedTheme === 'dark' ? 'text-white/80' : 'text-black/70'}`}>
+                    <div className="flex items-center gap-3">
+                      {resolvedTheme === 'dark' ? <Moon size={16} className="flex-shrink-0 opacity-70" /> : <Sun size={16} className="flex-shrink-0 opacity-70" />}
+                      <span>{language === 'zh' ? '外观' : 'Appearance'}</span>
+                    </div>
+                    <div className={`flex items-center rounded-md border p-0.5 ${resolvedTheme === 'dark' ? 'border-white/10 bg-white/5' : 'border-black/10 bg-black/[0.03]'}`}>
+                      <button
+                        onClick={() => setThemeMode('light')}
+                        title="Light"
+                        className={`p-1 rounded transition-all ${themeMode === 'light' ? 'bg-[#00bceb]/15 text-[#00bceb]' : (resolvedTheme === 'dark' ? 'text-white/45 hover:text-white' : 'text-black/40 hover:text-black')}`}
+                      >
+                        <Sun size={13} />
+                      </button>
+                      <button
+                        onClick={() => setThemeMode('dark')}
+                        title="Dark"
+                        className={`p-1 rounded transition-all ${themeMode === 'dark' ? 'bg-[#00bceb]/15 text-[#00bceb]' : (resolvedTheme === 'dark' ? 'text-white/45 hover:text-white' : 'text-black/40 hover:text-black')}`}
+                      >
+                        <Moon size={13} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Last login */}
+                <div className={`px-4 py-2 border-b ${resolvedTheme === 'dark' ? 'border-white/[0.08]' : 'border-black/[0.06]'}`}>
+                  <p className={`text-[11px] flex items-center gap-2 ${resolvedTheme === 'dark' ? 'text-white/35' : 'text-black/35'}`}>
+                    <Clock size={12} className="flex-shrink-0" />
+                    {language === 'zh' ? '上次登录' : 'Last login'}: {currentUserLastLogin}
+                  </p>
+                </div>
+
+                {/* Sign out */}
+                <div className="py-1">
                   <button
                     onClick={handleLogout}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-red-500 hover:bg-red-500/10 transition-all"
+                    className={`w-full flex items-center gap-3 px-4 py-[7px] text-[13px] transition-colors ${resolvedTheme === 'dark' ? 'text-white/80 hover:bg-white/[0.06]' : 'text-black/70 hover:bg-black/[0.03]'}`}
                   >
-                    <LogOut size={16} />
+                    <LogOut size={16} className="flex-shrink-0 opacity-70" />
                     {t('logout')}
                   </button>
                 </div>

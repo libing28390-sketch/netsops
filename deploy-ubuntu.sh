@@ -22,13 +22,10 @@ fail()  { echo -e "${RED}[FAIL]${NC}  $*"; exit 1; }
 # ---------- 配置 ----------
 NODE_MAJOR=20                       # Node.js LTS 大版本
 PYTHON_MIN="3.10"                   # 最低 Python 版本
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VENV_DIR="$PROJECT_DIR/.venv"
+GIT_REPO="https://github.com/libing28390-sketch/netsops.git"
+PROJECT_NAME="netops-automation"
 SERVICE_NAME="netops"
-SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 BACKEND_PORT=8003
-NGINX_CONF="/etc/nginx/sites-available/${SERVICE_NAME}"
-NGINX_LINK="/etc/nginx/sites-enabled/${SERVICE_NAME}"
 SERVER_NAME="_"                     # 改为你的域名，如 netops.example.com
 
 # ---------- 检查是否以 root 运行 ----------
@@ -43,7 +40,6 @@ fi
 echo ""
 echo "========================================"
 echo "  NetOps Automation 一键部署"
-echo "  目标目录: $PROJECT_DIR"
 echo "========================================"
 echo ""
 
@@ -66,11 +62,44 @@ sudo apt-get install -y -qq \
     build-essential libffi-dev libssl-dev \
     nginx \
     curl git ca-certificates > /dev/null 2>&1
-ok "系统依赖安装完成（含 Nginx）"
+ok "系统依赖安装完成（含 Nginx、Git）"
+
+# ============================================================
+# 1.5 如果不在项目目录中，则从 Git 克隆
+# ============================================================
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/backend/main.py" ]; then
+    # 脚本在项目目录内运行
+    PROJECT_DIR="$SCRIPT_DIR"
+    ok "检测到项目目录: $PROJECT_DIR"
+else
+    # 脚本独立运行，需要 git clone
+    INSTALL_BASE="${INSTALL_DIR:-/opt}"
+    PROJECT_DIR="$INSTALL_BASE/$PROJECT_NAME"
+    if [ -d "$PROJECT_DIR/.git" ]; then
+        info "项目目录已存在，拉取最新代码..."
+        cd "$PROJECT_DIR"
+        git pull --ff-only || warn "git pull 失败，使用当前版本继续"
+        ok "代码更新完成: $PROJECT_DIR"
+    else
+        info "从 Git 克隆项目..."
+        sudo mkdir -p "$INSTALL_BASE"
+        sudo chown "$RUN_USER:$(id -gn $RUN_USER)" "$INSTALL_BASE" 2>/dev/null || true
+        git clone "$GIT_REPO" "$PROJECT_DIR"
+        ok "项目克隆完成: $PROJECT_DIR"
+    fi
+fi
+
+info "目标目录: $PROJECT_DIR"
 
 # ============================================================
 # 2. Python 版本检查
 # ============================================================
+VENV_DIR="$PROJECT_DIR/.venv"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+NGINX_CONF="/etc/nginx/sites-available/${SERVICE_NAME}"
+NGINX_LINK="/etc/nginx/sites-enabled/${SERVICE_NAME}"
+
 PYTHON_BIN=$(command -v python3 || true)
 if [ -z "$PYTHON_BIN" ]; then
     fail "未找到 python3，请先安装 Python >= $PYTHON_MIN"
