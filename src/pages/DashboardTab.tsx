@@ -73,7 +73,7 @@ const DashboardTab: React.FC<DashboardTabProps> = ({
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-6">
         {[
           { label: t('totalAssets'), value: devices.length, icon: Server, color: 'text-[#005073]', bg: 'bg-[#005073]/5', tab: 'inventory' },
           { label: t('onlineNodes'), value: onlineCount, icon: Activity, color: onlinePct < 30 ? 'text-red-600' : onlinePct < 60 ? 'text-orange-600' : 'text-emerald-600', bg: onlinePct < 30 ? 'bg-red-50' : onlinePct < 60 ? 'bg-orange-50' : 'bg-emerald-50', tab: 'inventory' },
@@ -92,8 +92,8 @@ const DashboardTab: React.FC<DashboardTabProps> = ({
         ))}
       </div>
 
-      <div className="grid grid-cols-12 gap-6">
-        <div className="col-span-12 lg:col-span-8 bg-white rounded-2xl border border-black/5 p-8 shadow-sm">
+      <div className="grid grid-cols-12 gap-3 md:gap-6">
+        <div className="col-span-12 lg:col-span-8 bg-white rounded-2xl border border-black/5 p-4 md:p-8 shadow-sm">
           <div className="flex items-center justify-between mb-8">
             <div>
               <h3 className="text-sm font-bold text-[#00172D] flex items-center gap-2">
@@ -140,7 +140,7 @@ const DashboardTab: React.FC<DashboardTabProps> = ({
           </div>
         </div>
 
-        <div className="col-span-12 lg:col-span-4 bg-white rounded-2xl border border-black/5 p-8 shadow-sm">
+        <div className="col-span-12 lg:col-span-4 bg-white rounded-2xl border border-black/5 p-4 md:p-8 shadow-sm">
           <h3 className="text-sm font-bold text-[#00172D] mb-8 flex items-center gap-2">
             <PieChartIcon size={18} className="text-emerald-500" />
             {t('platformDistribution')}
@@ -171,7 +171,7 @@ const DashboardTab: React.FC<DashboardTabProps> = ({
         </div>
       </div>
 
-      <div className="grid grid-cols-12 gap-6">
+      <div className="grid grid-cols-12 gap-3 md:gap-6">
         <div className="col-span-12 lg:col-span-7 bg-white rounded-2xl border border-black/5 p-8 shadow-sm">
           <div className="flex items-center justify-between mb-8">
             <div>
@@ -214,7 +214,7 @@ const DashboardTab: React.FC<DashboardTabProps> = ({
           </div>
         </div>
 
-        <div className="col-span-12 lg:col-span-5 bg-white rounded-2xl border border-black/5 p-8 shadow-sm">
+        <div className="col-span-12 lg:col-span-5 bg-white rounded-2xl border border-black/5 p-4 md:p-8 shadow-sm">
           <h3 className="text-sm font-bold text-[#00172D] mb-8 flex items-center gap-2">
             <Clock size={18} className="text-orange-500" />
             {t('upcomingTasks')}

@@ -393,3 +393,25 @@ textarea {
 	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35) !important;
 }
 
+/* ── Mobile responsive ── */
+@media (max-width: 767px) {
+	/* Prevent horizontal overflow on narrow screens */
+	.app-shell {
+		overflow-x: hidden;
+	}
+
+	/* Make touch targets easier to tap */
+	button, a, select, input[type="checkbox"] {
+		min-height: 36px;
+	}
+
+	/* Ensure tables don't break layout */
+	table {
+		font-size: 0.75rem;
+	}
+	table th, table td {
+		padding-left: 0.5rem;
+		padding-right: 0.5rem;
+	}
+}
+

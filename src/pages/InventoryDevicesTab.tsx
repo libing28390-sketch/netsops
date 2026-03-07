@@ -132,6 +132,7 @@ const InventoryDevicesTab: React.FC<InventoryDevicesTabProps> = ({
             </button>
           </div>
         )}
+        <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-black/[0.02] border-b border-black/5">
@@ -270,6 +271,7 @@ const InventoryDevicesTab: React.FC<InventoryDevicesTabProps> = ({
             )}
           </tbody>
         </table>
+        </div>
         <Pagination
           currentPage={inventoryPage}
           totalItems={inventoryTotal}

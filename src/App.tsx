@@ -533,8 +533,9 @@ const App: React.FC = () => {
   const [configGroupOpen, setConfigGroupOpen] = useState(() => location.pathname.startsWith('/config'));
   const [automationGroupOpen, setAutomationGroupOpen] = useState(() => location.pathname.startsWith('/automation'));
   const [inventoryGroupOpen, setInventoryGroupOpen] = useState(() => location.pathname.startsWith('/inventory'));
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.innerWidth < 768);
   const [sidebarPulseHidden, setSidebarPulseHidden] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
   // Playbook state
   const [scenarios, setScenarios] = useState<any[]>([]);
   const [platforms, setPlatforms] = useState<Record<string, any>>({});
@@ -589,7 +590,14 @@ const App: React.FC = () => {
   const configPage = location.pathname.split('/')[2] || 'backup';
   const automationPage = location.pathname.split('/')[2] || 'execute';
   const inventorySubPage = location.pathname.split('/')[2] || 'devices';
-  const setActiveTab = (tab: string) => navigate(`/${tab}`);
+  const setActiveTab = (tab: string) => {
+    navigate(`/${tab}`);
+    if (isMobile) setSidebarCollapsed(true);
+  };
+  const navTo = (path: string) => {
+    navigate(path);
+    if (isMobile) setSidebarCollapsed(true);
+  };
 
   const pageTitle = useMemo(() => {
     if (activeTab === 'automation') {
@@ -655,6 +663,16 @@ const App: React.FC = () => {
       return blob.includes(q);
     });
   }, [scenarios, scenarioSearch]);
+
+  useEffect(() => {
+    const onResize = () => {
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      if (mobile) setSidebarCollapsed(true);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   useEffect(() => {
     if (isAuthenticated && location.pathname === '/') {
@@ -3605,8 +3623,20 @@ const App: React.FC = () => {
   return (
     <AppRuntimeBoundary language={language}>
       <div className="app-shell flex h-screen text-[#141414] font-sans overflow-hidden">
+      {/* Mobile sidebar backdrop */}
+      {isMobile && !sidebarCollapsed && (
+        <div
+          className="fixed inset-0 bg-black/50 z-25 md:hidden"
+          style={{ zIndex: 25 }}
+          onClick={() => setSidebarCollapsed(true)}
+        />
+      )}
       {/* Sidebar */}
-      <aside className={`theme-sidebar flex flex-col shadow-2xl z-20 transition-all duration-300 ease-in-out ${sidebarCollapsed ? 'w-0 min-w-0 overflow-hidden opacity-0' : 'w-64'}`}>
+      <aside className={`theme-sidebar flex flex-col shadow-2xl transition-all duration-300 ease-in-out ${
+        isMobile
+          ? `fixed inset-y-0 left-0 w-64 z-30 ${sidebarCollapsed ? '-translate-x-full' : 'translate-x-0'}`
+          : `z-20 ${sidebarCollapsed ? 'w-0 min-w-0 overflow-hidden opacity-0' : 'w-64'}`
+      }`}>
         <div className="p-6 border-b border-white/5 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 bg-[#00bceb] rounded-lg flex items-center justify-center text-white shadow-lg shadow-[#00bceb]/20">
@@ -3649,7 +3679,7 @@ const App: React.FC = () => {
               onClick={() => {
                 const next = !inventoryGroupOpen;
                 setInventoryGroupOpen(next);
-                if (next && !location.pathname.startsWith('/inventory')) navigate('/inventory/devices');
+                if (next && !location.pathname.startsWith('/inventory')) navTo('/inventory/devices');
               }}
               className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
                 activeTab === 'inventory'
@@ -3678,7 +3708,7 @@ const App: React.FC = () => {
                   return (
                     <button
                       key={item.path}
-                      onClick={() => navigate(`/${item.path}`)}
+                      onClick={() => navTo(`/${item.path}`)}
                       className={`w-full flex items-center gap-2.5 pl-5 pr-3 py-2 rounded-lg text-sm transition-all ${
                         isActive
                           ? 'bg-[#00bceb]/15 text-[#00bceb] font-semibold'
@@ -3702,7 +3732,7 @@ const App: React.FC = () => {
               onClick={() => {
                 const next = !automationGroupOpen;
                 setAutomationGroupOpen(next);
-                if (next && !location.pathname.startsWith('/automation')) navigate('/automation/execute');
+                if (next && !location.pathname.startsWith('/automation')) navTo('/automation/execute');
               }}
               className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
                 activeTab === 'automation'
@@ -3733,7 +3763,7 @@ const App: React.FC = () => {
                   return (
                     <button
                       key={item.path}
-                      onClick={() => navigate(`/${item.path}`)}
+                      onClick={() => navTo(`/${item.path}`)}
                       className={`w-full flex items-center gap-2.5 pl-5 pr-3 py-2 rounded-lg text-sm transition-all ${
                         isActive
                           ? 'bg-[#00bceb]/15 text-[#00bceb] font-semibold'
@@ -3757,7 +3787,7 @@ const App: React.FC = () => {
               onClick={() => {
                 const next = !configGroupOpen;
                 setConfigGroupOpen(next);
-                if (next && !location.pathname.startsWith('/config')) navigate('/config/backup');
+                if (next && !location.pathname.startsWith('/config')) navTo('/config/backup');
               }}
               className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
                 activeTab === 'config'
@@ -3790,7 +3820,7 @@ const App: React.FC = () => {
                   return (
                     <button
                       key={item.path}
-                      onClick={() => navigate(`/${item.path}`)}
+                      onClick={() => navTo(`/${item.path}`)}
                       className={`w-full flex items-center gap-2.5 pl-5 pr-3 py-2 rounded-lg text-sm transition-all ${
                         isActive
                           ? 'bg-[#00bceb]/15 text-[#00bceb] font-semibold'
@@ -3855,7 +3885,7 @@ const App: React.FC = () => {
               <button
                 onClick={() => {
                   setInventoryGroupOpen(true);
-                  navigate('/inventory/devices');
+                  navTo('/inventory/devices');
                 }}
                 className="w-full flex items-center justify-between rounded-xl px-3 py-2.5 text-left transition-all hover:bg-white/6"
               >
@@ -3890,7 +3920,7 @@ const App: React.FC = () => {
               <button
                 onClick={() => {
                   setAutomationGroupOpen(true);
-                  navigate('/automation/history');
+                  navTo('/automation/history');
                 }}
                 className="w-full flex items-center justify-between rounded-xl px-3 py-2.5 text-left transition-all hover:bg-white/6"
               >
@@ -3933,8 +3963,8 @@ const App: React.FC = () => {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Top Header */}
-        <header className="theme-header h-16 shadow-sm px-8 flex items-center justify-between z-10">
-          <div className="flex items-center gap-4 flex-1">
+        <header className="theme-header h-14 md:h-16 shadow-sm px-3 md:px-8 flex items-center justify-between z-10">
+          <div className="flex items-center gap-2 md:gap-4 flex-1 min-w-0">
             <button
               onClick={() => setSidebarCollapsed(v => !v)}
               title={language === 'zh' ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar')}
@@ -3943,10 +3973,10 @@ const App: React.FC = () => {
               <Menu size={20} />
             </button>
             <div>
-              <h2 className={`text-lg font-semibold tracking-tight ${resolvedTheme === 'dark' ? 'text-white/92' : 'text-black/85'}`}>
+              <h2 className={`text-base md:text-lg font-semibold tracking-tight truncate ${resolvedTheme === 'dark' ? 'text-white/92' : 'text-black/85'}`}>
                 {pageTitle}
               </h2>
-              <p className={`text-[11px] ${resolvedTheme === 'dark' ? 'text-white/45' : 'text-black/40'}`}>
+              <p className={`text-[11px] hidden sm:block ${resolvedTheme === 'dark' ? 'text-white/45' : 'text-black/40'}`}>
                 {new Date().toLocaleDateString()} · NetAxis Control Plane
               </p>
             </div>
@@ -3972,7 +4002,7 @@ const App: React.FC = () => {
                   initial={{ opacity: 0, y: -6, scale: 0.98 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   transition={{ duration: 0.16, ease: 'easeOut' }}
-                  className={`absolute top-12 right-0 w-80 rounded-xl shadow-2xl z-50 overflow-hidden ${resolvedTheme === 'dark' ? 'bg-[#121c2d] border border-white/10' : 'bg-white border border-black/10'}`}
+                  className={`absolute top-12 right-0 w-[calc(100vw-2rem)] sm:w-80 max-w-80 rounded-xl shadow-2xl z-50 overflow-hidden ${resolvedTheme === 'dark' ? 'bg-[#121c2d] border border-white/10' : 'bg-white border border-black/10'}`}
                 >
                   <div className={`px-4 py-3 border-b flex items-center justify-between ${resolvedTheme === 'dark' ? 'border-white/10 bg-white/5' : 'border-black/5 bg-black/[0.02]'}`}>
                     <p className={`text-sm font-semibold ${resolvedTheme === 'dark' ? 'text-white/90' : 'text-black/80'}`}>Notifications</p>
@@ -4033,7 +4063,7 @@ const App: React.FC = () => {
                 initial={{ opacity: 0, y: -6, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 transition={{ duration: 0.16, ease: 'easeOut' }}
-                className={`absolute top-14 right-0 w-[300px] rounded-xl shadow-2xl z-50 overflow-hidden ${resolvedTheme === 'dark' ? 'bg-[#161b22] border border-white/[0.12]' : 'bg-white border border-black/[0.12] shadow-lg'}`}
+                className={`absolute top-14 right-0 w-[calc(100vw-2rem)] sm:w-[300px] max-w-[300px] rounded-xl shadow-2xl z-50 overflow-hidden ${resolvedTheme === 'dark' ? 'bg-[#161b22] border border-white/[0.12]' : 'bg-white border border-black/[0.12] shadow-lg'}`}
               >
                 {/* Header: avatar + signed in as */}
                 <div className={`flex items-center gap-3 px-4 py-3 border-b ${resolvedTheme === 'dark' ? 'border-white/[0.08]' : 'border-black/[0.06]'}`}>
@@ -4147,7 +4177,7 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        <main className="flex-1 overflow-auto p-8 pb-16">
+        <main className="flex-1 overflow-auto p-4 pb-8 md:p-8 md:pb-16">
           {activeTab === 'dashboard' && (
             <DashboardTab
               devices={devices}
@@ -5366,9 +5396,9 @@ const App: React.FC = () => {
                   : 'Standard workflow: Select scenario -> Fill variables -> Select targets -> Preview Commands -> Validation / Apply Changes.'}
               </div>
 
-              <div className="flex-1 grid grid-cols-12 gap-5 overflow-hidden">
+              <div className="flex-1 grid grid-cols-1 md:grid-cols-12 gap-5 overflow-hidden">
                 {/* Left: Scenario selector */}
-                <div className="col-span-3 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
+                <div className="md:col-span-3 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
                   <div className="p-4 border-b border-black/5 bg-black/[0.01] space-y-2">
                     <h3 className="text-[10px] font-bold uppercase tracking-widest text-black/40">{t('chooseScenario')}</h3>
                     <div className="relative">
@@ -5413,7 +5443,7 @@ const App: React.FC = () => {
                 </div>
 
                 {/* Middle: Config & variables */}
-                <div className="col-span-5 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
+                <div className="md:col-span-5 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
                   {selectedScenario ? (
                     <div className="flex flex-col h-full">
                       <div className="p-4 border-b border-black/5 bg-black/[0.01]">
@@ -5563,7 +5593,7 @@ const App: React.FC = () => {
                 </div>
 
                 {/* Right: Command preview */}
-                <div className="col-span-4 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
+                <div className="md:col-span-4 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
                   <div className="p-4 border-b border-black/5 bg-black/[0.01]">
                     <h3 className="text-[10px] font-bold uppercase tracking-widest text-black/40">{t('commandPreview')}</h3>
                   </div>
@@ -5636,7 +5666,7 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
                 {filteredScenarios.map(sc => {
                   const riskColor = sc.risk === 'high' ? 'border-red-200 bg-red-50/30' : sc.risk === 'medium' ? 'border-amber-200 bg-amber-50/30' : 'border-emerald-200 bg-emerald-50/30';
                   return (
@@ -5726,9 +5756,9 @@ const App: React.FC = () => {
                 </button>
               </div>
 
-              <div className="flex-1 grid grid-cols-12 gap-5 overflow-hidden">
+              <div className="flex-1 grid grid-cols-1 md:grid-cols-12 gap-5 overflow-hidden">
                 {/* Left: Execution list */}
-                <div className="col-span-4 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
+                <div className="md:col-span-4 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
                   <div className="p-4 border-b border-black/5 bg-black/[0.01]">
                     <h3 className="text-[10px] font-bold uppercase tracking-widest text-black/40">
                       {playbookExecutions.length} {t('executions')}
@@ -5771,7 +5801,7 @@ const App: React.FC = () => {
                 </div>
 
                 {/* Right: Live output / execution details */}
-                <div className="col-span-8 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
+                <div className="md:col-span-8 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
                   {activeExecutionId && executionStatus === 'running' ? (
                     /* ── Live WebSocket stream ── */
                     <div className="flex flex-col h-full">
@@ -5942,9 +5972,9 @@ const App: React.FC = () => {
               </div>
 
               {/* 3-col + 9-col split */}
-              <div className="flex-1 grid grid-cols-12 gap-5 overflow-hidden">
+              <div className="flex-1 grid grid-cols-1 md:grid-cols-12 gap-5 overflow-hidden">
                 {/* Device list */}
-                <div className="col-span-3 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
+                <div className="md:col-span-3 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
                   <div className="p-4 border-b border-black/5 bg-black/[0.01]">
                     <h3 className="text-[10px] font-bold uppercase tracking-widest text-black/40">{t('selectDevice')}</h3>
                     <button onClick={() => { setConfigCenterDevice(null); setConfigViewSnapshot(null); setConfigViewContent(''); }}
@@ -5985,7 +6015,7 @@ const App: React.FC = () => {
                 </div>
 
                 {/* Right panel: snapshot list | config viewer */}
-                <div className="col-span-9 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
+                <div className="md:col-span-9 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
                   {configViewSnapshot ? (
                     /* ── Config Viewer ── */
                     <div className="flex flex-col h-full">
@@ -6256,7 +6286,7 @@ const App: React.FC = () => {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-2 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {(['left', 'right'] as const).map(side => {
                       const current = side === 'left' ? configDiffLeft : configDiffRight;
                       const snapList = side === 'right' && configDiffLeft ? sameTargetSnapshots : configSnapshots;
@@ -6669,7 +6699,7 @@ const App: React.FC = () => {
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-5 mb-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
                 {/* Storage path info */}
                 <div className="bg-[#00bceb]/5 border border-[#00bceb]/20 rounded-2xl p-5 flex gap-4">
                   <div className="p-2.5 bg-[#00bceb]/10 rounded-xl text-[#00bceb] flex-shrink-0"><Database size={20} /></div>
@@ -6699,7 +6729,7 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 {/* Schedule settings */}
                 <div className="bg-white border border-black/5 rounded-2xl p-6 shadow-sm">
                   <h3 className="text-sm font-bold mb-5">⏰ {t('scheduledBackup')}</h3>
@@ -6816,8 +6846,8 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex-1 grid grid-cols-12 gap-8 overflow-hidden">
-                <div className="col-span-4 flex flex-col gap-6 overflow-auto pr-2">
+              <div className="flex-1 grid grid-cols-1 md:grid-cols-12 gap-4 md:gap-8 overflow-hidden">
+                <div className="md:col-span-4 flex flex-col gap-6 overflow-auto md:pr-2">
                   {/* Usage Guide */}
                   <div className="bg-emerald-50 rounded-2xl border border-emerald-100 p-6 shadow-sm">
                     <div className="flex items-center gap-3 mb-3">
@@ -6931,7 +6961,7 @@ const App: React.FC = () => {
                   </div>
                 </div>
 
-                  <div className="col-span-8 bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden flex flex-col">
+                  <div className="md:col-span-8 bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden flex flex-col">
                     <div className="p-6 border-b border-black/5 bg-black/[0.01] flex justify-between items-center">
                       <div className="flex items-center gap-3">
                         <div className="p-2 bg-black/5 rounded-lg text-black/60">
@@ -8098,7 +8128,7 @@ const App: React.FC = () => {
             </div>
             
             <div className="p-6 overflow-y-auto flex-1">
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                 <div>
                   <label className="block text-xs font-medium text-black/60 mb-1.5 uppercase tracking-wider">Hostname</label>
                   <input 
@@ -8286,7 +8316,7 @@ const App: React.FC = () => {
             </div>
             
             <div className="p-6 overflow-y-auto flex-1">
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                 <div>
                   <label className="block text-xs font-medium text-black/60 mb-1.5 uppercase tracking-wider">Hostname</label>
                   <input 

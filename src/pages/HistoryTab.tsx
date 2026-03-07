@@ -91,6 +91,7 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
             <option value="30d">{language === 'zh' ? '最近 30 天' : 'Last 30 Days'}</option>
           </select>
         </div>
+        <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-black/[0.01] border-b border-black/5">
@@ -146,6 +147,7 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
             )}
           </tbody>
         </table>
+        </div>
         <Pagination
           currentPage={auditPage}
           totalItems={auditTotal}

@@ -51,6 +51,7 @@ const UsersTab: React.FC<UsersTabProps> = ({
       </div>
 
       <div className="bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-black/[0.01] border-b border-black/5">
@@ -93,6 +94,7 @@ const UsersTab: React.FC<UsersTabProps> = ({
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       {showAddUserModal && (
