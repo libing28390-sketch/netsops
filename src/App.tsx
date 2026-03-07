@@ -4800,20 +4800,6 @@ const App: React.FC = () => {
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => setShowCustomCommandModal(true)}
-                    className="px-4 py-2.5 text-xs font-bold bg-[#00bceb] text-white rounded-xl hover:bg-[#0096bd] transition-all inline-flex items-center gap-2 shadow-lg shadow-[#00bceb]/25"
-                    title={language === 'zh' ? '创建并执行自定义命令' : 'Create and execute custom command'}
-                  >
-                    <Plus size={13} />
-                    {language === 'zh' ? '新建命令' : 'New Command'}
-                    <span className="px-1.5 py-0.5 rounded-full bg-white/20 text-[9px] font-black tracking-wide">CLI</span>
-                    {(batchMode ? batchDeviceIds.length : (selectedDevice ? 1 : 0)) > 0 && (
-                      <span className="px-1.5 py-0.5 rounded-full bg-white/15 text-[9px] font-bold">
-                        {batchMode ? `${batchDeviceIds.length}${language === 'zh' ? '台' : ''}` : (selectedDevice?.hostname || '')}
-                      </span>
-                    )}
-                  </button>
-                  <button
                     onClick={() => navigate('/automation/history')}
                     className="px-3 py-2 text-xs font-semibold border border-black/10 rounded-lg hover:bg-black/5 transition-all"
                   >
