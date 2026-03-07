@@ -1,0 +1,68 @@
+"""
+Credential encryption/decryption using Fernet (AES-128-CBC).
+The encryption key is derived from settings.CREDENTIAL_ENCRYPTION_KEY via PBKDF2.
+"""
+
+import base64
+import logging
+from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+logger = logging.getLogger(__name__)
+
+# Module-level cache for the Fernet instance
+_fernet: Fernet | None = None
+_SALT = b'netops-credential-salt-v1'  # Fixed salt — acceptable for symmetric key derivation from a strong master key
+
+
+def _get_fernet() -> Fernet:
+    global _fernet
+    if _fernet is not None:
+        return _fernet
+    from core.config import settings
+    key_material = settings.CREDENTIAL_ENCRYPTION_KEY
+    if not key_material or key_material == 'change-me-to-a-random-secret':
+        raise RuntimeError(
+            "CREDENTIAL_ENCRYPTION_KEY is not configured. "
+            "Set it in .env or environment variables before starting the application."
+        )
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=_SALT,
+        iterations=480_000,
+    )
+    derived = kdf.derive(key_material.encode('utf-8'))
+    _fernet = Fernet(base64.urlsafe_b64encode(derived))
+    return _fernet
+
+
+_ENCRYPTED_PREFIX = 'enc:v1:'
+
+
+def encrypt_credential(plaintext: str | None) -> str | None:
+    """Encrypt a credential string. Returns prefixed ciphertext."""
+    if not plaintext:
+        return plaintext
+    if plaintext.startswith(_ENCRYPTED_PREFIX):
+        return plaintext  # Already encrypted
+    f = _get_fernet()
+    token = f.encrypt(plaintext.encode('utf-8'))
+    return _ENCRYPTED_PREFIX + token.decode('ascii')
+
+
+def decrypt_credential(stored: str | None) -> str | None:
+    """Decrypt a credential string. Handles legacy plaintext gracefully."""
+    if not stored:
+        return stored
+    if not stored.startswith(_ENCRYPTED_PREFIX):
+        # Legacy plaintext — return as-is (will be encrypted on next update)
+        return stored
+    f = _get_fernet()
+    token = stored[len(_ENCRYPTED_PREFIX):].encode('ascii')
+    try:
+        return f.decrypt(token).decode('utf-8')
+    except InvalidToken:
+        logger.error("Failed to decrypt credential — key mismatch or data corruption")
+        return None

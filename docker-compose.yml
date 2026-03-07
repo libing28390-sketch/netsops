@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  netops:
+    build: .
+    container_name: netops-automation
+    ports:
+      - "8003:8003"
+    environment:
+      - NODE_ENV=production
+      - CREDENTIAL_ENCRYPTION_KEY=${CREDENTIAL_ENCRYPTION_KEY:-change-me-to-a-random-secret}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+    volumes:
+      - netops-data:/app/data
+      - netops-backup:/app/backup
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  netops-data:
+  netops-backup:

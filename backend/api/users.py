@@ -1,4 +1,6 @@
 from fastapi import APIRouter, HTTPException, Body, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 import os
 import re
 import uuid
@@ -13,15 +15,16 @@ from services.audit_service import log_audit_event
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+limiter = Limiter(key_func=get_remote_address)
 
 # Simple in-memory session store: token -> { user_id, username, role, created_at }
 _sessions: dict[str, dict] = {}
-_SESSION_TTL = 86400  # 24 hours
+_SESSION_TTL = 28800  # 8 hours (reduced from 24h for security)
 
 # Login failure tracking: username -> { count, locked_until }
 _login_failures: dict[str, dict] = {}
 _MAX_LOGIN_ATTEMPTS = 5
-_LOCKOUT_SECONDS = 900  # 15 minutes
+_LOCKOUT_SECONDS = 900  # 15 minutes initial lockout
 
 def _hash_password(plain: str) -> str:
     """Hash a plaintext password with bcrypt."""
@@ -40,44 +43,123 @@ def _is_bcrypt_hash(value: str) -> bool:
 
 def _validate_password_strength(password: str) -> str | None:
     """Return an error message if password is too weak, or None if OK."""
-    if len(password) < 8:
-        return 'Password must be at least 8 characters'
+    if len(password) < 10:
+        return 'Password must be at least 10 characters'
     if not re.search(r'[A-Z]', password):
         return 'Password must contain at least one uppercase letter'
     if not re.search(r'[a-z]', password):
         return 'Password must contain at least one lowercase letter'
     if not re.search(r'[0-9]', password):
         return 'Password must contain at least one digit'
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{}|;:\'",.<>?/\\`~]', password):
+        return 'Password must contain at least one special character'
+    # Check common weak patterns
+    lower = password.lower()
+    weak_patterns = ['password', '12345678', 'qwerty', 'admin123', 'letmein', 'welcome', 'changeme']
+    for wp in weak_patterns:
+        if wp in lower:
+            return 'Password contains a commonly used weak pattern'
     return None
 
 def _check_lockout(username: str) -> int | None:
-    """Return remaining lockout seconds, or None if not locked."""
-    info = _login_failures.get(username)
-    if not info:
+    """Return remaining lockout seconds, or None if not locked. Uses DB for persistence."""
+    conn = get_db_connection()
+    try:
+        row = conn.execute('SELECT locked_until FROM login_failures WHERE username = ?', (username,)).fetchone()
+        if not row:
+            return None
+        locked_until = row['locked_until'] or 0
+        if locked_until and time.time() < locked_until:
+            return int(locked_until - time.time())
         return None
-    locked_until = info.get('locked_until', 0)
-    if locked_until and time.time() < locked_until:
-        return int(locked_until - time.time())
-    return None
+    finally:
+        conn.close()
 
 def _record_login_failure(username: str):
-    info = _login_failures.setdefault(username, {'count': 0, 'locked_until': 0})
-    info['count'] += 1
-    if info['count'] >= _MAX_LOGIN_ATTEMPTS:
-        info['locked_until'] = time.time() + _LOCKOUT_SECONDS
-        info['count'] = 0  # reset count after lock
+    conn = get_db_connection()
+    try:
+        row = conn.execute('SELECT count, locked_until FROM login_failures WHERE username = ?', (username,)).fetchone()
+        if row:
+            new_count = row['count'] + 1
+        else:
+            new_count = 1
+        locked_until = 0
+        if new_count >= _MAX_LOGIN_ATTEMPTS:
+            # Progressive lockout: 15min, 30min, 1h based on cumulative failures
+            multiplier = max(1, new_count // _MAX_LOGIN_ATTEMPTS)
+            locked_until = time.time() + _LOCKOUT_SECONDS * min(multiplier, 4)
+            # Do NOT reset count — cumulative tracking
+        conn.execute(
+            'INSERT INTO login_failures (username, count, locked_until) VALUES (?, ?, ?) '
+            'ON CONFLICT(username) DO UPDATE SET count = ?, locked_until = ?',
+            (username, new_count, locked_until, new_count, locked_until)
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 def _clear_login_failures(username: str):
-    _login_failures.pop(username, None)
+    conn = get_db_connection()
+    try:
+        conn.execute('DELETE FROM login_failures WHERE username = ?', (username,))
+        conn.commit()
+    finally:
+        conn.close()
 
 def _create_token() -> str:
     return hmac.new(os.urandom(32), str(time.time()).encode(), hashlib.sha256).hexdigest()
 
 def _clean_sessions():
-    now = time.time()
-    expired = [t for t, s in _sessions.items() if now - s['created_at'] > _SESSION_TTL]
-    for t in expired:
-        del _sessions[t]
+    """Remove expired sessions from DB."""
+    cutoff = time.time() - _SESSION_TTL
+    conn = get_db_connection()
+    try:
+        conn.execute('DELETE FROM sessions WHERE created_at < ?', (cutoff,))
+        conn.commit()
+    finally:
+        conn.close()
+
+def _store_session(token: str, user_dict: dict):
+    """Persist session to DB."""
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            'INSERT INTO sessions (token, user_id, username, role, created_at) VALUES (?, ?, ?, ?, ?)',
+            (token, user_dict['id'], user_dict['username'], user_dict['role'], time.time())
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+def _get_session(token: str) -> dict | None:
+    """Retrieve a session from DB. Returns None if not found or expired."""
+    conn = get_db_connection()
+    try:
+        row = conn.execute('SELECT * FROM sessions WHERE token = ?', (token,)).fetchone()
+        if not row:
+            return None
+        if time.time() - row['created_at'] > _SESSION_TTL:
+            conn.execute('DELETE FROM sessions WHERE token = ?', (token,))
+            conn.commit()
+            return None
+        return dict(row)
+    finally:
+        conn.close()
+
+def _delete_session(token: str):
+    conn = get_db_connection()
+    try:
+        conn.execute('DELETE FROM sessions WHERE token = ?', (token,))
+        conn.commit()
+    finally:
+        conn.close()
+
+def validate_session_token(token: str) -> dict | None:
+    """Validate a session token and return session info, or None if invalid.
+    Public API used by WebSocket authentication and other modules."""
+    if not token:
+        return None
+    return _get_session(token)
 
 @router.get("/users")
 def read_users():
@@ -122,6 +204,7 @@ def create_user(request: Request, user: dict = Body(...)):
         conn.close()
 
 @router.post("/login")
+@limiter.limit("5/minute")
 def login(request: Request, payload: dict = Body(...)):
     username = payload.get('username')
     password = payload.get('password')
@@ -183,12 +266,7 @@ def login(request: Request, payload: dict = Body(...)):
             )
             _clean_sessions()
             token = _create_token()
-            _sessions[token] = {
-                'user_id': user_dict['id'],
-                'username': user_dict['username'],
-                'role': user_dict['role'],
-                'created_at': time.time(),
-            }
+            _store_session(token, user_dict)
             return {
                 "success": True,
                 "token": token,
@@ -196,8 +274,14 @@ def login(request: Request, payload: dict = Body(...)):
             }
         else:
             _record_login_failure(safe_username)
-            failures = _login_failures.get(safe_username, {})
-            attempts_left = _MAX_LOGIN_ATTEMPTS - failures.get('count', 0)
+            # Look up current failure count from DB
+            fail_conn = get_db_connection()
+            try:
+                fail_row = fail_conn.execute('SELECT count FROM login_failures WHERE username = ?', (safe_username,)).fetchone()
+                current_count = fail_row['count'] if fail_row else 0
+            finally:
+                fail_conn.close()
+            attempts_left = _MAX_LOGIN_ATTEMPTS - (current_count % _MAX_LOGIN_ATTEMPTS)
             logger.warning(f"Login failed for user: {safe_username} - Invalid credentials")
             log_audit_event(
                 event_type='LOGIN_FAILED',
@@ -273,12 +357,9 @@ def check_session(request: Request):
     """Validate a session token and return user info."""
     auth = request.headers.get('Authorization', '')
     token = auth.replace('Bearer ', '') if auth.startswith('Bearer ') else ''
-    if not token or token not in _sessions:
+    sess = validate_session_token(token)
+    if not sess:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    sess = _sessions[token]
-    if time.time() - sess['created_at'] > _SESSION_TTL:
-        del _sessions[token]
-        raise HTTPException(status_code=401, detail="Session expired")
     conn = get_db_connection()
     try:
         user = conn.execute('SELECT id, username, role, avatar_url FROM users WHERE id = ?', (sess['user_id'],)).fetchone()

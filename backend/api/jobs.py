@@ -32,9 +32,10 @@ def read_jobs(
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ''
 
         # Backward-compatible mode: no pagination params -> return array like before.
+        # Safety cap: never return more than 500 rows without explicit pagination.
         if page is None or page_size is None:
             jobs = conn.execute(
-                f'SELECT * FROM jobs {where_sql} ORDER BY created_at DESC',
+                f'SELECT * FROM jobs {where_sql} ORDER BY created_at DESC LIMIT 500',
                 tuple(params)
             ).fetchall()
             return [dict(j) for j in jobs]

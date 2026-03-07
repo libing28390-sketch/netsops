@@ -1,6 +1,7 @@
 import logging
 import sys
 import os
+import re
 from logging.handlers import TimedRotatingFileHandler
 
 LOG_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "logs")
@@ -17,12 +18,35 @@ _NOISY_LIBS = [
     "asyncssh",
 ]
 
+# ── Log sanitization filter ──
+_SENSITIVE_PATTERNS = re.compile(
+    r'(password|passwd|secret|community|token|auth_pass|priv_pass|credential)'
+    r'[\s]*[=:]\s*["\']?([^\s"\'&,;]+)',
+    re.IGNORECASE,
+)
+
+class SanitizeFilter(logging.Filter):
+    """Redact sensitive values (passwords, tokens, communities) from log messages."""
+    def filter(self, record):
+        if isinstance(record.msg, str):
+            record.msg = _SENSITIVE_PATTERNS.sub(r'\1=***', record.msg)
+        if record.args:
+            sanitized = []
+            for arg in record.args if isinstance(record.args, tuple) else (record.args,):
+                if isinstance(arg, str):
+                    sanitized.append(_SENSITIVE_PATTERNS.sub(r'\1=***', arg))
+                else:
+                    sanitized.append(arg)
+            record.args = tuple(sanitized) if isinstance(record.args, tuple) else sanitized[0]
+        return True
+
 def setup_logging():
     os.makedirs(LOG_DIR, exist_ok=True)
     log_file = os.path.join(LOG_DIR, "netops.log")
 
     root = logging.getLogger()
     root.setLevel(logging.INFO)
+    root.addFilter(SanitizeFilter())
 
     fmt = logging.Formatter(LOG_FORMAT)
 

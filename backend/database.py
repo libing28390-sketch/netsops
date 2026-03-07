@@ -292,6 +292,27 @@ def init_db():
         )
         ''')
 
+        # Persistent session store
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL,
+            created_at REAL NOT NULL
+        )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at)')
+
+        # Persistent login failure tracking
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS login_failures (
+            username TEXT PRIMARY KEY,
+            count INTEGER DEFAULT 0,
+            locked_until REAL DEFAULT 0
+        )
+        ''')
+
         # High-frequency raw interface telemetry (short retention)
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS interface_telemetry_raw (

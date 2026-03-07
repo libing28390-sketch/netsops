@@ -6,6 +6,7 @@ import json
 from typing import Optional
 from database import get_db_connection
 from services.audit_service import log_audit_event
+from core.crypto import encrypt_credential, decrypt_credential
 
 router = APIRouter()
 
@@ -87,9 +88,10 @@ def read_devices(
             )
 
         # Backward-compatible mode: no pagination params -> return array.
+        # Safety cap: never return more than 500 rows without explicit pagination.
         if page is None or page_size is None:
             devices = conn.execute(
-                f'SELECT {select_clause} FROM devices {where_sql} ORDER BY {order_col} {order_dir}',
+                f'SELECT {select_clause} FROM devices {where_sql} ORDER BY {order_col} {order_dir} LIMIT 500',
                 tuple(params)
             ).fetchall()
             if str(mode).lower() == 'light':
@@ -133,7 +135,7 @@ def create_device(device: dict = Body(...)):
             device.get('status', 'pending'),
             device.get('compliance', 'unknown'),
             device.get('username'),
-            device.get('password'),
+            encrypt_credential(device.get('password')),
             device.get('sn', ''),
             device.get('model', ''),
             device.get('version', ''),
@@ -211,7 +213,7 @@ def update_device(device_id: str, device: dict = Body(...)):
             device.get('site', ''),
             device.get('connection_method', 'ssh'),
             device.get('username', ''),
-            device.get('password', ''),
+            encrypt_credential(device.get('password', '')),
             device.get('current_config', ''),
             json.dumps(device.get('config_history', [])) if device.get('config_history') else '[]',
             device.get('snmp_community', 'public'),

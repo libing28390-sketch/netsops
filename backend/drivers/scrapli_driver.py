@@ -75,11 +75,18 @@ class ScrapliDriver(BaseDriver):
 
     def disconnect(self):
         if self.conn:
-            self.conn.close()
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            finally:
+                self.conn = None
 
     def send_command(self, command: str) -> CommandResult:
         start_time = time.time()
         try:
+            if not self.conn:
+                raise Exception("Not connected")
             response = self.conn.send_command(command)
             return CommandResult(
                 success=True,
@@ -101,6 +108,8 @@ class ScrapliDriver(BaseDriver):
     def send_config(self, configs: List[str]) -> CommandResult:
         start_time = time.time()
         try:
+            if not self.conn:
+                raise Exception("Not connected")
             response = self.conn.send_configs(configs)
             return CommandResult(
                 success=True,

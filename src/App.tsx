@@ -8,218 +8,17 @@ import * as XLSX from 'xlsx';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from 'recharts';
 import TopologyGraph from './components/TopologyGraph.tsx';
 import MonitoringCenter from './components/MonitoringCenter.tsx';
+import type { ConfigVersion, Device, Job, AuditEvent, ComplianceFinding, ComplianceRunPoint, ComplianceOverview, ScheduledTask, Script, ConfigTemplate, ConfigSnapshot, DiffLine, User as UserType, ThemeMode, SessionUser, NotificationItem } from './types';
+import { PLATFORM_LABELS, getPlatformLabel, getVendorFromPlatform } from './types';
+import { sectionHeaderRowClass, sectionToolbarClass, primaryActionBtnClass, secondaryActionBtnClass, darkActionBtnClass, severityBadgeClass, complianceStatusBadgeClass, auditStatusBadgeClass, parseJsonObject } from './components/shared';
+import Pagination from './components/Pagination';
+import DashboardTab from './pages/DashboardTab';
+import ComplianceTab from './pages/ComplianceTab';
+import HistoryTab from './pages/HistoryTab';
+import UsersTab from './pages/UsersTab';
+import InventoryDevicesTab from './pages/InventoryDevicesTab';
 
-// Types
-interface ConfigVersion {
-  id: string;
-  timestamp: string;
-  content: string;
-  author: string;
-  description: string;
-}
-
-interface Device {
-  id: string;
-  hostname: string;
-  ip_address: string;
-  platform: string;
-  status: 'online' | 'offline' | 'pending';
-  compliance: 'compliant' | 'non-compliant' | 'unknown';
-  sn: string;
-  model: string;
-  version: string;
-  role: string;
-  site: string;
-  uptime: string;
-  connection_method: 'ssh' | 'netconf';
-  current_config?: string;
-  config_history: ConfigVersion[];
-  username?: string;
-  password?: string;
-  cpu_usage?: number;
-  memory_usage?: number;
-  cpu_history?: number[];
-  memory_history?: number[];
-  temp?: number;
-  fan_status?: 'ok' | 'fail';
-  psu_status?: 'redundant' | 'single' | 'fail';
-  snmp_community?: string;
-  snmp_port?: number;
-  sys_name?: string;
-  sys_location?: string;
-  sys_contact?: string;
-  interface_data?: {
-    name: string; status: string; speed_mbps: number;
-    in_octets: number; out_octets: number; description: string;
-    in_bps?: number; out_bps?: number;
-    in_errors?: number; out_errors?: number;
-    in_discards?: number; out_discards?: number;
-    in_ucast_pkts?: number; out_ucast_pkts?: number;
-    bw_in_pct?: number; bw_out_pct?: number;
-    last_change_secs?: number; flapping?: boolean;
-  }[];
-}
-
-interface Job {
-  id: string;
-  device_id: string;
-  task_name: string;
-  status: 'pending' | 'running' | 'success' | 'failed' | 'rolled_back';
-  output?: string;
-  created_at: string;
-}
-
-interface AuditEvent {
-  id: string;
-  event_type: string;
-  category: string;
-  severity: 'critical' | 'high' | 'medium' | 'low';
-  status: string;
-  actor_id?: string;
-  actor_username?: string;
-  actor_role?: string;
-  source_ip?: string;
-  target_type?: string;
-  target_id?: string;
-  target_name?: string;
-  device_id?: string;
-  job_id?: string;
-  execution_id?: string;
-  snapshot_id?: string;
-  summary: string;
-  details?: Record<string, any>;
-  details_json?: string;
-  created_at: string;
-}
-
-interface ComplianceFinding {
-  id: string;
-  fingerprint: string;
-  rule_id: string;
-  device_id: string;
-  run_id?: string;
-  severity: 'critical' | 'high' | 'medium' | 'low';
-  category: string;
-  title: string;
-  description: string;
-  status: string;
-  observed_value?: string;
-  evidence?: string;
-  remediation?: string;
-  owner?: string;
-  note?: string;
-  first_seen_at: string;
-  last_seen_at: string;
-  resolved_at?: string | null;
-  hostname?: string;
-  ip_address?: string;
-  site?: string;
-  role?: string;
-  platform?: string;
-}
-
-interface ComplianceRunPoint {
-  run_id: string;
-  started_at: string;
-  score: number;
-  open_findings: number;
-  total_devices: number;
-}
-
-interface ComplianceOverview {
-  score: number;
-  open_findings: number;
-  critical_findings: number;
-  high_findings: number;
-  total_devices: number;
-  non_compliant_devices: number;
-  severity_counts: Record<string, number>;
-  category_counts: Record<string, number>;
-  top_devices: Array<{ device_id: string; hostname: string; site?: string; platform?: string; open_findings: number }>;
-  recent_runs: ComplianceRunPoint[];
-  recent_findings: ComplianceFinding[];
-}
-
-interface ScheduledTask {
-  id: number;
-  device_id: number;
-  task_name: string;
-  schedule_type: 'once' | 'recurring';
-  interval?: 'daily' | 'weekly' | 'monthly';
-  scheduled_time: string;
-  timezone: string;
-  status: 'active' | 'paused' | 'completed';
-}
-
-interface Script {
-  id: string;
-  name: string;
-  platform: string;
-  description: string;
-  content: string;
-  category: 'official' | 'custom';
-}
-
-interface ConfigTemplate {
-  id: string;
-  name: string;
-  type: 'Jinja2' | 'YAML';
-  content: string;
-  lastUsed: string;
-  category: 'official' | 'custom';
-  vendor?: string;
-}
-
-// Config Center types
-interface ConfigSnapshot {
-  id: string;
-  device_id: string;
-  hostname: string;
-  ip_address?: string | null;
-  vendor: string;
-  timestamp: string;
-  content: string;
-  size: number; // bytes
-  trigger: 'manual' | 'scheduled' | 'pre-change' | 'post-change';
-  author: string;
-  tag?: string;
-}
-
-interface DiffLine {
-  type: 'add' | 'remove' | 'context';
-  lineA?: number;
-  lineB?: number;
-  content: string;
-}
-
-interface User {
-  id: number;
-  username: string;
-  password?: string;
-  role: string;
-  status: string;
-  lastLogin: string;
-  avatar_url?: string;
-}
-
-type ThemeMode = 'light' | 'dark';
-
-interface SessionUser {
-  id?: string | number;
-  username: string;
-  role?: string;
-  avatar_url?: string;
-}
-
-interface NotificationItem {
-  id: string;
-  title: string;
-  message: string;
-  time: string;
-  source?: string;
-  severity?: 'low' | 'medium' | 'high';
-  read: boolean;
-}
+// Types imported from ./types — re-export User as UserType to avoid clash with lucide-react User icon
 
 interface AppRuntimeBoundaryProps {
   children: React.ReactNode;
@@ -279,32 +78,7 @@ class AppRuntimeBoundary extends React.Component<AppRuntimeBoundaryProps, AppRun
   }
 }
 
-const Sparkline: React.FC<{ data: number[], color: string }> = ({ data, color }) => {
-  if (!data || data.length === 0) return null;
-  const max = Math.max(...data, 100);
-  const min = Math.min(...data, 0);
-  const range = max - min;
-  const width = 60;
-  const height = 20;
-  const points = data.map((d, i) => {
-    const x = (i / (data.length - 1)) * width;
-    const y = height - ((d - min) / range) * height;
-    return `${x},${y}`;
-  }).join(' ');
-
-  return (
-    <svg width={width} height={height} className="overflow-visible">
-      <polyline
-        fill="none"
-        stroke={color}
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        points={points}
-      />
-    </svg>
-  );
-};
+// Sparkline imported from ./components/Sparkline
 
 const App: React.FC = () => {
   const { t, language, setLanguage } = useI18n();
@@ -707,25 +481,7 @@ const App: React.FC = () => {
       showToast(t('changesDiscarded'), 'info');
     }
   };
-  const getVendorFromPlatform = (platform: string) => {
-    const p = platform.toLowerCase();
-    if (p.includes('cisco')) return 'Cisco';
-    if (p.includes('juniper')) return 'Juniper';
-    if (p.includes('huawei')) return 'Huawei';
-    if (p.includes('arista')) return 'Arista';
-    return 'Other';
-  };
-
-  const PLATFORM_LABELS: Record<string, string> = {
-    cisco_ios: 'Cisco IOS',
-    cisco_nxos: 'Cisco NX-OS',
-    cisco_iosxr: 'Cisco IOS-XR',
-    huawei_vrp: 'Huawei VRP',
-    h3c_comware: 'H3C Comware',
-    arista_eos: 'Arista EOS',
-    juniper_junos: 'Juniper Junos',
-  };
-  const getPlatformLabel = (platform: string) => PLATFORM_LABELS[platform] || platform;
+  // getVendorFromPlatform, PLATFORM_LABELS, getPlatformLabel imported from ./types
 
   const [scripts, setScripts] = useState<Script[]>([]);
   const [selectedScript, setSelectedScript] = useState<Script | null>(null);
@@ -1552,7 +1308,7 @@ const App: React.FC = () => {
     }
   };
 
-  const [users, setUsers] = useState<User[]>([]);
+  const [users, setUsers] = useState<UserType[]>([]);
   const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [showEditUserModal, setShowEditUserModal] = useState(false);
   // 密码显示/隐藏 state
@@ -1568,7 +1324,7 @@ const App: React.FC = () => {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showProfilePwd, setShowProfilePwd] = useState(false);
   const [profileForm, setProfileForm] = useState({ username: '', password: '', confirmPassword: '' });
-  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [editingUser, setEditingUser] = useState<UserType | null>(null);
   const [editUserForm, setEditUserForm] = useState({ username: '', password: '', role: 'Operator' });
   const [showDeployTemplateModal, setShowDeployTemplateModal] = useState(false);
   const [deployTargetDevice, setDeployTargetDevice] = useState<string>('');
@@ -1844,15 +1600,6 @@ const App: React.FC = () => {
 
   // 平台分布：基于真实设备数据
   const platformData = useMemo(() => {
-    const PLATFORM_LABELS: Record<string, string> = {
-      cisco_ios: 'Cisco IOS',
-      cisco_nxos: 'Cisco NX-OS',
-      cisco_iosxr: 'Cisco IOS-XR',
-      huawei_vrp: 'Huawei VRP',
-      h3c_comware: 'H3C Comware',
-      arista_eos: 'Arista EOS',
-      juniper_junos: 'Juniper Junos',
-    };
     const PLATFORM_COLORS: Record<string, string> = {
       cisco_ios: '#0ea5e9',
       cisco_nxos: '#0369a1',
@@ -3849,196 +3596,9 @@ const App: React.FC = () => {
     });
   };
 
-  const buildPaginationItems = (currentPage: number, totalPages: number) => {
-    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, index) => index + 1);
+  // Pagination imported from ./components/Pagination
 
-    const items: Array<number | string> = [1];
-    const windowStart = Math.max(2, currentPage - 1);
-    const windowEnd = Math.min(totalPages - 1, currentPage + 1);
-
-    if (windowStart > 2) items.push('left-ellipsis');
-    for (let page = windowStart; page <= windowEnd; page += 1) items.push(page);
-    if (windowEnd < totalPages - 1) items.push('right-ellipsis');
-
-    items.push(totalPages);
-    return items;
-  };
-
-  const Pagination: React.FC<{
-    currentPage: number;
-    totalItems: number;
-    onPageChange: (page: number) => void;
-    itemsPerPage?: number;
-    onItemsPerPageChange?: (size: number) => void;
-  }> = ({ currentPage, totalItems, onPageChange, itemsPerPage = 10, onItemsPerPageChange }) => {
-    const totalPages = Math.max(1, Math.ceil(totalItems / itemsPerPage));
-    if (totalItems === 0) return null;
-
-    const startItem = Math.min((currentPage - 1) * itemsPerPage + 1, totalItems);
-    const endItem = Math.min(currentPage * itemsPerPage, totalItems);
-    const progressPct = Math.max(0, Math.min(100, Math.round((endItem / totalItems) * 100)));
-    const pageItems = buildPaginationItems(currentPage, totalPages);
-
-    return (
-      <div className="flex flex-col gap-3 px-6 py-4 bg-[linear-gradient(180deg,rgba(0,0,0,0.015),rgba(0,0,0,0.025))] border-t border-black/5 lg:flex-row lg:items-center lg:justify-between">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-3">
-            <progress
-              value={progressPct}
-              max={100}
-              className="h-1.5 w-24 overflow-hidden rounded-full [appearance:none] [&::-moz-progress-bar]:bg-[#00bceb] [&::-webkit-progress-bar]:bg-black/6 [&::-webkit-progress-value]:bg-[#00bceb]"
-            />
-            <p className="text-[10px] font-bold uppercase text-black/40 tracking-widest">
-              {language === 'zh'
-                ? `第 ${startItem}-${endItem} 条 / 共 ${totalItems} 条`
-                : `${startItem}-${endItem} / ${totalItems}`}
-            </p>
-          </div>
-          <p className="mt-1 text-[11px] text-black/35">
-            {language === 'zh' ? `第 ${currentPage} 页，共 ${totalPages} 页` : `Page ${currentPage} of ${totalPages}`}
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-3 lg:items-end">
-          {onItemsPerPageChange && (
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold uppercase text-black/35 tracking-wider">{language === 'zh' ? '每页' : 'Rows'}</span>
-              <div className="inline-flex rounded-xl border border-black/8 bg-white p-1 shadow-sm">
-                {[10, 20, 50, 100].map(size => {
-                  const isActive = itemsPerPage === size;
-                  return (
-                    <button
-                      key={size}
-                      type="button"
-                      title={language === 'zh' ? `每页 ${size} 条` : `${size} rows per page`}
-                      aria-label={language === 'zh' ? `每页 ${size} 条` : `${size} rows per page`}
-                      onClick={() => onItemsPerPageChange(size)}
-                      className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-all ${
-                        isActive
-                          ? 'bg-[#00172d] text-white shadow-md'
-                          : 'text-black/45 hover:bg-black/[0.04] hover:text-black/75'
-                      }`}
-                    >
-                      {size}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {totalPages > 1 && (
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                disabled={currentPage === 1}
-                title={language === 'zh' ? '上一页' : 'Previous page'}
-                aria-label={language === 'zh' ? '上一页' : 'Previous page'}
-                onClick={() => onPageChange(currentPage - 1)}
-                className="inline-flex h-9 items-center gap-1 rounded-xl border border-black/8 bg-white px-3 text-[11px] font-semibold text-black/55 shadow-sm transition-all hover:-translate-x-0.5 hover:border-black/15 hover:text-black disabled:opacity-25 disabled:hover:translate-x-0"
-              >
-                <ChevronLeft size={15} />
-                <span>{language === 'zh' ? '上一页' : 'Prev'}</span>
-              </button>
-              <div className="flex items-center gap-1.5">
-                {pageItems.map((item, index) => {
-                  if (typeof item !== 'number') {
-                    return <span key={`${item}-${index}`} className="px-1 text-sm font-semibold text-black/25">···</span>;
-                  }
-
-                  const isActive = currentPage === item;
-                  return (
-                    <button
-                      key={item}
-                      type="button"
-                      title={language === 'zh' ? `第 ${item} 页` : `Page ${item}`}
-                      aria-label={language === 'zh' ? `第 ${item} 页` : `Page ${item}`}
-                      onClick={() => onPageChange(item)}
-                      className={`h-9 min-w-9 rounded-xl px-3 text-xs font-bold transition-all ${
-                        isActive
-                          ? 'bg-[#00172d] text-white shadow-lg shadow-[#00172d]/18 scale-[1.03]'
-                          : 'border border-transparent text-black/45 hover:border-black/8 hover:bg-white hover:text-black'
-                      }`}
-                    >
-                      {item}
-                    </button>
-                  );
-                })}
-              </div>
-              <button
-                type="button"
-                disabled={currentPage === totalPages}
-                title={language === 'zh' ? '下一页' : 'Next page'}
-                aria-label={language === 'zh' ? '下一页' : 'Next page'}
-                onClick={() => onPageChange(currentPage + 1)}
-                className="inline-flex h-9 items-center gap-1 rounded-xl border border-black/8 bg-white px-3 text-[11px] font-semibold text-black/55 shadow-sm transition-all hover:translate-x-0.5 hover:border-black/15 hover:text-black disabled:opacity-25 disabled:hover:translate-x-0"
-              >
-                <span>{language === 'zh' ? '下一页' : 'Next'}</span>
-                <ChevronRight size={16} />
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  const sectionHeaderRowClass = 'flex justify-between items-end';
-  const sectionToolbarClass = 'flex gap-4 items-center bg-white p-4 rounded-2xl border border-black/5 shadow-sm';
-  const primaryActionBtnClass = 'px-4 py-2 bg-[#00bceb] text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-[#0096bd] transition-all shadow-lg shadow-[#00bceb]/20';
-  const secondaryActionBtnClass = 'px-4 py-2 border border-black/10 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-black/5 transition-all';
-  const darkActionBtnClass = 'px-4 py-2 bg-black text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-black/80 transition-all';
-  const parseJsonObject = (value?: string) => {
-    if (!value) return {};
-    try {
-      return JSON.parse(value);
-    } catch {
-      return { raw: value };
-    }
-  };
-  const severityBadgeClass = (severity?: string) => {
-    switch (String(severity || '').toLowerCase()) {
-      case 'critical':
-        return 'bg-red-100 text-red-700';
-      case 'high':
-        return 'bg-orange-100 text-orange-700';
-      case 'medium':
-        return 'bg-amber-100 text-amber-700';
-      default:
-        return 'bg-slate-100 text-slate-700';
-    }
-  };
-  const complianceStatusBadgeClass = (status?: string) => {
-    switch (String(status || '').toLowerCase()) {
-      case 'open':
-        return 'bg-red-100 text-red-700';
-      case 'in_progress':
-        return 'bg-blue-100 text-blue-700';
-      case 'accepted_risk':
-        return 'bg-purple-100 text-purple-700';
-      case 'resolved':
-        return 'bg-emerald-100 text-emerald-700';
-      default:
-        return 'bg-slate-100 text-slate-700';
-    }
-  };
-  const auditStatusBadgeClass = (status?: string) => {
-    switch (String(status || '').toLowerCase()) {
-      case 'success':
-      case 'completed':
-      case 'allowed':
-        return 'bg-emerald-100 text-emerald-700';
-      case 'failed':
-      case 'error':
-      case 'denied':
-        return 'bg-red-100 text-red-700';
-      case 'warning':
-      case 'partial':
-        return 'bg-amber-100 text-amber-700';
-      default:
-        return 'bg-slate-100 text-slate-700';
-    }
-  };
+  // CSS constants and badge helpers imported from ./components/shared
 
   return (
     <AppRuntimeBoundary language={language}>
@@ -4503,237 +4063,24 @@ const App: React.FC = () => {
         </header>
 
         <main className="flex-1 overflow-auto p-8 pb-16">
-          {activeTab === 'dashboard' && (() => {
-            const onlineCount = devices.filter(d => d.status === 'online').length;
-            const onlinePct = devices.length > 0 ? Math.round((onlineCount / devices.length) * 100) : 0;
-            const compPct = devices.length > 0 ? Math.round((devices.filter(d => d.compliance === 'compliant').length / devices.length) * 100) : 0;
-            const now24h = Date.now() - 86400000;
-            const failedCount24h = jobs.filter(j => j.status === 'failed' && j.created_at && new Date(j.created_at).getTime() > now24h).length;
-
-            // Dynamic health: Critical if online<30% or compliance=0; Degraded if online<60% or compliance<50%
-            const healthLevel = (onlinePct < 30 || (devices.length > 0 && compPct === 0)) ? 'critical'
-              : (onlinePct < 60 || compPct < 50) ? 'degraded' : 'healthy';
-            const healthLabel = healthLevel === 'critical' ? t('systemCritical') : healthLevel === 'degraded' ? t('systemDegraded') : t('systemHealthy');
-            const healthColor = healthLevel === 'critical' ? 'bg-red-100 text-red-700' : healthLevel === 'degraded' ? 'bg-orange-100 text-orange-700' : 'bg-emerald-100 text-emerald-700';
-
-            const dashAgoSec = Math.round((Date.now() - dashLastRefresh.getTime()) / 1000);
-
-            return (
-            <div className="space-y-8 overflow-auto h-full">
-              <div className={sectionHeaderRowClass}>
-                <div>
-                  <h2 className="text-2xl font-bold tracking-tight text-[#00172D]">{t('networkOverview')}</h2>
-                  <p className="text-sm text-black/40">{t('dashboardSubtitle')}</p>
-                </div>
-                <div className="flex gap-2 items-center">
-                  <span className="text-[10px] text-black/30">{t('lastRefreshed')} {dashAgoSec}{t('secondsAgo')}</span>
-                  <span className={`px-3 py-1 text-[10px] font-bold rounded-full uppercase tracking-wider ${healthColor} ${healthLevel === 'critical' ? 'animate-pulse' : ''}`}>{healthLabel}</span>
-                </div>
-              </div>
-
-              {!dashBannerCollapsed && (
-              <div className="rounded-2xl border border-[#00bceb]/20 bg-gradient-to-r from-[#f4fcff] via-white to-[#eef9ff] px-6 py-5 shadow-sm relative">
-                <button onClick={() => setDashBannerCollapsed(true)} className="absolute top-3 right-3 p-1 rounded-lg hover:bg-black/5 text-black/30 hover:text-black/60 transition-all"><X size={14} /></button>
-                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                  <div>
-                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#00a5cd]">NetAxis Command Center</p>
-                    <h3 className="mt-1 text-xl font-bold text-[#0d2c40]">{t('todaySnapshot')}</h3>
-                    <p className="mt-1 text-xs text-[#21546d]/80">{t('todaySnapshotDesc')}</p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button onClick={() => navigate('/automation/execute')} className="px-3 py-2 text-xs font-semibold rounded-lg bg-[#00bceb] text-white hover:bg-[#009ac2] transition-all">
-                      {t('openAutomation')}
-                    </button>
-                    <button onClick={() => navigate('/automation/history')} className="px-3 py-2 text-xs font-semibold rounded-lg border border-black/10 text-black/70 hover:bg-black/5 transition-all">
-                      {t('viewExecHistory')}
-                    </button>
-                  </div>
-                </div>
-              </div>
-              )}
-              
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
-                {[
-                  { label: t('totalAssets'), value: devices.length, icon: Server, color: 'text-[#005073]', bg: 'bg-[#005073]/5', tab: 'inventory' },
-                  { label: t('onlineNodes'), value: onlineCount, icon: Activity, color: onlinePct < 30 ? 'text-red-600' : onlinePct < 60 ? 'text-orange-600' : 'text-emerald-600', bg: onlinePct < 30 ? 'bg-red-50' : onlinePct < 60 ? 'bg-orange-50' : 'bg-emerald-50', tab: 'inventory' },
-                  { label: t('complianceRate'), value: `${compPct}%`, icon: ShieldCheck, color: compPct === 0 ? 'text-red-600' : compPct < 50 ? 'text-orange-600' : 'text-[#00bceb]', bg: compPct === 0 ? 'bg-red-50' : compPct < 50 ? 'bg-orange-50' : 'bg-[#00bceb]/5', tab: 'compliance' },
-                  { label: t('failedTasks'), value: failedCount24h, icon: AlertCircle, color: failedCount24h > 0 ? 'text-red-600' : 'text-black/40', bg: failedCount24h > 0 ? 'bg-red-50' : 'bg-black/5', tab: 'history' },
-                ].map((stat, i) => (
-                  <div key={i} onClick={() => setActiveTab(stat.tab)} className="bg-white p-6 rounded-2xl shadow-sm border border-black/5 flex items-center justify-between group hover:shadow-md hover:border-black/10 transition-all cursor-pointer">
-                    <div>
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-black/30 mb-1">{stat.label}</p>
-                      <p className={`text-3xl font-bold ${stat.color}`}>{stat.value}</p>
-                    </div>
-                    <div className={`p-3 rounded-xl ${stat.bg} ${stat.color} group-hover:scale-110 transition-transform`}>
-                      <stat.icon size={24} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="grid grid-cols-12 gap-6">
-                <div className="col-span-12 lg:col-span-8 bg-white rounded-2xl border border-black/5 p-8 shadow-sm">
-                  <div className="flex items-center justify-between mb-8">
-                    <div>
-                      <h3 className="text-sm font-bold text-[#00172D] flex items-center gap-2">
-                        <TrendingUp size={18} className="text-[#00bceb]" />
-                        {t('complianceTrend')}
-                      </h3>
-                      <p className="text-xs text-black/40 mt-1">{t('complianceTrendSub')}</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => setTrendDays(7)} className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase transition-all ${trendDays === 7 ? 'bg-black/10 text-black/70' : 'text-black/40 hover:bg-black/5'}`}>{t('days7')}</button>
-                      <button onClick={() => setTrendDays(30)} className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase transition-all ${trendDays === 30 ? 'bg-black/10 text-black/70' : 'text-black/40 hover:bg-black/5'}`}>{t('days30')}</button>
-                    </div>
-                  </div>
-                  <div className="h-[280px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={complianceTrend}>
-                        <defs>
-                          <linearGradient id="colorRate" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#00bceb" stopOpacity={0.2}/>
-                            <stop offset="95%" stopColor="#00bceb" stopOpacity={0}/>
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                        <XAxis 
-                          dataKey="name" 
-                          axisLine={false} 
-                          tickLine={false} 
-                          tick={{fontSize: 10, fill: '#94a3b8', fontWeight: 600}}
-                          dy={10}
-                          interval={trendDays > 7 ? Math.floor(trendDays / 7) - 1 : 0}
-                        />
-                        <YAxis 
-                          axisLine={false} 
-                          tickLine={false} 
-                          tick={{fontSize: 10, fill: '#94a3b8', fontWeight: 600}}
-                          domain={[0, 100]}
-                        />
-                        <Tooltip 
-                          contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)', padding: '12px'}}
-                        />
-                        <Area type="monotone" dataKey="rate" stroke="#00bceb" strokeWidth={3} fillOpacity={1} fill="url(#colorRate)" />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-
-                <div className="col-span-12 lg:col-span-4 bg-white rounded-2xl border border-black/5 p-8 shadow-sm">
-                  <h3 className="text-sm font-bold text-[#00172D] mb-8 flex items-center gap-2">
-                    <PieChartIcon size={18} className="text-emerald-500" />
-                    {t('platformDistribution')}
-                  </h3>
-                  <div className="h-[200px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={platformData}
-                          innerRadius={65}
-                          outerRadius={85}
-                          paddingAngle={8}
-                          dataKey="value"
-                          stroke="none"
-                        >
-                          {platformData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.color} />
-                          ))}
-                        </Pie>
-                        <Tooltip />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div className="mt-8 space-y-3">
-                    {platformData.map((item, i) => (
-                      <div key={i} className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="w-3 h-3 rounded-full" style={{backgroundColor: item.color}} />
-                          <span className="text-xs font-semibold text-black/60">{item.name}</span>
-                        </div>
-                        <span className="text-xs font-bold text-[#00172D]">{item.value}%</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-12 gap-6">
-                <div className="col-span-12 lg:col-span-7 bg-white rounded-2xl border border-black/5 p-8 shadow-sm">
-                  <div className="flex items-center justify-between mb-8">
-                    <div>
-                      <h3 className="text-sm font-bold text-[#00172D] flex items-center gap-2">
-                        <History size={18} className="text-black/40" />
-                        {t('recentActivity')}
-                      </h3>
-                      <p className="text-xs text-black/40 mt-1">{t('recentActivitySub')}</p>
-                    </div>
-                    <button className="text-[10px] font-bold uppercase text-[#00bceb] hover:underline" onClick={() => setActiveTab('history')}>
-                      {t('viewAuditLog')}
-                    </button>
-                  </div>
-                  <div className="space-y-2">
-                    {jobs.slice(0, 5).map(job => (
-                      <div key={job.id} className="flex items-center justify-between p-4 hover:bg-black/[0.02] rounded-xl transition-all border border-transparent hover:border-black/5">
-                        <div className="flex items-center gap-4">
-                          <div className={`p-2.5 rounded-xl ${
-                            job.status === 'success' ? 'bg-emerald-50 text-emerald-600' : 
-                            job.status === 'failed' ? 'bg-red-50 text-red-600' : 'bg-[#00bceb]/10 text-[#00bceb]'
-                          }`}>
-                            <Zap size={18} />
-                          </div>
-                          <div>
-                            <p className="text-sm font-bold text-[#00172D]">{job.task_name}</p>
-                            <p className="text-[10px] text-black/40 font-medium uppercase tracking-wider">{new Date(job.created_at).toLocaleString()}</p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <span className={`text-[10px] font-bold uppercase px-3 py-1 rounded-full ${
-                            job.status === 'success' ? 'bg-emerald-100 text-emerald-700' : job.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'
-                          }`}>
-                            {job.status}
-                          </span>
-                          <ChevronRight size={14} className="text-black/20" />
-                        </div>
-                      </div>
-                    ))}
-                    {jobs.length === 0 && <p className="text-sm text-black/30 italic p-4">{t('noActivity')}</p>}
-                  </div>
-                </div>
-
-                <div className="col-span-12 lg:col-span-5 bg-white rounded-2xl border border-black/5 p-8 shadow-sm">
-                  <h3 className="text-sm font-bold text-[#00172D] mb-8 flex items-center gap-2">
-                    <Clock size={18} className="text-orange-500" />
-                    {t('upcomingTasks')}
-                  </h3>
-                  <div className="space-y-4">
-                    {scheduledTasks.filter(st => st.status === 'active').slice(0, 4).map(task => (
-                      <div key={task.id} className="flex items-center justify-between p-4 bg-[#F0F2F5] rounded-2xl border border-black/5 group hover:bg-white hover:shadow-md transition-all">
-                        <div className="flex items-center gap-4">
-                          <div className="w-10 h-10 bg-white rounded-xl shadow-sm flex items-center justify-center text-orange-500 group-hover:bg-orange-500 group-hover:text-white transition-all">
-                            <Clock size={18} />
-                          </div>
-                          <div>
-                            <p className="text-sm font-bold text-[#00172D]">{task.task_name}</p>
-                            <p className="text-[10px] text-black/40 font-medium">{task.scheduled_time} ({task.timezone})</p>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-[10px] font-bold uppercase text-[#005073] bg-[#005073]/10 px-2 py-1 rounded-lg">{task.schedule_type}</p>
-                        </div>
-                      </div>
-                    ))}
-                    {scheduledTasks.filter(st => st.status === 'active').length === 0 && (
-                      <div className="text-center py-8">
-                        <Clock size={32} className="mx-auto text-black/10 mb-2" />
-                        <p className="text-sm text-black/30">{t('noUpcomingTasks')}</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-            );
-          })()}
+          {activeTab === 'dashboard' && (
+            <DashboardTab
+              devices={devices}
+              jobs={jobs}
+              scheduledTasks={scheduledTasks}
+              trendDays={trendDays}
+              setTrendDays={setTrendDays}
+              complianceTrend={complianceTrend}
+              platformData={platformData}
+              dashBannerCollapsed={dashBannerCollapsed}
+              setDashBannerCollapsed={setDashBannerCollapsed}
+              dashLastRefresh={dashLastRefresh}
+              language={language}
+              t={t}
+              setActiveTab={setActiveTab}
+              navigate={navigate}
+            />
+          )}
 
           {activeTab === 'monitoring' && (
             <MonitoringCenter
@@ -4789,288 +4136,38 @@ const App: React.FC = () => {
           )}
 
           {activeTab === 'inventory' && inventorySubPage === 'devices' && (
-            <div className="space-y-6">
-              <div className="flex flex-col gap-4">
-                <div className={sectionHeaderRowClass}>
-                  <div>
-                    <h2 className="text-2xl font-medium tracking-tight">{t('deviceInventory')}</h2>
-                    <p className="text-sm text-black/40">{t('manageMonitor')}</p>
-                  </div>
-                  <div className="flex gap-3">
-                    <label className="px-4 py-2 border border-black/10 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-black/5 transition-all cursor-pointer">
-                      <Upload size={18} />
-                      {t('import')}
-                      <input 
-                        type="file" 
-                        className="hidden" 
-                        onChange={handleImport}
-                        accept=".xlsx, .xls, .csv"
-                      />
-                    </label>
-                    <button 
-                      onClick={handleExport}
-                      className={secondaryActionBtnClass}
-                    >
-                      <Download size={18} />
-                      {t('export')}
-                    </button>
-                    <button 
-                      onClick={() => setShowAddModal(true)}
-                      className="bg-[#00bceb] text-white px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-[#0096bd] transition-all shadow-lg shadow-[#00bceb]/20"
-                    >
-                      <Plus size={18} />
-                      {t('addDevice')}
-                    </button>
-                  </div>
-                </div>
-
-                <div className={sectionToolbarClass}>
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-black/40" size={16} />
-                    <input 
-                      type="text" 
-                      placeholder={t('searchPlaceholder')} 
-                      value={inventorySearch}
-                      onChange={(e) => setInventorySearch(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2 bg-black/[0.02] border border-black/5 rounded-xl text-sm focus:border-black/20 outline-none transition-all"
-                    />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Filter size={16} className="text-black/40" />
-                    <select 
-                      value={inventoryPlatformFilter}
-                      onChange={(e) => setInventoryPlatformFilter(e.target.value)}
-                      className="bg-black/[0.02] border border-black/5 rounded-xl px-3 py-2 text-sm outline-none text-black/60 focus:border-black/20"
-                    >
-                      <option value="all">{t('allPlatforms')}</option>
-                      <option value="cisco_ios">Cisco IOS</option>
-                      <option value="cisco_nxos">Cisco NX-OS</option>
-                      <option value="juniper_junos">Juniper Junos</option>
-                      <option value="arista_eos">Arista EOS</option>
-                      <option value="fortinet_fortios">Fortinet FortiOS</option>
-                      <option value="huawei_vrp">Huawei VRP</option>
-                      <option value="h3c_comware">H3C Comware</option>
-                      <option value="ruijie_rgos">Ruijie RGOS</option>
-                    </select>
-                    <select 
-                      value={inventoryStatusFilter}
-                      onChange={(e) => setInventoryStatusFilter(e.target.value)}
-                      className="bg-black/[0.02] border border-black/5 rounded-xl px-3 py-2 text-sm outline-none text-black/60 focus:border-black/20"
-                    >
-                      <option value="all">All Status</option>
-                      <option value="online">Online</option>
-                      <option value="offline">Offline</option>
-                      <option value="pending">Pending</option>
-                    </select>
-                    <select
-                      value={inventoryPageSize}
-                      onChange={(e) => setInventoryPageSize(Number(e.target.value))}
-                      className="bg-black/[0.02] border border-black/5 rounded-xl px-3 py-2 text-sm outline-none text-black/60 focus:border-black/20"
-                    >
-                      <option value={10}>10 / page</option>
-                      <option value={20}>20 / page</option>
-                      <option value={50}>50 / page</option>
-                      <option value={100}>100 / page</option>
-                    </select>
-                  </div>
-                </div>
-
-              </div>
-
-              <div className="bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
-                {selectedDeviceIds.length > 0 && (
-                  <div className="bg-emerald-50 px-6 py-3 border-b border-emerald-100 flex items-center justify-between">
-                    <span className="text-sm font-medium text-emerald-800">
-                      {selectedDeviceIds.length} device(s) selected
-                    </span>
-                    <button 
-                      onClick={handleDeleteSelected}
-                      className="text-xs font-bold uppercase text-red-600 hover:text-red-700 bg-red-100 px-3 py-1.5 rounded-lg transition-colors"
-                    >
-                      DELETE SELECTED
-                    </button>
-                  </div>
-                )}
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-black/[0.02] border-b border-black/5">
-                      <th className="px-6 py-4 w-10">
-                        <input 
-                          type="checkbox" 
-                          className="rounded border-black/20 text-[#00bceb] focus:ring-[#00bceb]"
-                          checked={inventoryRows.length > 0 && inventoryRows.every(d => selectedDeviceIds.includes(d.id))}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              const currentPageIds = inventoryRows.map(d => d.id);
-                              setSelectedDeviceIds(prev => Array.from(new Set([...prev, ...currentPageIds])));
-                            } else {
-                              const currentPageIds = new Set(inventoryRows.map(d => d.id));
-                              setSelectedDeviceIds(prev => prev.filter(id => !currentPageIds.has(id)));
-                            }
-                          }}
-                        />
-                      </th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40 cursor-pointer hover:text-black transition-colors" onClick={() => handleSort('hostname')}>
-                        DEVICE INFO {inventorySortConfig?.key === 'hostname' && (inventorySortConfig.direction === 'asc' ? '↑' : '↓')}
-                      </th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40 cursor-pointer hover:text-black transition-colors" onClick={() => handleSort('model')}>
-                        HARDWARE / SN {inventorySortConfig?.key === 'model' && (inventorySortConfig.direction === 'asc' ? '↑' : '↓')}
-                      </th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40 cursor-pointer hover:text-black transition-colors" onClick={() => handleSort('platform')}>
-                        SOFTWARE {inventorySortConfig?.key === 'platform' && (inventorySortConfig.direction === 'asc' ? '↑' : '↓')}
-                      </th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40 cursor-pointer hover:text-black transition-colors" onClick={() => handleSort('site')}>
-                        SITE / ROLE {inventorySortConfig?.key === 'site' && (inventorySortConfig.direction === 'asc' ? '↑' : '↓')}
-                      </th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40 cursor-pointer hover:text-black transition-colors" onClick={() => handleSort('connection_method')}>
-                        METHOD {inventorySortConfig?.key === 'connection_method' && (inventorySortConfig.direction === 'asc' ? '↑' : '↓')}
-                      </th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40 cursor-pointer hover:text-black transition-colors" onClick={() => handleSort('status')}>
-                        STATUS {inventorySortConfig?.key === 'status' && (inventorySortConfig.direction === 'asc' ? '↑' : '↓')}
-                      </th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">HEALTH / TREND</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">ACTIONS</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {inventoryRows.map(device => (
-                      <tr key={device.id} className={`border-b border-black/5 hover:bg-black/[0.01] transition-colors ${selectedDeviceIds.includes(device.id) ? 'bg-emerald-50/30' : ''}`}>
-                        <td className="px-6 py-4">
-                          <input 
-                            type="checkbox" 
-                            className="rounded border-black/20 text-[#00bceb] focus:ring-[#00bceb]"
-                            checked={selectedDeviceIds.includes(device.id)}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setSelectedDeviceIds(prev => [...prev, device.id]);
-                              } else {
-                                setSelectedDeviceIds(prev => prev.filter(id => id !== device.id));
-                              }
-                            }}
-                          />
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="font-medium">{device.hostname || 'Unknown'}</div>
-                          <div className="text-[10px] font-mono text-black/40">{device.ip_address || '0.0.0.0'}</div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="text-xs">{device.model || 'N/A'}</div>
-                          <div className="text-[10px] font-mono text-black/40">{device.sn || 'N/A'}</div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="text-xs">{device.platform || 'unknown'}</div>
-                          <div className="text-[10px] text-black/40">Ver: {device.version || 'N/A'}</div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="text-xs">{device.site || 'N/A'}</div>
-                          <div className="text-[10px] font-bold uppercase text-black/30">{device.role || 'N/A'}</div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <span className="text-[10px] font-bold uppercase px-2 py-1 bg-black/5 rounded-lg border border-black/5">
-                            {device.connection_method || 'ssh'}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex flex-col gap-2 w-32">
-                            <div className="flex items-center justify-between">
-                              <div className="flex flex-col">
-                                <span className="text-[9px] font-bold text-black/40 uppercase">CPU {device.cpu_usage || 0}%</span>
-                                <div className="h-1 w-12 bg-black/5 rounded-full overflow-hidden mt-0.5">
-                                  <div className={`h-full bg-[#00bceb]`} style={{ width: `${device.cpu_usage || 0}%` }} />
-                                </div>
-                              </div>
-                              <Sparkline data={device.cpu_history || [20, 30, 25, 40, 35, 45, 40]} color="#00bceb" />
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <div className="flex flex-col">
-                                <span className="text-[9px] font-bold text-black/40 uppercase">MEM {device.memory_usage || 0}%</span>
-                                <div className="h-1 w-12 bg-black/5 rounded-full overflow-hidden mt-0.5">
-                                  <div className={`h-full bg-emerald-500`} style={{ width: `${device.memory_usage || 0}%` }} />
-                                </div>
-                              </div>
-                              <Sparkline data={device.memory_history || [60, 62, 65, 63, 68, 70, 65]} color="#10b981" />
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex flex-col gap-1.5">
-                            <div className="flex items-center gap-2">
-                              <span className="relative flex h-2 w-2">
-                                {device.status === 'online' && (
-                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                                )}
-                                <span className={`relative inline-flex rounded-full h-2 w-2 ${
-                                  device.status === 'online' ? 'bg-emerald-500' : 
-                                  device.status === 'pending' ? 'bg-amber-500' : 
-                                  'bg-red-500'
-                                }`}></span>
-                              </span>
-                              <span className={`text-[10px] font-bold uppercase ${
-                                device.status === 'online' ? 'text-emerald-600' : 
-                                device.status === 'pending' ? 'text-amber-600' : 
-                                'text-red-600'
-                              }`}>
-                                {device.status}
-                              </span>
-                            </div>
-                            <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase w-fit ${
-                              device.compliance === 'compliant' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
-                            }`}>
-                              {device.compliance}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex gap-3">
-                            <button 
-                              onClick={() => { setSelectedDevice(device); setActiveTab('automation'); }}
-                              className="text-[10px] font-bold uppercase text-[#00bceb] hover:text-[#0096bd]"
-                            >
-                              CONFIG
-                            </button>
-                            <button 
-                              onClick={() => handleShowDetails(device)}
-                              className="text-[10px] font-bold uppercase text-black/40 hover:text-black"
-                            >
-                              DETAILS
-                            </button>
-                            <button 
-                              onClick={() => { setEditingDevice(device); setEditForm(device); setShowEditModal(true); }}
-                              className="text-[10px] font-bold uppercase text-blue-600 hover:text-blue-700"
-                            >
-                              EDIT
-                            </button>
-                            <button 
-                              onClick={() => handleDeleteDevice(device.id)}
-                              className="text-[10px] font-bold uppercase text-red-600 hover:text-red-700"
-                            >
-                              DELETE
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                    {!inventoryLoading && inventoryRows.length === 0 && (
-                      <tr>
-                        <td colSpan={9} className="px-6 py-8 text-center text-sm text-black/40">No devices found for current filters.</td>
-                      </tr>
-                    )}
-                    {inventoryLoading && inventoryRows.length === 0 && (
-                      <tr>
-                        <td colSpan={9} className="px-6 py-8 text-center text-sm text-black/40">Loading devices...</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-                <Pagination 
-                  currentPage={inventoryPage} 
-                  totalItems={inventoryTotal} 
-                  itemsPerPage={inventoryPageSize}
-                  onItemsPerPageChange={setInventoryPageSize}
-                  onPageChange={setInventoryPage} 
-                />
-              </div>
-            </div>
+            <InventoryDevicesTab
+              inventoryRows={inventoryRows}
+              inventoryTotal={inventoryTotal}
+              inventoryPage={inventoryPage}
+              setInventoryPage={setInventoryPage}
+              inventoryPageSize={inventoryPageSize}
+              setInventoryPageSize={setInventoryPageSize}
+              inventorySearch={inventorySearch}
+              setInventorySearch={setInventorySearch}
+              inventoryPlatformFilter={inventoryPlatformFilter}
+              setInventoryPlatformFilter={setInventoryPlatformFilter}
+              inventoryStatusFilter={inventoryStatusFilter}
+              setInventoryStatusFilter={setInventoryStatusFilter}
+              inventorySortConfig={inventorySortConfig}
+              inventoryLoading={inventoryLoading}
+              selectedDeviceIds={selectedDeviceIds}
+              setSelectedDeviceIds={setSelectedDeviceIds}
+              handleSort={handleSort}
+              handleImport={handleImport}
+              handleExport={handleExport}
+              handleDeleteDevice={handleDeleteDevice}
+              handleDeleteSelected={handleDeleteSelected}
+              handleShowDetails={handleShowDetails}
+              setShowAddModal={setShowAddModal}
+              setShowEditModal={setShowEditModal}
+              setEditingDevice={setEditingDevice}
+              setEditForm={setEditForm}
+              setSelectedDevice={setSelectedDevice}
+              setActiveTab={setActiveTab}
+              language={language}
+              t={t}
+            />
           )}
 
           {/* ── Interface Monitoring Sub-Page ── */}
@@ -6696,190 +5793,28 @@ const App: React.FC = () => {
           )}
 
           {activeTab === 'compliance' && (
-            <div className="space-y-8">
-              <div className={sectionHeaderRowClass}>
-                <div>
-                  <h2 className="text-2xl font-medium tracking-tight">{t('complianceStandards')}</h2>
-                  <p className="text-sm text-black/40">{t('auditGolden')}</p>
-                </div>
-                <div className="flex items-center gap-3">
-                  {complianceOverview?.recent_runs?.[0]?.started_at && (
-                    <span className="text-xs text-black/40">
-                      {language === 'zh' ? '最近审计' : 'Last audit'}: {new Date(complianceOverview.recent_runs[0].started_at).toLocaleString()}
-                    </span>
-                  )}
-                  <button
-                    onClick={runComplianceAudit}
-                    disabled={complianceRunLoading}
-                    className={`${primaryActionBtnClass} disabled:opacity-50 disabled:cursor-not-allowed`}
-                  >
-                    {complianceRunLoading ? <RotateCcw size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-                    {language === 'zh' ? '执行审计' : 'Run Audit'}
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-                <div className="bg-white p-6 rounded-2xl border border-black/5 shadow-sm lg:col-span-1">
-                  <h3 className="text-sm font-semibold mb-4">{t('complianceScore')}</h3>
-                  <div className="flex items-center justify-center h-32">
-                    <div className="relative w-28 h-28">
-                      <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
-                        <path className="text-black/5" strokeDasharray="100, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" strokeWidth="3" />
-                        <path
-                          className={(complianceOverview?.score ?? 0) >= 85 ? 'text-emerald-500' : (complianceOverview?.score ?? 0) >= 65 ? 'text-amber-500' : 'text-red-500'}
-                          strokeDasharray={`${Math.max(0, Math.min(100, complianceOverview?.score ?? 0))}, 100`}
-                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="3"
-                        />
-                      </svg>
-                      <div className="absolute inset-0 flex flex-col items-center justify-center">
-                        <div className="text-2xl font-bold">{complianceOverview?.score ?? 0}%</div>
-                        <div className="text-[10px] uppercase tracking-widest text-black/35">Score</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                {[
-                  { label: language === 'zh' ? '设备总数' : 'Devices Audited', value: complianceOverview?.total_devices ?? 0, tone: 'text-slate-800' },
-                  { label: language === 'zh' ? '开放问题' : 'Open Findings', value: complianceOverview?.open_findings ?? 0, tone: 'text-red-600' },
-                  { label: language === 'zh' ? '高危与严重' : 'High + Critical', value: (complianceOverview?.severity_counts?.critical ?? 0) + (complianceOverview?.severity_counts?.high ?? 0), tone: 'text-orange-600' },
-                ].map((item) => (
-                  <div key={item.label} className="bg-white p-6 rounded-2xl border border-black/5 shadow-sm">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-black/35">{item.label}</p>
-                    <p className={`mt-4 text-3xl font-semibold ${item.tone}`}>{item.value}</p>
-                  </div>
-                ))}
-              </div>
-
-              <div className={sectionToolbarClass}>
-                <select
-                  value={complianceSeverityFilter}
-                  onChange={(e) => setComplianceSeverityFilter(e.target.value)}
-                  className="bg-white border border-black/10 rounded-lg px-3 py-2 text-xs outline-none"
-                >
-                  <option value="all">{language === 'zh' ? '全部级别' : 'All Severity'}</option>
-                  <option value="critical">Critical</option>
-                  <option value="high">High</option>
-                  <option value="medium">Medium</option>
-                  <option value="low">Low</option>
-                </select>
-                <select
-                  value={complianceStatusFilter}
-                  onChange={(e) => setComplianceStatusFilter(e.target.value)}
-                  className="bg-white border border-black/10 rounded-lg px-3 py-2 text-xs outline-none"
-                >
-                  <option value="all">{language === 'zh' ? '全部状态' : 'All Status'}</option>
-                  <option value="open">Open</option>
-                  <option value="in_progress">In Progress</option>
-                  <option value="accepted_risk">Accepted Risk</option>
-                  <option value="resolved">Resolved</option>
-                </select>
-                <select
-                  value={complianceCategoryFilter}
-                  onChange={(e) => setComplianceCategoryFilter(e.target.value)}
-                  className="bg-white border border-black/10 rounded-lg px-3 py-2 text-xs outline-none"
-                >
-                  <option value="all">{language === 'zh' ? '全部分类' : 'All Categories'}</option>
-                  <option value="management-plane">Management Plane</option>
-                  <option value="aaa">AAA</option>
-                  <option value="logging">Logging</option>
-                  <option value="snmp">SNMP</option>
-                  <option value="switching">Switching</option>
-                  <option value="backup">Backup</option>
-                </select>
-              </div>
-
-              <div className="bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
-                <div className="px-6 py-4 border-b border-black/5 bg-black/[0.02] flex items-center justify-between">
-                  <div>
-                    <h3 className="text-sm font-semibold">{language === 'zh' ? '审计发现' : 'Compliance Findings'}</h3>
-                    <p className="text-xs text-black/40 mt-1">{language === 'zh' ? '按规则和设备归档当前未关闭问题。' : 'Current findings grouped by rule and device.'}</p>
-                  </div>
-                  <div className="text-xs text-black/40">{complianceFindingTotal} {language === 'zh' ? '条记录' : 'records'}</div>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="bg-black/[0.01] border-b border-black/5">
-                        <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{language === 'zh' ? '规则 / 设备' : 'Rule / Device'}</th>
-                        <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{language === 'zh' ? '级别' : 'Severity'}</th>
-                        <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{language === 'zh' ? '分类' : 'Category'}</th>
-                        <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{language === 'zh' ? '状态' : 'Status'}</th>
-                        <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{language === 'zh' ? '最近出现' : 'Last Seen'}</th>
-                        <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{language === 'zh' ? '操作' : 'Action'}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {complianceFindings.map((finding) => (
-                        <tr key={finding.id} className="border-b border-black/5 hover:bg-black/[0.01] transition-colors">
-                          <td className="px-6 py-4 align-top">
-                            <div className="text-sm font-semibold text-[#0b2a3c]">{finding.title}</div>
-                            <div className="mt-1 text-xs text-black/45">{finding.rule_id} · {finding.hostname || finding.device_id}</div>
-                            <div className="mt-1 text-[11px] text-black/35">{finding.ip_address || 'N/A'} · {finding.site || 'Unknown site'}</div>
-                          </td>
-                          <td className="px-6 py-4 align-top">
-                            <span className={`inline-flex px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${severityBadgeClass(finding.severity)}`}>
-                              {finding.severity}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 align-top text-xs text-black/60">{finding.category}</td>
-                          <td className="px-6 py-4 align-top">
-                            <span className={`inline-flex px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${complianceStatusBadgeClass(finding.status)}`}>
-                              {finding.status.replace('_', ' ')}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 align-top text-xs font-mono text-black/50">{new Date(finding.last_seen_at).toLocaleString()}</td>
-                          <td className="px-6 py-4 align-top">
-                            <div className="flex items-center gap-3">
-                              <button
-                                onClick={() => openComplianceFindingDetail(finding)}
-                                className="text-[10px] font-bold uppercase text-blue-600 hover:underline"
-                              >
-                                {language === 'zh' ? '详情' : 'Details'}
-                              </button>
-                              {finding.status !== 'resolved' && (
-                                <button
-                                  onClick={() => updateComplianceFinding(finding.id, { status: 'in_progress' })}
-                                  className="text-[10px] font-bold uppercase text-amber-600 hover:underline"
-                                >
-                                  {language === 'zh' ? '跟进' : 'Triage'}
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                      {!complianceLoading && complianceFindings.length === 0 && (
-                        <tr>
-                          <td colSpan={6} className="px-6 py-10 text-center text-sm text-black/40">
-                            {language === 'zh' ? '当前筛选条件下没有审计问题。' : 'No findings match the current filters.'}
-                          </td>
-                        </tr>
-                      )}
-                      {complianceLoading && complianceFindings.length === 0 && (
-                        <tr>
-                          <td colSpan={6} className="px-6 py-10 text-center text-sm text-black/40">
-                            {language === 'zh' ? '正在加载审计结果...' : 'Loading compliance findings...'}
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                <Pagination
-                  currentPage={compliancePage}
-                  totalItems={complianceFindingTotal}
-                  itemsPerPage={compliancePageSize}
-                  onItemsPerPageChange={setCompliancePageSize}
-                  onPageChange={setCompliancePage}
-                />
-              </div>
-            </div>
+            <ComplianceTab
+              complianceOverview={complianceOverview}
+              complianceFindings={complianceFindings}
+              complianceFindingTotal={complianceFindingTotal}
+              complianceSeverityFilter={complianceSeverityFilter}
+              setComplianceSeverityFilter={setComplianceSeverityFilter}
+              complianceStatusFilter={complianceStatusFilter}
+              setComplianceStatusFilter={setComplianceStatusFilter}
+              complianceCategoryFilter={complianceCategoryFilter}
+              setComplianceCategoryFilter={setComplianceCategoryFilter}
+              compliancePage={compliancePage}
+              setCompliancePage={setCompliancePage}
+              compliancePageSize={compliancePageSize}
+              setCompliancePageSize={setCompliancePageSize}
+              complianceLoading={complianceLoading}
+              complianceRunLoading={complianceRunLoading}
+              runComplianceAudit={runComplianceAudit}
+              openComplianceFindingDetail={openComplianceFindingDetail}
+              updateComplianceFinding={updateComplianceFinding}
+              language={language}
+              t={t}
+            />
           )}
 
           {/* ================================================================
@@ -7988,322 +6923,49 @@ const App: React.FC = () => {
           )}
 
           {activeTab === 'users' && (
-            <div className="space-y-8">
-              <div className={sectionHeaderRowClass}>
-                <div>
-                  <h2 className="text-2xl font-medium tracking-tight">{t('userManagement')}</h2>
-                  <p className="text-sm text-black/40">{t('manageAccess')}</p>
-                </div>
-                <button 
-                  onClick={() => setShowAddUserModal(true)}
-                  className={primaryActionBtnClass}
-                >
-                  <Plus size={18} />
-                  {t('addUser')}
-                </button>
-              </div>
-
-              <div className="bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-black/[0.01] border-b border-black/5">
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{t('username')}</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{t('role')}</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{t('status')}</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{t('lastLogin')}</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40 text-right">{t('actions')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {users.map(user => (
-                      <tr key={user.id} className="border-b border-black/5 hover:bg-black/[0.01] transition-colors">
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 bg-black/5 rounded-full flex items-center justify-center text-xs font-bold">
-                              {user.username.substring(0, 2).toUpperCase()}
-                            </div>
-                            <span className="text-sm font-medium">{user.username}</span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-xs">{user.role}</td>
-                        <td className="px-6 py-4">
-                          <span className="text-[10px] font-bold uppercase px-2 py-1 rounded bg-emerald-100 text-emerald-700">
-                            {user.status}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-xs text-black/40">{user.lastLogin}</td>
-                        <td className="px-6 py-4 text-right">
-                          <button
-                            onClick={() => {
-                              setEditingUser(user);
-                              setEditUserForm({ username: user.username, password: '', role: user.role });
-                              setShowEditUserModal(true);
-                            }}
-                            className="text-[10px] font-bold uppercase text-black/40 hover:text-black"
-                          >{t('edit')}</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {showAddUserModal && (
-                <div className="fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                  <motion.div 
-                    initial={{ scale: 0.9, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    className="bg-white w-full max-w-md rounded-3xl shadow-2xl border border-black/5 overflow-hidden"
-                  >
-                    <div className="p-8">
-                      <h3 className="text-xl font-medium mb-6">{t('addNewUser')}</h3>
-                      <div className="space-y-4">
-                        <div className="space-y-2">
-                          <label className="text-xs font-semibold uppercase tracking-wider text-black/40 ml-1">{t('username')}</label>
-                          <input 
-                            type="text" 
-                            value={newUserForm.username}
-                            onChange={(e) => setNewUserForm({ ...newUserForm, username: e.target.value })}
-                            className="w-full px-4 py-3 rounded-xl border border-black/10 focus:border-black focus:ring-4 focus:ring-black/5 outline-none transition-all"
-                            placeholder="e.g. jdoe"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-xs font-semibold uppercase tracking-wider text-black/40 ml-1">{t('password')}</label>
-                          <div className="relative">
-                            <input 
-                              type={showNewUserPwd ? 'text' : 'password'}
-                              value={newUserForm.password}
-                              onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })}
-                              className="w-full px-4 pr-12 py-3 rounded-xl border border-black/10 focus:border-black focus:ring-4 focus:ring-black/5 outline-none transition-all"
-                              placeholder="••••••••"
-                            />
-                            <button type="button" onClick={() => setShowNewUserPwd(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-black/30 hover:text-black/60 transition-colors">
-                              {showNewUserPwd ? <EyeOff size={16} /> : <Eye size={16} />}
-                            </button>
-                          </div>
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-xs font-semibold uppercase tracking-wider text-black/40 ml-1">{t('role')}</label>
-                          <select 
-                            value={newUserForm.role}
-                            onChange={(e) => setNewUserForm({ ...newUserForm, role: e.target.value })}
-                            className="w-full px-4 py-3 rounded-xl border border-black/10 focus:border-black focus:ring-4 focus:ring-black/5 outline-none transition-all bg-white"
-                          >
-                            <option value="Administrator">Administrator</option>
-                            <option value="Operator">Operator</option>
-                            <option value="Viewer">Viewer</option>
-                          </select>
-                        </div>
-                      </div>
-                      <div className="flex gap-3 mt-8">
-                        <button 
-                          onClick={() => setShowAddUserModal(false)}
-                          className="flex-1 px-4 py-3 rounded-xl border border-black/10 font-medium hover:bg-black/5 transition-all"
-                        >
-                          {t('cancel')}
-                        </button>
-                        <button 
-                          onClick={handleAddUser}
-                          className="flex-1 px-4 py-3 rounded-xl bg-black text-white font-medium hover:bg-black/80 transition-all shadow-lg shadow-black/20"
-                        >
-                          {t('create')}
-                        </button>
-                      </div>
-                    </div>
-                  </motion.div>
-                </div>
-              )}
-
-              {showEditUserModal && editingUser && (
-                <div className="fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                  <motion.div
-                    initial={{ scale: 0.9, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    className="bg-white w-full max-w-md rounded-3xl shadow-2xl border border-black/5 overflow-hidden"
-                  >
-                    <div className="p-8">
-                      <h3 className="text-xl font-medium mb-6">编辑用户</h3>
-                      <div className="space-y-4">
-                        <div className="space-y-2">
-                          <label className="text-xs font-semibold uppercase tracking-wider text-black/40 ml-1">{t('username')}</label>
-                          <input
-                            type="text"
-                            value={editUserForm.username}
-                            onChange={(e) => setEditUserForm({ ...editUserForm, username: e.target.value })}
-                            className="w-full px-4 py-3 rounded-xl border border-black/10 focus:border-black focus:ring-4 focus:ring-black/5 outline-none transition-all"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-xs font-semibold uppercase tracking-wider text-black/40 ml-1">{t('password')} <span className="text-black/30 normal-case font-normal">（留空则不修改）</span></label>
-                          <div className="relative">
-                            <input
-                              type={showEditUserPwd ? 'text' : 'password'}
-                              value={editUserForm.password}
-                              onChange={(e) => setEditUserForm({ ...editUserForm, password: e.target.value })}
-                              className="w-full px-4 pr-12 py-3 rounded-xl border border-black/10 focus:border-black focus:ring-4 focus:ring-black/5 outline-none transition-all"
-                              placeholder="••••••••"
-                            />
-                            <button type="button" onClick={() => setShowEditUserPwd(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-black/30 hover:text-black/60 transition-colors">
-                              {showEditUserPwd ? <EyeOff size={16} /> : <Eye size={16} />}
-                            </button>
-                          </div>
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-xs font-semibold uppercase tracking-wider text-black/40 ml-1">{t('role')}</label>
-                          <select
-                            value={editUserForm.role}
-                            onChange={(e) => setEditUserForm({ ...editUserForm, role: e.target.value })}
-                            className="w-full px-4 py-3 rounded-xl border border-black/10 focus:border-black focus:ring-4 focus:ring-black/5 outline-none transition-all bg-white"
-                          >
-                            <option value="Administrator">Administrator</option>
-                            <option value="Operator">Operator</option>
-                            <option value="Viewer">Viewer</option>
-                          </select>
-                        </div>
-                      </div>
-                      <div className="flex gap-3 mt-8">
-                        <button
-                          onClick={() => { setShowEditUserModal(false); setEditingUser(null); }}
-                          className="flex-1 px-4 py-3 rounded-xl border border-black/10 font-medium hover:bg-black/5 transition-all"
-                        >
-                          {t('cancel')}
-                        </button>
-                        <button
-                          onClick={handleEditUser}
-                          className="flex-1 px-4 py-3 rounded-xl bg-black text-white font-medium hover:bg-black/80 transition-all shadow-lg shadow-black/20"
-                        >
-                          保存
-                        </button>
-                      </div>
-                    </div>
-                  </motion.div>
-                </div>
-              )}
-            </div>
+            <UsersTab
+              users={users}
+              showAddUserModal={showAddUserModal}
+              setShowAddUserModal={setShowAddUserModal}
+              showEditUserModal={showEditUserModal}
+              setShowEditUserModal={setShowEditUserModal}
+              editingUser={editingUser}
+              setEditingUser={setEditingUser}
+              newUserForm={newUserForm}
+              setNewUserForm={setNewUserForm}
+              editUserForm={editUserForm}
+              setEditUserForm={setEditUserForm}
+              showNewUserPwd={showNewUserPwd}
+              setShowNewUserPwd={setShowNewUserPwd}
+              showEditUserPwd={showEditUserPwd}
+              setShowEditUserPwd={setShowEditUserPwd}
+              handleAddUser={handleAddUser}
+              handleEditUser={handleEditUser}
+              language={language}
+              t={t}
+            />
           )}
           {activeTab === 'history' && (
-            <div className="space-y-6">
-              <div className={sectionHeaderRowClass}>
-                <div>
-                  <h2 className="text-2xl font-medium tracking-tight">{t('auditLogsTitle')}</h2>
-                  <p className="text-sm text-black/40">{t('fullHistory')}</p>
-                </div>
-              </div>
-
-              <div className="bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
-                <div className="p-4 bg-black/[0.02] border-b border-black/5 flex gap-4 flex-wrap">
-                  <select
-                    value={auditCategoryFilter}
-                    onChange={(e) => setAuditCategoryFilter(e.target.value)}
-                    className="bg-white border border-black/10 rounded-lg px-3 py-1.5 text-xs outline-none"
-                  >
-                    <option value="all">{language === 'zh' ? '全部分类' : 'All Categories'}</option>
-                    <option value="auth">Auth</option>
-                    <option value="inventory">Inventory</option>
-                    <option value="execution">Execution</option>
-                    <option value="config">Config</option>
-                    <option value="playbook">Playbook</option>
-                    <option value="template">Template</option>
-                    <option value="compliance">Compliance</option>
-                  </select>
-                  <select
-                    value={auditSeverityFilter}
-                    onChange={(e) => setAuditSeverityFilter(e.target.value)}
-                    className="bg-white border border-black/10 rounded-lg px-3 py-1.5 text-xs outline-none"
-                  >
-                    <option value="all">{language === 'zh' ? '全部级别' : 'All Severity'}</option>
-                    <option value="critical">Critical</option>
-                    <option value="high">High</option>
-                    <option value="medium">Medium</option>
-                    <option value="low">Low</option>
-                  </select>
-                  <select
-                    value={auditStatusFilter}
-                    onChange={(e) => setAuditStatusFilter(e.target.value)}
-                    className="bg-white border border-black/10 rounded-lg px-3 py-1.5 text-xs outline-none"
-                  >
-                    <option value="all">{language === 'zh' ? '全部状态' : 'All Status'}</option>
-                    <option value="success">Success</option>
-                    <option value="warning">Warning</option>
-                    <option value="failed">Failed</option>
-                    <option value="completed">Completed</option>
-                  </select>
-                  <select
-                    value={auditTimeFilter}
-                    onChange={(e) => setAuditTimeFilter(e.target.value)}
-                    className="bg-white border border-black/10 rounded-lg px-3 py-1.5 text-xs outline-none"
-                  >
-                    <option value="all">{language === 'zh' ? '全部时间' : 'All Time'}</option>
-                    <option value="24h">{language === 'zh' ? '最近 24 小时' : 'Last 24 Hours'}</option>
-                    <option value="7d">{language === 'zh' ? '最近 7 天' : 'Last 7 Days'}</option>
-                    <option value="30d">{language === 'zh' ? '最近 30 天' : 'Last 30 Days'}</option>
-                  </select>
-                </div>
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-black/[0.01] border-b border-black/5">
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{t('timestamp')}</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{t('action')}</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{language === 'zh' ? '分类' : 'Category'}</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{t('target')}</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{t('user')}</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{t('status')}</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-black/40">{language === 'zh' ? '操作' : 'Action'}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {auditRows.map((event) => (
-                      <tr key={event.id} className="border-b border-black/5 hover:bg-black/[0.01] transition-colors">
-                        <td className="px-6 py-4 text-xs font-mono text-black/50">{new Date(event.created_at).toLocaleString()}</td>
-                        <td className="px-6 py-4 align-top">
-                          <div className="text-sm font-medium text-[#0b2a3c]">{event.summary}</div>
-                          <div className="mt-1 text-[11px] text-black/35 font-mono">{event.event_type}</div>
-                        </td>
-                        <td className="px-6 py-4 text-xs text-black/55">{event.category}</td>
-                        <td className="px-6 py-4 text-xs">{event.target_name || event.target_id || event.device_id || 'Unknown'}</td>
-                        <td className="px-6 py-4 text-xs text-black/40">{event.actor_username || 'system'}</td>
-                        <td className="px-6 py-4">
-                          <div className="flex flex-col gap-2">
-                            <span className={`inline-flex w-fit px-2 py-1 rounded text-[10px] font-bold uppercase ${auditStatusBadgeClass(event.status)}`}>
-                              {event.status}
-                            </span>
-                            <span className={`inline-flex w-fit px-2 py-1 rounded text-[10px] font-bold uppercase ${severityBadgeClass(event.severity)}`}>
-                              {event.severity}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <button
-                            onClick={() => openAuditEventDetail(event)}
-                            className="text-[10px] font-bold uppercase text-blue-600 hover:underline"
-                          >
-                            {language === 'zh' ? '详情' : 'Details'}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                    {!auditLoading && auditRows.length === 0 && (
-                      <tr>
-                        <td colSpan={7} className="px-6 py-8 text-center text-sm text-black/40">{language === 'zh' ? '当前筛选条件下没有审计日志。' : 'No audit logs found for current filters.'}</td>
-                      </tr>
-                    )}
-                    {auditLoading && auditRows.length === 0 && (
-                      <tr>
-                        <td colSpan={7} className="px-6 py-8 text-center text-sm text-black/40">{language === 'zh' ? '正在加载审计日志...' : 'Loading audit logs...'}</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-                <Pagination 
-                  currentPage={auditPage} 
-                  totalItems={auditTotal} 
-                  itemsPerPage={auditPageSize}
-                  onItemsPerPageChange={setAuditPageSize}
-                  onPageChange={setAuditPage} 
-                />
-              </div>
-            </div>
+            <HistoryTab
+              auditRows={auditRows}
+              auditTotal={auditTotal}
+              auditPage={auditPage}
+              setAuditPage={setAuditPage}
+              auditPageSize={auditPageSize}
+              setAuditPageSize={setAuditPageSize}
+              auditLoading={auditLoading}
+              auditCategoryFilter={auditCategoryFilter}
+              setAuditCategoryFilter={setAuditCategoryFilter}
+              auditSeverityFilter={auditSeverityFilter}
+              setAuditSeverityFilter={setAuditSeverityFilter}
+              auditStatusFilter={auditStatusFilter}
+              setAuditStatusFilter={setAuditStatusFilter}
+              auditTimeFilter={auditTimeFilter}
+              setAuditTimeFilter={setAuditTimeFilter}
+              openAuditEventDetail={openAuditEventDetail}
+              language={language}
+              t={t}
+            />
           )}
         </main>
         <footer className={`h-10 px-8 border-t flex items-center justify-between text-[11px] ${resolvedTheme === 'dark' ? 'border-white/10 text-white/45 bg-[#0b1320]' : 'border-black/8 text-black/45 bg-white/70'}`}>

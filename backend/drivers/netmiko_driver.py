@@ -80,6 +80,8 @@ class NetmikoDriver(BaseDriver):
         logger = logging.getLogger(__name__)
         start_time = time.time()
         try:
+            if not self.conn:
+                raise Exception("Not connected")
             logger.debug(f"[send_command START] {self.host} | cmd: {command[:50]}")
             
             # send_command 基于提示符检测返回，fast_cli=True 已使延迟最小化。
@@ -119,6 +121,8 @@ class NetmikoDriver(BaseDriver):
         logger = logging.getLogger(__name__)
         start_time = time.time()
         try:
+            if not self.conn:
+                raise Exception("Not connected")
             logger.debug(f"Sending config to {self.host}: {len(configs)} commands")
             # send_config_set 配合 fast_cli=True 已足够快（LAN 下每条命令 <100ms）。
             # cmd_verify=False 跳过每条命令的回显确认，是最主要的加速手段。

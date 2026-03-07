@@ -18,3 +18,5 @@ apscheduler
 httpx
 puresnmp>=2.0
 bcrypt
+cryptography
+slowapi

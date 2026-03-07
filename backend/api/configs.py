@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from database import get_db_connection
 from services.audit_service import log_audit_event
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -58,14 +59,21 @@ def _resolve_backup_dir(vendor: str, hostname: str, ts: datetime) -> str:
 
 
 def _write_config_file(vendor: str, hostname: str, ts: datetime, trigger: str, content: str) -> str:
-    """Write config to disk; return relative file path from BACKUP_ROOT."""
+    """Write config to disk (optionally encrypted); return relative file path from BACKUP_ROOT."""
     dir_path = _resolve_backup_dir(vendor, hostname, ts)
     os.makedirs(dir_path, exist_ok=True)
     filename = f"{ts.strftime('%Y%m%d_%H%M%S')}_{trigger}.cfg"
     abs_path = os.path.join(dir_path, filename)
-    with open(abs_path, 'w', encoding='utf-8') as f:
-        f.write(content)
-    # Return relative path with forward slashes so records are portable across OS
+    data = content.encode('utf-8')
+    # Encrypt backup files if a valid encryption key is configured
+    try:
+        from core.crypto import _get_fernet
+        f = _get_fernet()
+        data = b'ENCRYPTED:' + f.encrypt(data)
+    except Exception:
+        pass  # Encryption key not configured — store plaintext
+    with open(abs_path, 'wb') as fh:
+        fh.write(data)
     return os.path.relpath(abs_path, BACKUP_ROOT).replace(os.sep, '/')
 
 
@@ -74,8 +82,17 @@ def _read_config_file(file_path: str) -> str:
     abs_path = os.path.join(BACKUP_ROOT, file_path.replace('/', os.sep).replace('\\', os.sep))
     if not os.path.exists(abs_path):
         return ''
-    with open(abs_path, 'r', encoding='utf-8') as f:
-        return f.read()
+    with open(abs_path, 'rb') as fh:
+        data = fh.read()
+    if data.startswith(b'ENCRYPTED:'):
+        try:
+            from core.crypto import _get_fernet
+            f = _get_fernet()
+            return f.decrypt(data[len(b'ENCRYPTED:'):]).decode('utf-8')
+        except Exception:
+            logger.error(f"Failed to decrypt config file: {file_path}")
+            return ''
+    return data.decode('utf-8')
 
 
 def _delete_config_file(file_path: str):

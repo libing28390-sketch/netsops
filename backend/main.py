@@ -30,6 +30,9 @@ from ping3 import ping
 from database import DB_PATH, init_db, get_db_connection
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # SNMP Imports removed for stability
 
@@ -49,6 +52,14 @@ async def lifespan(app: FastAPI):
     schedule_cfg = _get_schedule_from_db()
     scheduler.start()
     reschedule_backup(schedule_cfg)
+    # Schedule daily DB maintenance: clean expired sessions, VACUUM
+    scheduler.add_job(
+        _daily_db_maintenance,
+        CronTrigger(hour=3, minute=30),
+        id='daily_db_maintenance',
+        name='Daily DB Maintenance',
+        replace_existing=True,
+    )
     logger.info("[Scheduler] APScheduler started")
     yield
     # ── shutdown ──
@@ -62,17 +73,27 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ── Rate Limiting ────────────────────────────────────────────────────
+limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # CORS — restrict to known origins in production; permissive in dev
 _cors_origins = ["*"] if os.environ.get("NODE_ENV") == "development" else [
-    "http://localhost:8003",
-    "http://127.0.0.1:8003",
+    f"http://localhost:{os.environ.get('PORT', '8003')}",
+    f"http://127.0.0.1:{os.environ.get('PORT', '8003')}",
 ]
+# In production, set CORS_ORIGINS env var to a comma-separated list of allowed origins
+_env_origins = os.environ.get("CORS_ORIGINS", "").strip()
+if _env_origins:
+    _cors_origins = [o.strip() for o in _env_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 # 注册路由
@@ -92,6 +113,27 @@ app.include_router(compliance_router, prefix="/api")
 
 # ── APScheduler ──────────────────────────────────────────────────────
 scheduler = AsyncIOScheduler()
+
+def _daily_db_maintenance():
+    """Clean expired sessions, vacuum database."""
+    conn = get_db_connection()
+    try:
+        import time
+        cutoff = time.time() - 28800  # 8 hours session TTL
+        conn.execute('DELETE FROM sessions WHERE created_at < ?', (cutoff,))
+        conn.execute('DELETE FROM login_failures WHERE locked_until > 0 AND locked_until < ?', (time.time() - 86400,))
+        conn.commit()
+    finally:
+        conn.close()
+    # VACUUM requires its own connection (cannot run inside transaction)
+    conn2 = get_db_connection()
+    try:
+        conn2.execute('VACUUM')
+    except Exception as e:
+        logger.warning(f"VACUUM failed: {e}")
+    finally:
+        conn2.close()
+    logger.info("[Maintenance] Daily DB maintenance completed")
 
 def reschedule_backup(cfg: dict):
     """Called by configs.py when the user changes the schedule settings."""

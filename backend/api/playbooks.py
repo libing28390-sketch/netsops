@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Optional
 from database import get_db_connection
 from services.audit_service import log_audit_event
+from core.crypto import decrypt_credential
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -2555,53 +2556,21 @@ ws_manager = ConnectionManager()
 # ════════════════════════════════════════════════════════════════════
 
 def _render_template(template: str, variables: dict) -> str:
-    """Simple Jinja-like template renderer for playbook phases."""
-    import re
-    text = template
-
-    # Handle {% for var in expr %}...{% endfor %}
-    for_pattern = r'\{%\s*for\s+(\w+)\s+in\s+(.*?)\s*%\}(.*?)\{%\s*endfor\s*%\}'
-    def _expand_for(m):
-        loop_var, expr, body = m.group(1), m.group(2), m.group(3)
-        try:
-            iterable = eval(expr, {"__builtins__": {}}, variables)
-        except Exception:
-            return ''
-        parts = []
-        for item in iterable:
-            local_vars = {**variables, loop_var: item}
-            rendered_body = body
-            for k, v in local_vars.items():
-                rendered_body = rendered_body.replace('{{' + k + '}}', str(v))
-                rendered_body = rendered_body.replace('{{' + k + '.strip()}}', str(v).strip() if isinstance(v, str) else str(v))
-            parts.append(rendered_body)
-        return ''.join(parts)
-
-    text = re.sub(for_pattern, _expand_for, text, flags=re.DOTALL)
-
-    # Handle {% if expr %}...{% endif %} and {% if expr %}...{% else %}...{% endif %}
-    if_pattern = r'\{%\s*if\s+(.*?)\s*%\}(.*?)(?:\{%\s*else\s*%\}(.*?))?\{%\s*endfor\s*%\}|\{%\s*if\s+(.*?)\s*%\}(.*?)(?:\{%\s*else\s*%\}(.*?))?\{%\s*endif\s*%\}'
-    def _expand_if(m):
-        cond = m.group(1) or m.group(4)
-        true_block = m.group(2) or m.group(5) or ''
-        false_block = m.group(3) or m.group(6) or ''
-        try:
-            result = eval(cond, {"__builtins__": {}}, variables)
-        except Exception:
-            result = False
-        return true_block if result else false_block
-
-    text = re.sub(if_pattern, _expand_if, text, flags=re.DOTALL)
-
-    # Simple variable substitution
-    for k, v in variables.items():
-        text = text.replace('{{' + k + '}}', str(v))
-
-    # Remove any remaining template tags
-    text = re.sub(r'\{%.*?%\}', '', text)
-    text = re.sub(r'\{\{.*?\}\}', '', text)
-
-    return text.strip()
+    """Render playbook command templates using Jinja2 sandbox (safe, no eval)."""
+    from jinja2.sandbox import SandboxedEnvironment
+    env = SandboxedEnvironment()
+    try:
+        tmpl = env.from_string(template)
+        return tmpl.render(**variables)
+    except Exception:
+        # Fallback: simple variable substitution only
+        text = template
+        for k, v in variables.items():
+            text = text.replace('{{' + k + '}}', str(v))
+        import re
+        text = re.sub(r'\{%.*?%\}', '', text)
+        text = re.sub(r'\{\{.*?\}\}', '', text)
+        return text.strip()
 
 def _render_phase_commands(phase_templates: list, variables: dict) -> list[str]:
     """Render a list of command templates into actual commands."""
@@ -2847,10 +2816,19 @@ async def execute_playbook(request: Request, payload: dict = Body(...)):
 
 @router.websocket("/ws/playbook/{execution_id}")
 async def playbook_ws(websocket: WebSocket, execution_id: str):
+    # Authenticate via query param: ?token=xxx
+    token = websocket.query_params.get('token', '')
+    if not token:
+        await websocket.close(code=1008, reason="Missing authentication token")
+        return
+    from api.users import validate_session_token
+    if not validate_session_token(token):
+        await websocket.close(code=1008, reason="Invalid or expired session")
+        return
+
     await ws_manager.connect(execution_id, websocket)
     try:
         while True:
-            # Keep connection alive; client can also send ping/commands
             data = await websocket.receive_text()
             if data == 'ping':
                 await websocket.send_json({"type": "pong"})
@@ -2885,7 +2863,11 @@ async def _run_playbook(
         f"SELECT * FROM devices WHERE id IN ({','.join('?' * len(device_ids))})",
         device_ids
     ).fetchall()
-    devices = {d['id']: dict(d) for d in device_rows}
+    devices = {}
+    for d in device_rows:
+        dd = dict(d)
+        dd['password'] = decrypt_credential(dd.get('password')) or ''
+        devices[d['id']] = dd
     conn.close()
 
     total = len(device_ids)

@@ -30,9 +30,29 @@ import asyncio
 from services.automation_service import AutomationService
 from drivers.base import CommandResult
 from services.audit_service import log_audit_event
+from core.crypto import decrypt_credential
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# ── Dangerous command blacklist ──
+# Commands that can cause irreversible damage to network devices.
+_DANGEROUS_COMMANDS = [
+    'write erase', 'erase startup', 'erase nvram', 'erase flash',
+    'format ', 'delete /force', 'delete /recursive',
+    'reload', 'reboot', 'reset saved-configuration',
+    'restore factory-default', 'system-shutdown',
+    'license boot', 'boot system',
+]
+
+def _check_command_safety(commands: list[str]) -> str | None:
+    """Return an error message if any command matches the blacklist, or None if safe."""
+    for cmd in commands:
+        cmd_lower = cmd.lower().strip()
+        for dangerous in _DANGEROUS_COMMANDS:
+            if cmd_lower.startswith(dangerous) or cmd_lower == dangerous.strip():
+                return f"Blocked dangerous command: '{cmd}'. This operation requires direct console access."
+    return None
 
 # 初始化业务服务
 automation_service = AutomationService(driver_type='netmiko') # 使用 Netmiko 驱动执行命令
@@ -54,7 +74,8 @@ async def execute_task(request: Request, payload: dict = Body(...)):
             raise HTTPException(status_code=404, detail="Device not found")
         
         device_dict = dict(device)
-        
+        # Decrypt stored credentials before passing to driver
+        device_dict['password'] = decrypt_credential(device_dict.get('password')) or ''
         final_command = command
         task_name = 'Direct Command'
         
@@ -93,6 +114,29 @@ async def execute_task(request: Request, payload: dict = Body(...)):
                     any(kw in _cmd_lower for kw in ['conf t', 'configure terminal', 'system-view'])
             
             commands = [c.strip() for c in final_command.split('\n') if c.strip()]
+
+            # ── Safety check: block dangerous/destructive commands ──
+            safety_err = _check_command_safety(commands)
+            if safety_err:
+                conn.execute('UPDATE jobs SET status = ?, output = ? WHERE id = ?', ('blocked', safety_err, job_id))
+                conn.commit()
+                log_audit_event(
+                    event_type='COMMAND_BLOCKED',
+                    category='automation',
+                    severity='critical',
+                    status='blocked',
+                    summary=f"Blocked dangerous command on {device_dict.get('hostname')}",
+                    actor_username=actor_username,
+                    actor_role=actor_role,
+                    source_ip=request.client.host if request.client else None,
+                    target_type='device',
+                    target_id=device_id,
+                    target_name=device_dict.get('hostname'),
+                    device_id=device_id,
+                    job_id=job_id,
+                    details={'blocked_reason': safety_err, 'command_preview': '\n'.join(commands[:8])},
+                )
+                raise HTTPException(status_code=403, detail=safety_err)
             
             # 自动选择驱动：如果是测试 IP 则使用 Mock 驱动
             driver_type = 'mock' if device_dict.get('ip_address') in ['127.0.0.1', '0.0.0.0', 'localhost'] else 'netmiko'

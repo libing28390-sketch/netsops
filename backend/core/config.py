@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = DEFAULT_DATABASE_URL
     REDIS_URL: str = "redis://localhost:6379/0"
     SECRET_KEY: str = "supersecret"
+    CREDENTIAL_ENCRYPTION_KEY: str = "change-me-to-a-random-secret"
     ENVIRONMENT: str = "development"
     TELEMETRY_RAW_RETENTION_HOURS: int = 48
     TELEMETRY_ROLLUP_RETENTION_DAYS: int = 365
