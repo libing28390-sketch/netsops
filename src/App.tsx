@@ -4930,11 +4930,13 @@ const App: React.FC = () => {
                             />
                           </div>
                         </div>
-                        {/* device list */}
+                        {/* device list – grouped by online/offline */}
                         <div className="flex-1 min-h-0 overflow-auto p-2 space-y-0.5">
-                          {devices
-                            .filter(d => d.hostname.toLowerCase().includes(automationSearch.toLowerCase()) || d.ip_address.includes(automationSearch))
-                            .map(device => {
+                          {(() => {
+                            const filtered = devices.filter(d => d.hostname.toLowerCase().includes(automationSearch.toLowerCase()) || d.ip_address.includes(automationSearch));
+                            const onlineDevices = filtered.filter(d => d.status === 'online');
+                            const offlineDevices = filtered.filter(d => d.status !== 'online');
+                            const renderDevice = (device: any) => {
                               const checked = batchDeviceIds.includes(device.id);
                               const isSelected = batchMode ? checked : selectedDevice?.id === device.id;
                               return (
@@ -4962,7 +4964,38 @@ const App: React.FC = () => {
                                   </p>
                                 </button>
                               );
-                            })}
+                            };
+                            return (
+                              <>
+                                {/* Online group */}
+                                {onlineDevices.length > 0 && (
+                                  <>
+                                    <div className="flex items-center gap-1.5 px-2 pt-1 pb-1">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
+                                      <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-600/70">{isZh ? '在线' : 'Online'}</span>
+                                      <span className="text-[9px] font-mono text-black/30">{onlineDevices.length}</span>
+                                    </div>
+                                    {onlineDevices.map(renderDevice)}
+                                  </>
+                                )}
+                                {/* Offline group */}
+                                {offlineDevices.length > 0 && (
+                                  <>
+                                    {onlineDevices.length > 0 && <div className="border-t border-black/5 my-1.5" />}
+                                    <div className="flex items-center gap-1.5 px-2 pt-1 pb-1">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0" />
+                                      <span className="text-[9px] font-bold uppercase tracking-widest text-red-500/70">{isZh ? '离线' : 'Offline'}</span>
+                                      <span className="text-[9px] font-mono text-black/30">{offlineDevices.length}</span>
+                                    </div>
+                                    {offlineDevices.map(renderDevice)}
+                                  </>
+                                )}
+                                {filtered.length === 0 && (
+                                  <div className="text-center py-6 text-[10px] text-black/25">{isZh ? '无匹配设备' : 'No devices found'}</div>
+                                )}
+                              </>
+                            );
+                          })()}
                         </div>
                       </div>
 
@@ -5039,11 +5072,12 @@ const App: React.FC = () => {
                                       ? 'text-amber-600 bg-amber-50 border-amber-200'
                                       : 'text-emerald-600 bg-emerald-50 border-emerald-200';
                                   const riskDot = sc.risk === 'high' ? 'bg-red-500' : sc.risk === 'medium' ? 'bg-amber-400' : 'bg-emerald-500';
+                                  const riskStripe = sc.risk === 'high' ? 'border-l-red-400' : sc.risk === 'medium' ? 'border-l-amber-400' : 'border-l-emerald-400';
                                   return (
                                     <button
                                       key={sc.id}
                                       onClick={() => openQuickPlaybookModal(sc)}
-                                      className={`group p-2.5 rounded-xl border text-left transition-all border-black/8 hover:border-[#00bceb]/30 hover:bg-[#00bceb]/5`}
+                                      className={`group p-2.5 rounded-xl border border-l-[3px] text-left transition-all border-black/8 hover:border-[#00bceb]/30 hover:bg-[#00bceb]/5 ${riskStripe}`}
                                     >
                                       <div className="flex items-start justify-between gap-1 mb-1.5">
                                         <span className="text-base leading-none">{sc.icon}</span>
@@ -5131,11 +5165,37 @@ const App: React.FC = () => {
                               </div>
                             </>
                           ) : (
-                            <div className="flex-1 flex flex-col items-center justify-center text-center text-black/25 gap-3">
-                              <Zap size={32} strokeWidth={1.2} />
+                            <div className="flex-1 flex flex-col items-center justify-center text-center gap-4 p-6">
+                              <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-black/[0.03]">
+                                <Zap size={24} strokeWidth={1.2} className="text-black/25" />
+                              </div>
                               <div>
                                 <p className="text-sm font-semibold text-black/40">{isZh ? '从上方选择场景' : 'Select a scenario above'}</p>
                                 <p className="text-xs text-black/30 mt-1">{isZh ? '选中场景后在此填写变量并执行' : 'Fill in variables and run from this panel'}</p>
+                              </div>
+                              {/* Scenario risk breakdown */}
+                              <div className="w-full max-w-xs grid grid-cols-3 gap-2 mt-2">
+                                {[
+                                  { risk: 'low', color: 'emerald', label: isZh ? '低风险' : 'Low Risk' },
+                                  { risk: 'medium', color: 'amber', label: isZh ? '中等' : 'Medium' },
+                                  { risk: 'high', color: 'red', label: isZh ? '高危' : 'High Risk' },
+                                ].map(r => {
+                                  const count = filteredScenarios.filter((s: any) => s.risk === r.risk).length;
+                                  return (
+                                    <div key={r.risk} className={`rounded-xl border p-2.5 text-center ${
+                                      r.color === 'emerald' ? 'border-emerald-100 bg-emerald-50/50' :
+                                      r.color === 'amber' ? 'border-amber-100 bg-amber-50/50' :
+                                      'border-red-100 bg-red-50/50'
+                                    }`}>
+                                      <p className={`text-lg font-bold ${
+                                        r.color === 'emerald' ? 'text-emerald-600' :
+                                        r.color === 'amber' ? 'text-amber-600' :
+                                        'text-red-600'
+                                      }`}>{count}</p>
+                                      <p className="text-[10px] text-black/40">{r.label}</p>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             </div>
                           )}
@@ -5205,7 +5265,49 @@ const App: React.FC = () => {
                           </div>
                         </div>
 
-                        {/* Scrollable body: issues + high-risk confirm + command preview */}
+                        {/* Body – context-aware: stats when idle, execution details when scenario selected */}
+                        {!quickPlaybookScenario ? (
+                          <div className="flex-1 min-h-0 overflow-auto p-4 space-y-4">
+                            {/* Quick stats */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="rounded-xl border border-black/5 bg-black/[0.02] p-3 text-center">
+                                <p className="text-lg font-bold text-black/70">{devices.length}</p>
+                                <p className="text-[10px] text-black/40">{isZh ? '设备总数' : 'Total Devices'}</p>
+                              </div>
+                              <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 p-3 text-center">
+                                <p className="text-lg font-bold text-emerald-600">{devices.filter(d => d.status === 'online').length}</p>
+                                <p className="text-[10px] text-emerald-600/60">{isZh ? '在线设备' : 'Online'}</p>
+                              </div>
+                              <div className="rounded-xl border border-black/5 bg-black/[0.02] p-3 text-center">
+                                <p className="text-lg font-bold text-black/70">{filteredScenarios.length}</p>
+                                <p className="text-[10px] text-black/40">{isZh ? '可用场景' : 'Scenarios'}</p>
+                              </div>
+                              <div className="rounded-xl border border-black/5 bg-black/[0.02] p-3 text-center">
+                                <p className="text-lg font-bold text-black/70">{devices.length > 0 ? Math.round(devices.filter(d => d.status === 'online').length / devices.length * 100) : 0}%</p>
+                                <p className="text-[10px] text-black/40">{isZh ? '在线率' : 'Uptime Rate'}</p>
+                              </div>
+                            </div>
+                            {/* Quick guide */}
+                            <div>
+                              <p className="text-[10px] font-bold uppercase tracking-widest text-black/35 mb-2">{isZh ? '快速开始' : 'Quick Start'}</p>
+                              <div className="space-y-2">
+                                {[
+                                  { step: '1', text: isZh ? '在左侧选择目标设备' : 'Select target device on the left', done: targetCount > 0 },
+                                  { step: '2', text: isZh ? '在中间选择执行场景' : 'Choose a scenario in the center', done: false },
+                                  { step: '3', text: isZh ? '填写参数后点击执行' : 'Fill variables and execute', done: false },
+                                ].map(item => (
+                                  <div key={item.step} className={`flex items-center gap-2.5 rounded-xl border px-3 py-2.5 ${item.done ? 'border-emerald-200 bg-emerald-50' : 'border-black/5 bg-black/[0.01]'}`}>
+                                    <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold flex-shrink-0 ${item.done ? 'bg-emerald-500 text-white' : 'bg-black/10 text-black/40'}`}>
+                                      {item.done ? '✓' : item.step}
+                                    </span>
+                                    <span className={`text-xs ${item.done ? 'text-emerald-700' : 'text-black/50'}`}>{item.text}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                        <>
                         <div className="flex-1 min-h-0 overflow-auto p-4 space-y-3">
 
                           {/* Blocking issues section */}
@@ -5338,6 +5440,8 @@ const App: React.FC = () => {
                             </button>
                           </div>
                         </div>
+                        </>
+                        )}
                       </div>
                     </>
                   );
