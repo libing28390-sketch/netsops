@@ -5006,6 +5006,26 @@ const App: React.FC = () => {
                             );
                           })()}
                         </div>
+                        {/* Custom command button – bottom of device panel */}
+                        <div className="flex-shrink-0 p-2 border-t border-black/5">
+                          <button
+                            type="button"
+                            onClick={() => setShowCustomCommandModal(true)}
+                            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-[#00bceb] text-white text-[11px] font-bold hover:bg-[#0096bd] transition-all"
+                            title={isZh ? '快速新建自定义命令' : 'Quick create custom command'}
+                          >
+                            <Plus size={13} />
+                            <span className="truncate">
+                              {batchMode
+                                ? (batchDeviceIds.length > 0
+                                  ? (isZh ? `新建命令 (${batchDeviceIds.length}台)` : `New Cmd (${batchDeviceIds.length})`)
+                                  : (isZh ? '新建命令' : 'New Cmd'))
+                                : (selectedDevice?.hostname
+                                  ? (isZh ? `命令 → ${selectedDevice.hostname}` : `Cmd → ${selectedDevice.hostname}`)
+                                  : (isZh ? '新建命令' : 'New Cmd'))}
+                            </span>
+                          </button>
+                        </div>
                       </div>
 
                       {/* ══════════════════════════════════════════════════
