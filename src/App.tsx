@@ -3952,36 +3952,6 @@ const App: React.FC = () => {
             </div>
           </div>
           <div className="relative flex items-center gap-3" ref={userMenuRef}>
-            <div className={`flex items-center rounded-lg border p-1 ${resolvedTheme === 'dark' ? 'border-white/15 bg-white/5' : 'border-black/10 bg-white'}`}>
-              <button
-                onClick={() => setLanguage('en' as any)}
-                title="Switch language to English"
-                className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${language === 'en' ? 'bg-[#00bceb]/15 text-[#0089ac]' : (resolvedTheme === 'dark' ? 'text-white/70 hover:bg-white/10' : 'text-black/60 hover:bg-black/[0.04]')}`}
-              >
-                EN
-              </button>
-              <button
-                onClick={() => setLanguage('zh' as any)}
-                title="切换语言到中文"
-                className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${language === 'zh' ? 'bg-[#00bceb]/15 text-[#0089ac]' : (resolvedTheme === 'dark' ? 'text-white/70 hover:bg-white/10' : 'text-black/60 hover:bg-black/[0.04]')}`}
-              >
-                中文
-              </button>
-            </div>
-            <button
-              onClick={() => setThemeMode('light')}
-              title="Light mode"
-              className={`p-2 rounded-lg transition-all ${themeMode === 'light' ? 'bg-[#00bceb]/15 text-[#00bceb] ring-1 ring-[#00bceb]/40' : (resolvedTheme === 'dark' ? 'text-white/55 hover:text-white hover:bg-white/10' : 'text-black/45 hover:text-black hover:bg-black/5')}`}
-            >
-              <Sun size={18} />
-            </button>
-            <button
-              onClick={() => setThemeMode('dark')}
-              title="Dark mode"
-              className={`p-2 rounded-lg transition-all ${themeMode === 'dark' ? 'bg-[#00bceb]/15 text-[#00bceb] ring-1 ring-[#00bceb]/40' : (resolvedTheme === 'dark' ? 'text-white/55 hover:text-white hover:bg-white/10' : 'text-black/45 hover:text-black hover:bg-black/5')}`}
-            >
-              <Moon size={18} />
-            </button>
             <div className="relative">
               <button
                 onClick={() => {
@@ -4108,15 +4078,8 @@ const App: React.FC = () => {
                   </button>
                 </div>
 
-                {/* Settings & Appearance */}
+                {/* Appearance & Language */}
                 <div className={`py-1 border-b ${resolvedTheme === 'dark' ? 'border-white/[0.08]' : 'border-black/[0.06]'}`}>
-                  <button
-                    onClick={() => { setActiveTab('configuration'); setShowUserMenu(false); }}
-                    className={`w-full flex items-center gap-3 px-4 py-[7px] text-[13px] transition-colors ${resolvedTheme === 'dark' ? 'text-white/80 hover:bg-white/[0.06]' : 'text-black/70 hover:bg-black/[0.03]'}`}
-                  >
-                    <Settings size={16} className="flex-shrink-0 opacity-70" />
-                    {language === 'zh' ? '系统设置' : 'Settings'}
-                  </button>
                   <div className={`w-full flex items-center justify-between px-4 py-[7px] text-[13px] ${resolvedTheme === 'dark' ? 'text-white/80' : 'text-black/70'}`}>
                     <div className="flex items-center gap-3">
                       {resolvedTheme === 'dark' ? <Moon size={16} className="flex-shrink-0 opacity-70" /> : <Sun size={16} className="flex-shrink-0 opacity-70" />}
@@ -4136,6 +4099,26 @@ const App: React.FC = () => {
                         className={`p-1 rounded transition-all ${themeMode === 'dark' ? 'bg-[#00bceb]/15 text-[#00bceb]' : (resolvedTheme === 'dark' ? 'text-white/45 hover:text-white' : 'text-black/40 hover:text-black')}`}
                       >
                         <Moon size={13} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className={`w-full flex items-center justify-between px-4 py-[7px] text-[13px] ${resolvedTheme === 'dark' ? 'text-white/80' : 'text-black/70'}`}>
+                    <div className="flex items-center gap-3">
+                      <Globe size={16} className="flex-shrink-0 opacity-70" />
+                      <span>{language === 'zh' ? '语言' : 'Language'}</span>
+                    </div>
+                    <div className={`flex items-center rounded-md border p-0.5 ${resolvedTheme === 'dark' ? 'border-white/10 bg-white/5' : 'border-black/10 bg-black/[0.03]'}`}>
+                      <button
+                        onClick={() => setLanguage('en' as any)}
+                        className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-all ${language === 'en' ? 'bg-[#00bceb]/15 text-[#00bceb]' : (resolvedTheme === 'dark' ? 'text-white/45 hover:text-white' : 'text-black/40 hover:text-black')}`}
+                      >
+                        EN
+                      </button>
+                      <button
+                        onClick={() => setLanguage('zh' as any)}
+                        className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-all ${language === 'zh' ? 'bg-[#00bceb]/15 text-[#00bceb]' : (resolvedTheme === 'dark' ? 'text-white/45 hover:text-white' : 'text-black/40 hover:text-black')}`}
+                      >
+                        中文
                       </button>
                     </div>
                   </div>
