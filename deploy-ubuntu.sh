@@ -357,12 +357,12 @@ ExecStart=$VENV_DIR/bin/python backend/main.py
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
-Environment=PYTHONPATH=backend
+Environment=PYTHONPATH=$PROJECT_DIR/backend
 AmbientCapabilities=CAP_NET_RAW
 
 # Security hardening
 ProtectSystem=strict
-ReadWritePaths=$PROJECT_DIR/data $PROJECT_DIR/backup
+ReadWritePaths=$PROJECT_DIR/data $PROJECT_DIR/backup $PROJECT_DIR/backend
 ProtectHome=true
 NoNewPrivileges=true
 PrivateTmp=true
