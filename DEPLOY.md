@@ -299,7 +299,9 @@ INSTALL_DIR=/opt ./deploy.sh
 
 脚本会自动完成：Git 安装 → 项目克隆 → Python/Node 安装 → 依赖 → 前端构建 → Nginx 反向代理 → systemd 服务注册。
 
-部署完成后通过 `http://<服务器IP>` 访问（Nginx 80 端口 → 后端 8003）。
+部署完成后通过 `http://<服务器IP>:8080` 访问（Nginx 8080 端口 → 后端 8003）。
+
+> 如需修改 Nginx 监听端口，在运行部署脚本前设置 `NGINX_PORT` 环境变量，如：`NGINX_PORT=80 ./deploy.sh`
 
 ---
 
@@ -338,7 +340,7 @@ docker compose logs -f
 ### 架构说明
 
 ```
-用户 → Nginx (:80/:443) → FastAPI (:8003)
+用户 → Nginx (:8080) → FastAPI (:8003)
               │
               ├── /assets/  → 本地 dist/ 静态文件（缓存 365 天）
               ├── /api/*    → 反向代理到 netops 容器

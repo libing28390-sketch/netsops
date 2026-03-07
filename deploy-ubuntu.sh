@@ -26,6 +26,7 @@ GIT_REPO="https://github.com/libing28390-sketch/netsops.git"
 PROJECT_NAME="netops-automation"
 SERVICE_NAME="netops"
 BACKEND_PORT=8003
+NGINX_PORT=8080                     # Nginx 监听端口（如 80 被占用可改为 8080 等）
 SERVER_NAME="_"                     # 改为你的域名，如 netops.example.com
 
 # ---------- 检查是否以 root 运行 ----------
@@ -238,8 +239,8 @@ upstream netops_backend {
 }
 
 server {
-    listen 80;
-    listen [::]:80;
+    listen _PLACEHOLDER_NGINX_PORT_;
+    listen [::]:_PLACEHOLDER_NGINX_PORT_;
     server_name _PLACEHOLDER_SERVER_NAME_;
 
     # ── 安全头 ──
@@ -321,6 +322,7 @@ NGINXEOF
 # 替换占位符为实际值
 sudo sed -i "s|_PLACEHOLDER_SERVER_NAME_|$SERVER_NAME|g" "$NGINX_CONF"
 sudo sed -i "s|_PLACEHOLDER_PROJECT_DIR_|$PROJECT_DIR|g" "$NGINX_CONF"
+sudo sed -i "s|_PLACEHOLDER_NGINX_PORT_|$NGINX_PORT|g" "$NGINX_CONF"
 
 # 启用站点
 if [ -L "$NGINX_LINK" ]; then
