@@ -168,8 +168,8 @@ npm run build
    ```
 2. **防火墙**：Ubuntu 默认 UFW 可能阻止外部访问：
    ```bash
-   sudo ufw allow 8003/tcp    # 后端 API
-   sudo ufw allow 3000/tcp    # 前端开发服务器（仅开发时需要）
+   sudo ufw allow 'Nginx Full'   # 生产：80/443
+   sudo ufw allow 3000/tcp       # 仅开发时需要
    ```
 3. **端口占用**：查看和清理端口：
    ```bash
@@ -263,5 +263,80 @@ ALERT_NOTIFY_WEBHOOK_URL=
 ### 访问地址
 
 - 开发模式：http://localhost:3000（Vite 代理 API 到 8003）
-- 生产模式：http://localhost:8003（FastAPI 直接 serve 前端）
+- 生产模式：http://localhost（Nginx 反向代理到 8003）
+- Docker 模式：http://localhost（Nginx 容器 → netops 容器）
+- 直连后端：http://localhost:8003（无 Nginx，FastAPI 直接 serve）
+
+---
+
+## 一键部署（推荐）
+
+```bash
+chmod +x deploy-ubuntu.sh
+./deploy-ubuntu.sh
+```
+
+脚本会自动完成：Python/Node 安装、依赖、前端构建、Nginx 反向代理、systemd 服务注册。
+
+部署完成后通过 `http://<服务器IP>` 访问（Nginx 80 端口 → 后端 8003）。
+
+---
+
+## Docker 部署
+
+### 快速启动
+
+```bash
+# 1. 先构建前端（Nginx 容器需要 dist/）
+npm install && npm run build
+
+# 2. 启动所有服务
+docker compose up -d --build
+
+# 3. 查看状态
+docker compose ps
+docker compose logs -f
+```
+
+### 架构说明
+
+```
+用户 → Nginx (:80/:443) → FastAPI (:8003)
+              │
+              ├── /assets/  → 本地 dist/ 静态文件（缓存 365 天）
+              ├── /api/*    → 反向代理到 netops 容器
+              ├── /ws       → WebSocket 代理
+              └── /*        → SPA 回退 index.html
+```
+
+### 自定义域名
+
+编辑 `nginx/nginx.conf`，将 `server_name _` 改为你的域名：
+```nginx
+server_name netops.example.com;
+```
+
+### 启用 HTTPS
+
+1. 将证书放入 `nginx/ssl/` 目录
+2. 取消 `docker-compose.yml` 中 SSL volume 注释
+3. 在 `nginx/nginx.conf` 中添加 SSL 配置块
+
+### 环境变量
+
+```bash
+# .env 文件
+CREDENTIAL_ENCRYPTION_KEY=your-random-secret-key
+CORS_ORIGINS=https://netops.example.com
+```
+
+### 常用 Docker 命令
+
+```bash
+docker compose up -d --build   # 构建并启动
+docker compose down            # 停止
+docker compose logs -f nginx   # 查看 Nginx 日志
+docker compose logs -f netops  # 查看后端日志
+docker compose restart nginx   # 重启 Nginx
+```
 

@@ -27,6 +27,9 @@ VENV_DIR="$PROJECT_DIR/.venv"
 SERVICE_NAME="netops"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 BACKEND_PORT=8003
+NGINX_CONF="/etc/nginx/sites-available/${SERVICE_NAME}"
+NGINX_LINK="/etc/nginx/sites-enabled/${SERVICE_NAME}"
+SERVER_NAME="_"                     # 改为你的域名，如 netops.example.com
 
 # ---------- 检查是否以 root 运行 ----------
 if [ "$EUID" -eq 0 ]; then
@@ -61,8 +64,9 @@ sudo apt-get update -qq
 sudo apt-get install -y -qq \
     python3 python3-venv python3-dev \
     build-essential libffi-dev libssl-dev \
+    nginx \
     curl git ca-certificates > /dev/null 2>&1
-ok "系统依赖安装完成"
+ok "系统依赖安装完成（含 Nginx）"
 
 # ============================================================
 # 2. Python 版本检查
@@ -183,9 +187,9 @@ fi
 if command -v ufw &> /dev/null; then
     UFW_STATUS=$(sudo ufw status | head -1)
     if echo "$UFW_STATUS" | grep -qi "active"; then
-        info "开放端口 $BACKEND_PORT/tcp..."
-        sudo ufw allow "$BACKEND_PORT/tcp" > /dev/null 2>&1
-        ok "UFW 已放行端口 $BACKEND_PORT"
+        info "开放 HTTP/HTTPS 端口..."
+        sudo ufw allow 'Nginx Full' > /dev/null 2>&1
+        ok "UFW 已放行 Nginx Full (80/443)"
     else
         ok "UFW 未启用，跳过防火墙配置"
     fi
@@ -194,7 +198,120 @@ else
 fi
 
 # ============================================================
-# 12. 创建 systemd 服务
+# 12. 配置 Nginx 反向代理
+# ============================================================
+info "配置 Nginx 反向代理..."
+
+sudo tee "$NGINX_CONF" > /dev/null <<'NGINXEOF'
+upstream netops_backend {
+    server 127.0.0.1:8003;
+    keepalive 32;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name _PLACEHOLDER_SERVER_NAME_;
+
+    # ── 安全头 ──
+    add_header X-Frame-Options        "SAMEORIGIN"       always;
+    add_header X-Content-Type-Options  "nosniff"          always;
+    add_header X-XSS-Protection        "1; mode=block"    always;
+    add_header Referrer-Policy          "strict-origin-when-cross-origin" always;
+
+    # ── 请求体限制 ──
+    client_max_body_size 20m;
+
+    # ── 静态资源 (Vite 构建产物) ──
+    location /assets/ {
+        alias _PLACEHOLDER_PROJECT_DIR_/dist/assets/;
+        expires 365d;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+
+    # ── 其他前端静态文件 ──
+    location ~* \.(ico|svg|png|jpg|jpeg|gif|webp|woff2?|ttf|eot|css|js|map)$ {
+        root _PLACEHOLDER_PROJECT_DIR_/dist;
+        expires 30d;
+        add_header Cache-Control "public";
+        access_log off;
+        try_files $uri @backend;
+    }
+
+    # ── API / WebSocket 反向代理 ──
+    location /api/ {
+        proxy_pass http://netops_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    location /ws {
+        proxy_pass http://netops_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host       $host;
+        proxy_set_header X-Real-IP  $remote_addr;
+        proxy_read_timeout 86400s;
+    }
+
+    # ── 前端 SPA 回退 ──
+    location / {
+        root _PLACEHOLDER_PROJECT_DIR_/dist;
+        try_files $uri $uri/ /index.html;
+    }
+
+    # ── 内部 fallback ──
+    location @backend {
+        proxy_pass http://netops_backend;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # ── Gzip 压缩 ──
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_min_length 1024;
+    gzip_types
+        text/plain text/css text/xml text/javascript
+        application/json application/javascript application/xml
+        application/rss+xml image/svg+xml;
+}
+NGINXEOF
+
+# 替换占位符为实际值
+sudo sed -i "s|_PLACEHOLDER_SERVER_NAME_|$SERVER_NAME|g" "$NGINX_CONF"
+sudo sed -i "s|_PLACEHOLDER_PROJECT_DIR_|$PROJECT_DIR|g" "$NGINX_CONF"
+
+# 启用站点
+if [ -L "$NGINX_LINK" ]; then
+    sudo rm "$NGINX_LINK"
+fi
+sudo ln -s "$NGINX_CONF" "$NGINX_LINK"
+
+# 删除默认站点（如果还在）
+if [ -L /etc/nginx/sites-enabled/default ]; then
+    sudo rm /etc/nginx/sites-enabled/default
+fi
+
+# 测试并重载 Nginx
+sudo nginx -t 2>&1 || fail "Nginx 配置测试失败"
+sudo systemctl enable nginx > /dev/null 2>&1
+sudo systemctl reload nginx
+ok "Nginx 反向代理配置完成 (监听 :80)"
+
+# ============================================================
+# 13. 创建 systemd 服务
 # ============================================================
 info "配置 systemd 服务..."
 
@@ -234,7 +351,7 @@ sudo systemctl enable "$SERVICE_NAME" > /dev/null 2>&1
 ok "systemd 服务 [$SERVICE_NAME] 已创建并设为开机启动"
 
 # ============================================================
-# 13. 启动服务
+# 14. 启动服务
 # ============================================================
 info "启动 $SERVICE_NAME 服务..."
 sudo systemctl restart "$SERVICE_NAME"
@@ -246,6 +363,14 @@ else
     warn "服务启动可能失败，查看日志: sudo journalctl -u $SERVICE_NAME -f"
 fi
 
+# 确保 Nginx 正在运行
+if sudo systemctl is-active --quiet nginx; then
+    ok "Nginx 反向代理运行中"
+else
+    warn "Nginx 未运行，尝试启动..."
+    sudo systemctl start nginx
+fi
+
 # ============================================================
 # 完成
 # ============================================================
@@ -254,7 +379,7 @@ echo "========================================"
 echo -e "  ${GREEN}部署完成！${NC}"
 echo "========================================"
 echo ""
-echo "  访问地址:  http://<服务器IP>:${BACKEND_PORT}"
+echo "  访问地址:  http://<服务器IP>  (Nginx 反向代理 → :${BACKEND_PORT})"
 echo "  默认账号:  admin / admin"
 echo "  (首次登录后请立即修改为强密码)"
 echo ""
@@ -263,4 +388,7 @@ echo "    查看状态:  sudo systemctl status $SERVICE_NAME"
 echo "    查看日志:  sudo journalctl -u $SERVICE_NAME -f"
 echo "    重启服务:  sudo systemctl restart $SERVICE_NAME"
 echo "    停止服务:  sudo systemctl stop $SERVICE_NAME"
+echo "    Nginx 状态: sudo systemctl status nginx"
+echo "    Nginx 日志: sudo tail -f /var/log/nginx/error.log"
+echo "    Nginx 重载: sudo nginx -t && sudo systemctl reload nginx"
 echo ""
