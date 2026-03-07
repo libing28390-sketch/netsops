@@ -670,5 +670,5 @@ def seed_data():
 
 if __name__ == "__main__":
     import uvicorn
-    port = 3000 if os.environ.get("NODE_ENV") == "production" else 8003
+    port = int(os.environ.get("PORT", "8003"))
     uvicorn.run(app, host="0.0.0.0", port=port)
