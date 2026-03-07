@@ -2,7 +2,7 @@
 import { motion } from 'motion/react';
 import { Routes, Route, useLocation, useNavigate, Navigate } from 'react-router-dom';
 import * as htmlToImage from 'html-to-image';
-import { Plus, Server, CheckCircle, XCircle, RotateCcw, Play, Activity, LayoutDashboard, Database, Zap, ShieldCheck, History, LogOut, Search, Bell, Settings, Download, Upload, FileText, ChevronLeft, ChevronRight, Filter, Globe, TrendingUp, PieChart as PieChartIcon, Clock, AlertTriangle, X, Edit2, AlertCircle, FolderOpen, Eye, EyeOff, Sun, Moon, User, ChevronDown, Copy, Menu, PanelLeftClose } from 'lucide-react';
+import { Plus, Server, CheckCircle, CheckCircle2, XCircle, RotateCcw, Play, Activity, LayoutDashboard, Database, Zap, ShieldCheck, History, LogOut, Search, Bell, Settings, Download, Upload, FileText, ChevronLeft, ChevronRight, Filter, Globe, TrendingUp, PieChart as PieChartIcon, Clock, AlertTriangle, X, Edit2, AlertCircle, FolderOpen, Eye, EyeOff, Sun, Moon, User, ChevronDown, Copy, Menu, PanelLeftClose, Monitor, ExternalLink } from 'lucide-react';
 import { useI18n } from './i18n.tsx';
 import * as XLSX from 'xlsx';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from 'recharts';
@@ -555,6 +555,7 @@ const App: React.FC = () => {
   const [quickPlaybookPreview, setQuickPlaybookPreview] = useState<any>(null);
   const [quickRiskConfirmed, setQuickRiskConfirmed] = useState(false);
   const [isQuickPlaybookRunning, setIsQuickPlaybookRunning] = useState(false);
+  const [quickExecutionResult, setQuickExecutionResult] = useState<{ executionId: string; deviceCount: number; dryRun: boolean; scenarioName: string; scenarioNameZh: string; timestamp: number } | null>(null);
   const [showCustomCommandModal, setShowCustomCommandModal] = useState(false);
   const [showCmdPreviewModal, setShowCmdPreviewModal] = useState(false);
   const [scenarioSearch, setScenarioSearch] = useState('');
@@ -786,6 +787,7 @@ const App: React.FC = () => {
     setQuickPlaybookConcurrency(1);
     setQuickPlaybookPreview(null);
     setQuickRiskConfirmed(false);
+    setQuickExecutionResult(null);
   };
 
   const loadQuickPlaybookPreview = useCallback(async (scenario: any, platform: string, variables: Record<string, string>) => {
@@ -854,7 +856,7 @@ const App: React.FC = () => {
         return;
       }
 
-      showToast('Playbook execution started', 'success');
+      showToast(language === 'zh' ? `已提交执行，${targetDeviceIds.length} 台设备` : `Execution submitted for ${targetDeviceIds.length} device(s)`, 'success');
       setSelectedScenario(quickPlaybookScenario);
       setPlaybookPlatform(quickPlaybookPlatform);
       setPlaybookVars(quickPlaybookVars);
@@ -863,7 +865,14 @@ const App: React.FC = () => {
       setPlaybookDeviceIds(targetDeviceIds);
       setActiveExecutionId(data.execution_id || null);
       setExecutionStatus('running');
-      navigate('/automation/history');
+      setQuickExecutionResult({
+        executionId: data.execution_id || '',
+        deviceCount: targetDeviceIds.length,
+        dryRun: effectiveDryRun,
+        scenarioName: quickPlaybookScenario.name,
+        scenarioNameZh: quickPlaybookScenario.name_zh,
+        timestamp: Date.now(),
+      });
       loadPlaybookHistory();
     } catch {
       showToast('Connection error', 'error');
@@ -5265,8 +5274,52 @@ const App: React.FC = () => {
                           </div>
                         </div>
 
-                        {/* Body – context-aware: stats when idle, execution details when scenario selected */}
-                        {!quickPlaybookScenario ? (
+                        {/* Body – context-aware: execution result → stats when idle → execution details when scenario selected */}
+                        {quickExecutionResult && !quickPlaybookScenario ? (
+                          <div className="flex-1 min-h-0 overflow-auto p-4 space-y-4">
+                            {/* Execution submitted card */}
+                            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-center space-y-3">
+                              <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-100">
+                                <CheckCircle2 size={24} className="text-emerald-600" />
+                              </div>
+                              <div>
+                                <p className="text-sm font-bold text-emerald-800">
+                                  {isZh ? '执行已提交' : 'Execution Submitted'}
+                                </p>
+                                <p className="text-xs text-emerald-600 mt-1">
+                                  {isZh ? (quickExecutionResult.scenarioNameZh || quickExecutionResult.scenarioName) : quickExecutionResult.scenarioName}
+                                </p>
+                              </div>
+                              <div className="flex items-center justify-center gap-3">
+                                <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1 rounded-full bg-white border border-emerald-200 text-emerald-700">
+                                  <Monitor size={10} />
+                                  {quickExecutionResult.deviceCount} {isZh ? '台设备' : 'device(s)'}
+                                </span>
+                                {quickExecutionResult.dryRun && (
+                                  <span className="inline-flex items-center text-[10px] font-bold px-2.5 py-1 rounded-full bg-amber-100 border border-amber-200 text-amber-700">
+                                    DRY-RUN
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            {/* Action buttons */}
+                            <div className="space-y-2">
+                              <button
+                                onClick={() => { navigate('/automation/history'); }}
+                                className="w-full px-4 py-3 rounded-xl bg-[#00bceb] text-white text-xs font-bold hover:bg-[#0096bd] transition-all flex items-center justify-center gap-2"
+                              >
+                                <ExternalLink size={13} />
+                                {isZh ? '查看执行详情与结果' : 'View Execution Details & Results'}
+                              </button>
+                              <button
+                                onClick={() => setQuickExecutionResult(null)}
+                                className="w-full px-4 py-2.5 rounded-xl border border-black/10 text-xs font-semibold text-black/50 hover:bg-black/5 transition-all"
+                              >
+                                {isZh ? '继续执行新任务' : 'Start New Execution'}
+                              </button>
+                            </div>
+                          </div>
+                        ) : !quickPlaybookScenario ? (
                           <div className="flex-1 min-h-0 overflow-auto p-4 space-y-4">
                             {/* Quick stats */}
                             <div className="grid grid-cols-2 gap-2">
@@ -5448,23 +5501,7 @@ const App: React.FC = () => {
                 })()}
               </div>
 
-              <button
-                type="button"
-                onClick={() => setShowCustomCommandModal(true)}
-                className="fixed bottom-4 right-4 sm:bottom-6 sm:right-8 z-30 inline-flex items-center gap-2 px-3 sm:px-4 py-3 rounded-2xl bg-[#00bceb] text-white text-sm font-bold shadow-2xl shadow-[#00bceb]/35 hover:bg-[#0096bd] transition-all max-w-[calc(100vw-2rem)]"
-                title={language === 'zh' ? '快速新建自定义命令' : 'Quick create custom command'}
-              >
-                <Plus size={16} />
-                <span className="hidden sm:inline truncate">
-                  {batchMode
-                    ? (batchDeviceIds.length > 0
-                      ? (language === 'zh' ? `新建命令 (${batchDeviceIds.length}台)` : `New Command (${batchDeviceIds.length})`)
-                      : (language === 'zh' ? '新建命令' : 'New Command'))
-                    : (selectedDevice?.hostname
-                      ? (language === 'zh' ? `对 ${selectedDevice.hostname} 新建命令` : `Cmd for ${selectedDevice.hostname}`)
-                      : (language === 'zh' ? '新建命令' : 'New Command'))}
-                </span>
-              </button>
+
             </div>
           )}
 
