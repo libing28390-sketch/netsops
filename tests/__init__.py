@@ -1,1 +1,0 @@
-"""NetOps Automation test suite."""
