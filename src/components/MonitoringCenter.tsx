@@ -169,6 +169,7 @@ const MonitoringPagination: React.FC<{
 };
 
 const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
+  const [refreshing, setRefreshing] = React.useState(false);
   const {
     language,
     monitorSearch,
@@ -343,9 +344,8 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
     if (language !== 'zh') return sev;
     const s = String(sev || '').toLowerCase();
     if (s === 'critical') return '严重';
-    if (s === 'major') return '高';
-    if (s === 'medium') return '中';
-    if (s === 'low') return '低';
+    if (s === 'major') return '主要';
+    if (s === 'minor' || s === 'medium' || s === 'low') return '次要';
     return sev;
   };
 
@@ -544,16 +544,23 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
         <div className="flex gap-2 items-center">
           <button
             type="button"
+            disabled={refreshing}
             onClick={() => {
+              setRefreshing(true);
               fetchMonitoringOverview();
               fetchMonitoringAlerts();
               if (monitorSelectedDevice?.id) {
                 fetchMonitoringRealtime(monitorSelectedDevice.id).then(setMonitorRealtime).catch(() => undefined);
               }
+              setTimeout(() => setRefreshing(false), 1200);
             }}
-            className="px-3 py-1 text-[10px] font-bold uppercase rounded-full border border-black/10 bg-white text-black/60 hover:bg-black/[0.03]"
+            className={`px-3 py-1 text-[10px] font-bold uppercase rounded-full border transition-all ${
+              refreshing
+                ? 'border-[#00bceb]/40 bg-[#00bceb]/10 text-[#0089ac] cursor-not-allowed'
+                : 'border-black/10 bg-white text-black/60 hover:bg-black/[0.03]'
+            }`}
           >
-            {language === 'zh' ? '立即刷新' : 'Refresh Now'}
+            {refreshing ? (language === 'zh' ? '刷新中…' : 'Refreshing…') : (language === 'zh' ? '立即刷新' : 'Refresh Now')}
           </button>
           <span className="px-3 py-1 text-[10px] font-bold uppercase bg-[#00bceb]/10 text-[#0089ac] rounded-full">Search-First</span>
           <span className="px-3 py-1 text-[10px] font-bold uppercase bg-emerald-100 text-emerald-700 rounded-full">Online-Only</span>
@@ -657,7 +664,7 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
                 <select value={monitorDashboardAlertFilter} onChange={(e) => setMonitorDashboardAlertFilter(e.target.value as 'all' | 'critical' | 'major')} className="bg-white border border-black/10 rounded-lg px-2.5 py-1.5 text-xs outline-none" title={language === 'zh' ? '按级别筛选' : 'Filter by severity'}>
                   <option value="all">{language === 'zh' ? '全部级别' : 'All Severities'}</option>
                   <option value="critical">{language === 'zh' ? '仅严重' : 'Critical Only'}</option>
-                  <option value="major">{language === 'zh' ? '仅高' : 'Major Only'}</option>
+                  <option value="major">{language === 'zh' ? '仅主要' : 'Major Only'}</option>
                 </select>
               </div>
               <div className="space-y-2">
@@ -833,7 +840,7 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
             <p className="text-xs text-black/40">{language === 'zh' ? '包含触发与恢复，支持分页。' : 'Includes trigger and recover lifecycle with pagination.'}</p>
           </div>
           <div className="flex items-center gap-2">
-            <select title={language === 'zh' ? '按告警级别筛选' : 'Filter alerts by severity'} value={monitorAlertsSeverity} onChange={(e) => setMonitorAlertsSeverity(e.target.value)} className="bg-black/[0.02] border border-black/10 rounded-lg px-2.5 py-1.5 text-xs outline-none"><option value="all">{language === 'zh' ? '全部' : 'All'}</option><option value="critical">{language === 'zh' ? '严重' : 'Critical'}</option><option value="major">{language === 'zh' ? '高' : 'Major'}</option><option value="medium">{language === 'zh' ? '中' : 'Medium'}</option><option value="low">{language === 'zh' ? '低' : 'Low'}</option></select>
+            <select title={language === 'zh' ? '按告警级别筛选' : 'Filter alerts by severity'} value={monitorAlertsSeverity} onChange={(e) => setMonitorAlertsSeverity(e.target.value)} className="bg-black/[0.02] border border-black/10 rounded-lg px-2.5 py-1.5 text-xs outline-none"><option value="all">{language === 'zh' ? '全部' : 'All'}</option><option value="critical">{language === 'zh' ? '严重' : 'Critical'}</option><option value="major">{language === 'zh' ? '主要' : 'Major'}</option><option value="minor">{language === 'zh' ? '次要' : 'Minor'}</option></select>
           </div>
         </div>
         <div className="overflow-auto"><table className="w-full text-xs"><thead className="bg-black/[0.02]"><tr><th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-black/40">{language === 'zh' ? '时间' : 'Time'}</th><th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-black/40">{language === 'zh' ? '级别' : 'Severity'}</th><th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-black/40">{language === 'zh' ? '标题' : 'Title'}</th><th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-black/40">{language === 'zh' ? '内容' : 'Message'}</th><th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-black/40">{language === 'zh' ? '恢复时间' : 'Recovered'}</th></tr></thead><tbody className="divide-y divide-black/5">{monitorAlerts.map((a: any) => <tr key={a.id} className="hover:bg-black/[0.01]"><td className="px-4 py-2 text-black/50">{a.created_at ? formatTs(a.created_at, true) : '-'}</td><td className="px-4 py-2"><span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${String(a.severity).toLowerCase() === 'critical' ? 'bg-red-100 text-red-700' : String(a.severity).toLowerCase() === 'major' ? 'bg-orange-100 text-orange-700' : 'bg-black/5 text-black/55'}`}>{severityLabel(a.severity)}</span></td><td className="px-4 py-2 font-semibold text-black/75">{a.title}</td><td className="px-4 py-2 text-black/55">{a.message}</td><td className="px-4 py-2 text-black/55">{a.resolved_at ? formatTs(a.resolved_at, true) : '-'}</td></tr>)}{monitorAlerts.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-black/35">{language === 'zh' ? '当前无告警记录。' : 'No alert records found.'}</td></tr>}</tbody></table></div>

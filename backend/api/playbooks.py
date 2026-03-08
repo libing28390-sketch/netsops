@@ -3,7 +3,7 @@ Playbook Engine — 三段式变更管理：Pre-Check → Execute → Post-Check
 WebSocket 实时输出流 + 内置场景库
 """
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Body, Request
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Body, Request, Query
 from fastapi.responses import JSONResponse
 import uuid
 import json
@@ -18,6 +18,42 @@ from core.crypto import decrypt_credential
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# ────────────────────────────────────────────────────────────────────
+# 平台级持久化命令（exec-mode，write mem / save force）
+# IOS-XR 和 Junos 的 commit 已在场景模板里，不重复执行
+# ────────────────────────────────────────────────────────────────────
+PLATFORM_SAVE_COMMANDS: dict[str, str | None] = {
+    'cisco_ios':    'write memory',
+    'cisco_nxos':   'copy running-config startup-config',
+    'cisco_iosxr':  None,  # commit 已在 execute 阶段模板里
+    'huawei_vrp':   'save force',
+    'h3c_comware':  'save force',
+    'arista_eos':   'write memory',
+    'juniper_junos': None,  # commit 已在 execute 阶段模板里
+}
+
+# 变更前快照用的 show running-config 命令（平台差异）
+PLATFORM_SHOW_RUNNING: dict[str, str] = {
+    'cisco_ios':    'show running-config',
+    'cisco_nxos':   'show running-config',
+    'cisco_iosxr':  'show running-config',
+    'huawei_vrp':   'display current-configuration',
+    'h3c_comware':  'display current-configuration',
+    'arista_eos':   'show running-config',
+    'juniper_junos': 'show configuration',
+}
+
+# P2: 设备粒度互斥锁 (device_id → asyncio.Lock)
+_device_locks: dict[str, asyncio.Lock] = {}
+
+def _get_device_lock(device_id: str) -> asyncio.Lock:
+    if device_id not in _device_locks:
+        _device_locks[device_id] = asyncio.Lock()
+    return _device_locks[device_id]
+
+# P3: 待确认 commit 的回滚任务 (execution_id → asyncio.Task)
+_pending_rollbacks: dict[str, asyncio.Task] = {}
 
 # ════════════════════════════════════════════════════════════════════
 # 内置场景模板
@@ -558,13 +594,13 @@ BUILTIN_SCENARIOS = [
         "platform_phases": {
             "cisco_ios": {
                 "pre_check": [
-                    "{% for intf in interfaces.split(',') %}show interfaces {{intf.strip()}} status\n{% endfor %}",
+                    "{% for intf in interfaces.split(',') %}show interfaces {{intf.strip()}}\n{% endfor %}",
                 ],
                 "execute": [
                     "{% for intf in interfaces.split(',') %}interface {{intf.strip()}}\n {{action}}\n{% endfor %}",
                 ],
                 "post_check": [
-                    "{% for intf in interfaces.split(',') %}show interfaces {{intf.strip()}} status\n{% endfor %}",
+                    "{% for intf in interfaces.split(',') %}show interfaces {{intf.strip()}}\n{% endfor %}",
                 ],
                 "rollback": [
                     "{% for intf in interfaces.split(',') %}interface {{intf.strip()}}\n {% if action == 'shutdown' %}no shutdown{% else %}shutdown{% endif %}\n{% endfor %}",
@@ -572,13 +608,13 @@ BUILTIN_SCENARIOS = [
             },
             "cisco_nxos": {
                 "pre_check": [
-                    "{% for intf in interfaces.split(',') %}show interface {{intf.strip()}} status\n{% endfor %}",
+                    "{% for intf in interfaces.split(',') %}show interface {{intf.strip()}}\n{% endfor %}",
                 ],
                 "execute": [
                     "{% for intf in interfaces.split(',') %}interface {{intf.strip()}}\n {{action}}\n{% endfor %}",
                 ],
                 "post_check": [
-                    "{% for intf in interfaces.split(',') %}show interface {{intf.strip()}} status\n{% endfor %}",
+                    "{% for intf in interfaces.split(',') %}show interface {{intf.strip()}}\n{% endfor %}",
                 ],
                 "rollback": [
                     "{% for intf in interfaces.split(',') %}interface {{intf.strip()}}\n {% if action == 'shutdown' %}no shutdown{% else %}shutdown{% endif %}\n{% endfor %}",
@@ -630,13 +666,13 @@ BUILTIN_SCENARIOS = [
             },
             "arista_eos": {
                 "pre_check": [
-                    "{% for intf in interfaces.split(',') %}show interfaces {{intf.strip()}} status\n{% endfor %}",
+                    "{% for intf in interfaces.split(',') %}show interfaces {{intf.strip()}}\n{% endfor %}",
                 ],
                 "execute": [
                     "{% for intf in interfaces.split(',') %}interface {{intf.strip()}}\n {{action}}\n{% endfor %}",
                 ],
                 "post_check": [
-                    "{% for intf in interfaces.split(',') %}show interfaces {{intf.strip()}} status\n{% endfor %}",
+                    "{% for intf in interfaces.split(',') %}show interfaces {{intf.strip()}}\n{% endfor %}",
                 ],
                 "rollback": [
                     "{% for intf in interfaces.split(',') %}interface {{intf.strip()}}\n {% if action == 'shutdown' %}no shutdown{% else %}shutdown{% endif %}\n{% endfor %}",
@@ -2572,6 +2608,21 @@ def _render_template(template: str, variables: dict) -> str:
         text = re.sub(r'\{\{.*?\}\}', '', text)
         return text.strip()
 
+def _save_snapshot(hostname: str, config_text: str) -> None:
+    """将变更前的 running-config 保存到 backup/snapshots/ 目录。"""
+    import os
+    snap_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'backup', 'snapshots')
+    os.makedirs(snap_dir, exist_ok=True)
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = os.path.join(snap_dir, f"{hostname}_{ts}_pre_change.txt")
+    try:
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(config_text)
+        logger.info(f"Pre-change snapshot saved: {filename}")
+    except Exception as e:
+        logger.warning(f"Failed to save snapshot for {hostname}: {e}")
+
+
 def _render_phase_commands(phase_templates: list, variables: dict) -> list[str]:
     """Render a list of command templates into actual commands."""
     commands = []
@@ -2686,25 +2737,267 @@ async def create_custom_scenario(request: Request, payload: dict = Body(...)):
     return scenario_doc
 
 @router.get("/playbooks")
-async def list_playbooks():
-    """Return all saved playbook executions."""
+async def list_playbooks(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: str = Query('all'),
+    scenario: str = Query(''),
+):
+    """Return paginated playbook execution summaries (no bulky results_json / phases_json)."""
     conn = get_db_connection()
     try:
+        where_clauses = []
+        params: list = []
+        if status != 'all':
+            where_clauses.append("status = ?")
+            params.append(status)
+        if scenario:
+            where_clauses.append("scenario_name LIKE ?")
+            params.append(f"%{scenario}%")
+        where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM playbook_executions {where_sql}", params
+        ).fetchone()[0]
+        offset = (page - 1) * page_size
         rows = conn.execute(
-            'SELECT * FROM playbook_executions ORDER BY created_at DESC LIMIT 100'
+            f'''SELECT id, scenario_id, scenario_name, platform, device_ids,
+                       variables, status, dry_run, author, concurrency,
+                       total_devices, success_count, failed_count, partial_count,
+                       created_at, updated_at
+                FROM playbook_executions {where_sql}
+                ORDER BY created_at DESC LIMIT ? OFFSET ?''',
+            [*params, page_size, offset]
         ).fetchall()
-        return [dict(r) for r in rows]
+        items = []
+        for r in rows:
+            row_dict = dict(r)
+            if not row_dict.get('total_devices'):
+                try:
+                    row_dict['total_devices'] = len(json.loads(row_dict.get('device_ids', '[]')))
+                except Exception:
+                    row_dict['total_devices'] = 0
+            items.append(row_dict)
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
     finally:
         conn.close()
 
 @router.get("/playbooks/{playbook_id}")
 async def get_playbook(playbook_id: str):
+    """Legacy endpoint — returns full row including results_json for backward compatibility."""
     conn = get_db_connection()
     try:
         row = conn.execute('SELECT * FROM playbook_executions WHERE id = ?', (playbook_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Playbook execution not found")
         return dict(row)
+    finally:
+        conn.close()
+
+@router.delete("/playbooks/{execution_id}")
+async def delete_execution(execution_id: str):
+    """Delete a playbook execution and its device results."""
+    conn = get_db_connection()
+    try:
+        row = conn.execute('SELECT id FROM playbook_executions WHERE id = ?', (execution_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Execution not found")
+        conn.execute('DELETE FROM execution_device_results WHERE execution_id = ?', (execution_id,))
+        conn.execute('DELETE FROM playbook_executions WHERE id = ?', (execution_id,))
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()
+
+@router.get("/playbooks/{execution_id}/summary")
+async def get_execution_summary(execution_id: str):
+    """Return header-level summary for one execution (no device details)."""
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            '''SELECT id, scenario_name, platform, device_ids, status, dry_run, author,
+                      total_devices, success_count, failed_count, partial_count,
+                      created_at, updated_at
+               FROM playbook_executions WHERE id = ?''',
+            (execution_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Execution not found")
+        d = dict(row)
+        # Fallback: compute total_devices from device_ids for legacy records
+        if not d.get('total_devices'):
+            try:
+                d['total_devices'] = len(json.loads(d.get('device_ids', '[]')))
+            except Exception:
+                d['total_devices'] = 0
+        # Fallback: compute counts from execution_device_results or results_json for legacy records
+        if not d.get('success_count') and not d.get('failed_count'):
+            try:
+                counts = conn.execute(
+                    '''SELECT
+                        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as sc,
+                        SUM(CASE WHEN status IN ('failed','error') THEN 1 ELSE 0 END) as fc
+                    FROM execution_device_results WHERE execution_id = ?''',
+                    (execution_id,)
+                ).fetchone()
+                if counts and (counts['sc'] or counts['fc']):
+                    d['success_count'] = counts['sc'] or 0
+                    d['failed_count'] = counts['fc'] or 0
+            except Exception:
+                pass
+        # Second fallback: parse results_json blob if counts still 0
+        if not d.get('success_count') and not d.get('failed_count'):
+            try:
+                rj_row = conn.execute(
+                    "SELECT results_json FROM playbook_executions WHERE id = ?",
+                    (execution_id,)
+                ).fetchone()
+                if rj_row and rj_row['results_json']:
+                    results = json.loads(rj_row['results_json'])
+                    sc = fc = pc = 0
+                    for v in results.values():
+                        st = v.get('status', 'success') if isinstance(v, dict) else 'success'
+                        if st == 'success':
+                            sc += 1
+                        elif st in ('failed', 'error', 'blocked'):
+                            fc += 1
+                        else:
+                            pc += 1
+                    d['success_count'] = sc
+                    d['failed_count'] = fc
+                    d['partial_count'] = pc
+            except Exception:
+                pass
+        try:
+            s = datetime.fromisoformat(d['created_at'])
+            e = datetime.fromisoformat(d['updated_at'])
+            d['duration_ms'] = int((e - s).total_seconds() * 1000)
+        except Exception:
+            d['duration_ms'] = 0
+        return d
+    finally:
+        conn.close()
+
+@router.get("/playbooks/{execution_id}/devices")
+async def get_execution_devices(
+    execution_id: str,
+    status: str = Query('all'),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    search: str = Query(''),
+):
+    """Return paginated per-device results for an execution. Failed devices sorted first."""
+    conn = get_db_connection()
+    try:
+        count_new = conn.execute(
+            "SELECT COUNT(*) FROM execution_device_results WHERE execution_id = ?",
+            (execution_id,)
+        ).fetchone()[0]
+
+        if count_new > 0:
+            where_clauses = ["execution_id = ?"]
+            params: list = [execution_id]
+            if status != 'all':
+                where_clauses.append("status = ?")
+                params.append(status)
+            if search:
+                where_clauses.append("(hostname LIKE ? OR ip_address LIKE ?)")
+                params.extend([f"%{search}%", f"%{search}%"])
+            where_sql = "WHERE " + " AND ".join(where_clauses)
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM execution_device_results {where_sql}", params
+            ).fetchone()[0]
+            offset = (page - 1) * page_size
+            rows = conn.execute(
+                f'''SELECT id, device_id, hostname, ip_address, status, error_message,
+                           started_at, completed_at, duration_ms
+                    FROM execution_device_results {where_sql}
+                    ORDER BY CASE status
+                        WHEN 'failed' THEN 0
+                        WHEN 'error' THEN 0
+                        WHEN 'partial_failure' THEN 1
+                        WHEN 'post_check_failed' THEN 1
+                        ELSE 2 END, hostname
+                    LIMIT ? OFFSET ?''',
+                [*params, page_size, offset]
+            ).fetchall()
+            items = [dict(r) for r in rows]
+        else:
+            # Legacy fallback: parse results_json blob
+            exec_row = conn.execute(
+                "SELECT results_json, device_ids FROM playbook_executions WHERE id = ?",
+                (execution_id,)
+            ).fetchone()
+            if not exec_row:
+                raise HTTPException(status_code=404, detail="Execution not found")
+            try:
+                results = json.loads(exec_row['results_json'] or '{}')
+                device_ids_list = json.loads(exec_row['device_ids'] or '[]')
+            except Exception:
+                results, device_ids_list = {}, []
+            all_items = []
+            for did in device_ids_list:
+                r = results.get(did, {})
+                dev_row = conn.execute(
+                    "SELECT hostname, ip_address FROM devices WHERE id = ?", (did,)
+                ).fetchone()
+                hostname = dev_row['hostname'] if dev_row else did
+                ip_address = dev_row['ip_address'] if dev_row else ''
+                all_items.append({
+                    "device_id": did, "hostname": hostname, "ip_address": ip_address,
+                    "status": r.get('status', 'success'),
+                    "error_message": r.get('error', ''),
+                    "started_at": None, "completed_at": None, "duration_ms": 0,
+                })
+            if status != 'all':
+                all_items = [i for i in all_items if i['status'] == status]
+            if search:
+                sq = search.lower()
+                all_items = [i for i in all_items if sq in i['hostname'].lower() or sq in i['ip_address'].lower()]
+            all_items.sort(key=lambda x: (
+                0 if x['status'] in ('failed', 'error') else
+                1 if 'fail' in x['status'] else 2,
+                x['hostname']
+            ))
+            total = len(all_items)
+            offset = (page - 1) * page_size
+            items = all_items[offset:offset + page_size]
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+    finally:
+        conn.close()
+
+@router.get("/playbooks/{execution_id}/devices/{device_id}")
+async def get_execution_device_detail(execution_id: str, device_id: str):
+    """Return full phase output for one device in an execution."""
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM execution_device_results WHERE execution_id = ? AND device_id = ?",
+            (execution_id, device_id)
+        ).fetchone()
+        if row:
+            return dict(row)
+        # Legacy fallback
+        exec_row = conn.execute(
+            "SELECT results_json FROM playbook_executions WHERE id = ?", (execution_id,)
+        ).fetchone()
+        if not exec_row:
+            raise HTTPException(status_code=404, detail="Execution not found")
+        results = json.loads(exec_row['results_json'] or '{}')
+        device_data = results.get(device_id)
+        if not device_data:
+            raise HTTPException(status_code=404, detail="Device result not found")
+        dev_row = conn.execute(
+            "SELECT hostname, ip_address FROM devices WHERE id = ?", (device_id,)
+        ).fetchone()
+        return {
+            "device_id": device_id,
+            "hostname": dev_row['hostname'] if dev_row else device_id,
+            "ip_address": dev_row['ip_address'] if dev_row else '',
+            "status": device_data.get('status', 'success'),
+            "error_message": device_data.get('error', ''),
+            "phases_json": json.dumps(device_data.get('phases', {})),
+            "started_at": None, "completed_at": None, "duration_ms": 0,
+        }
     finally:
         conn.close()
 
@@ -2745,6 +3038,7 @@ async def execute_playbook(request: Request, payload: dict = Body(...)):
     author = payload.get('author', 'admin')
     actor_id = payload.get('actor_id')
     actor_role = payload.get('actor_role') or 'Administrator'
+    commit_confirmed_ttl = int(payload.get('commit_confirmed_ttl', 0))  # P3: 秒数，0=关闭
 
     if not device_ids:
         raise HTTPException(status_code=400, detail="No devices selected")
@@ -2783,7 +3077,7 @@ async def execute_playbook(request: Request, payload: dict = Body(...)):
         conn.close()
 
     # Fire-and-forget the execution coroutine
-    asyncio.create_task(_run_playbook(execution_id, device_ids, phases_def, variables, dry_run, concurrency))
+    asyncio.create_task(_run_playbook(execution_id, device_ids, phases_def, variables, dry_run, concurrency, platform, commit_confirmed_ttl))
 
     log_audit_event(
         event_type='PLAYBOOK_EXECUTION',
@@ -2839,6 +3133,44 @@ async def playbook_ws(websocket: WebSocket, execution_id: str):
 # 执行引擎（三段式 + 并行控制）
 # ════════════════════════════════════════════════════════════════════
 
+async def _save_device_result_to_db(
+    execution_id: str,
+    device_id: str,
+    device: dict,
+    device_result: dict,
+    started_at_iso: str,
+) -> None:
+    """Persist one device's execution result into execution_device_results."""
+    completed_at_iso = datetime.now().isoformat()
+    try:
+        started_dt = datetime.fromisoformat(started_at_iso)
+        completed_dt = datetime.fromisoformat(completed_at_iso)
+        duration_ms = int((completed_dt - started_dt).total_seconds() * 1000)
+    except Exception:
+        duration_ms = 0
+    try:
+        conn = get_db_connection()
+        conn.execute(
+            '''INSERT OR REPLACE INTO execution_device_results
+               (id, execution_id, device_id, hostname, ip_address, status,
+                error_message, phases_json, started_at, completed_at, duration_ms)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            (
+                str(uuid.uuid4()), execution_id, device_id,
+                device.get('hostname', device_id),
+                device.get('ip_address', ''),
+                device_result.get('status', 'success'),
+                device_result.get('error', ''),
+                json.dumps(device_result.get('phases', {})),
+                started_at_iso, completed_at_iso, duration_ms,
+            )
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning(f"[DB] Failed to save device result for {device_id}: {e}")
+
+
 async def _run_playbook(
     execution_id: str,
     device_ids: list,
@@ -2846,6 +3178,8 @@ async def _run_playbook(
     variables: dict,
     dry_run: bool,
     concurrency: int,
+    platform: str = 'cisco_ios',
+    commit_confirmed_ttl: int = 0,
 ):
     """
     Execute the playbook across all selected devices with concurrency control.
@@ -2886,6 +3220,7 @@ async def _run_playbook(
 
     async def _process_device(device_id: str, idx: int):
         nonlocal overall_ok
+        started_at_iso = datetime.now().isoformat()
         device = devices.get(device_id)
         if not device:
             await ws_manager.emit(execution_id, {
@@ -2893,7 +3228,9 @@ async def _run_playbook(
                 "device_id": device_id,
                 "error": "Device not found in DB",
             })
-            results[device_id] = {"status": "error", "error": "not found"}
+            err_result = {"status": "error", "error": "not found", "phases": {}}
+            await _save_device_result_to_db(execution_id, device_id, {}, err_result, started_at_iso)
+            results[device_id] = err_result
             return
 
         hostname = device.get('hostname', device_id)
@@ -2903,87 +3240,136 @@ async def _run_playbook(
         device_result = {"status": "success", "phases": {}}
 
         async with semaphore:
-            await ws_manager.emit(execution_id, {
-                "type": "device_start",
-                "device_id": device_id,
-                "hostname": hostname,
-                "index": idx,
-                "total": total,
-            })
-
-            # ──── PHASE 1: Pre-Check ────
-            pre_cmds = _render_phase_commands(phases.get('pre_check', []), variables)
-            if pre_cmds:
+            async with _get_device_lock(device_id):   # P2: 设备粒度互斥锁
                 await ws_manager.emit(execution_id, {
-                    "type": "phase_start", "device_id": device_id,
-                    "phase": "pre_check", "commands": pre_cmds,
-                })
-                pre_output = await _exec_commands(service, device, pre_cmds, is_config=False)
-                device_result["phases"]["pre_check"] = pre_output
-                await ws_manager.emit(execution_id, {
-                    "type": "phase_done", "device_id": device_id,
-                    "phase": "pre_check", "output": pre_output,
+                    "type": "device_start",
+                    "device_id": device_id,
+                    "hostname": hostname,
+                    "index": idx,
+                    "total": total,
                 })
 
-            # ──── PHASE 2: Execute ────
-            exec_cmds = _render_phase_commands(phases.get('execute', []), variables)
-            if exec_cmds:
-                if dry_run:
+                # ──── PHASE 1: Pre-Check ────
+                pre_cmds = _render_phase_commands(phases.get('pre_check', []), variables)
+                if pre_cmds:
                     await ws_manager.emit(execution_id, {
                         "type": "phase_start", "device_id": device_id,
-                        "phase": "execute", "commands": exec_cmds,
-                        "dry_run": True,
+                        "phase": "pre_check", "commands": pre_cmds,
                     })
-                    device_result["phases"]["execute"] = {
-                        "commands": exec_cmds,
-                        "output": "[DRY-RUN] Commands not sent to device",
-                        "success": True,
-                    }
+                    pre_output = await _exec_commands(service, device, pre_cmds, is_config=False)
+                    device_result["phases"]["pre_check"] = pre_output
+                    if not pre_output.get("success", True):
+                        overall_ok = False   # pre_check errors → partial_failure, but execution continues
                     await ws_manager.emit(execution_id, {
                         "type": "phase_done", "device_id": device_id,
-                        "phase": "execute", "output": device_result["phases"]["execute"],
-                        "dry_run": True,
-                    })
-                else:
-                    await ws_manager.emit(execution_id, {
-                        "type": "phase_start", "device_id": device_id,
-                        "phase": "execute", "commands": exec_cmds,
-                    })
-                    exec_output = await _exec_commands(service, device, exec_cmds, is_config=True)
-                    device_result["phases"]["execute"] = exec_output
-                    await ws_manager.emit(execution_id, {
-                        "type": "phase_done", "device_id": device_id,
-                        "phase": "execute", "output": exec_output,
+                        "phase": "pre_check", "output": pre_output,
                     })
 
-                    # Check for execution failure → trigger rollback
-                    if not exec_output.get("success", True):
+                # ──── P1: 变更前快照 ────
+                if not dry_run:
+                    snap_cmd = PLATFORM_SHOW_RUNNING.get(platform)
+                    if snap_cmd:
+                        snap_output = await _exec_commands(service, device, [snap_cmd], is_config=False)
+                        if snap_output.get('success'):
+                            _save_snapshot(hostname, snap_output.get('output', ''))
+                            device_result["snapshot"] = "saved"
+                        await ws_manager.emit(execution_id, {
+                            "type": "snapshot", "device_id": device_id,
+                            "hostname": hostname,
+                            "status": "saved" if snap_output.get('success') else "failed",
+                        })
+
+                # ──── PHASE 2: Execute ────
+                exec_cmds = _render_phase_commands(phases.get('execute', []), variables)
+                if exec_cmds:
+                    if dry_run:
+                        await ws_manager.emit(execution_id, {
+                            "type": "phase_start", "device_id": device_id,
+                            "phase": "execute", "commands": exec_cmds,
+                            "dry_run": True,
+                        })
+                        device_result["phases"]["execute"] = {
+                            "commands": exec_cmds,
+                            "output": "[DRY-RUN] Commands not sent to device",
+                            "success": True,
+                        }
+                        await ws_manager.emit(execution_id, {
+                            "type": "phase_done", "device_id": device_id,
+                            "phase": "execute", "output": device_result["phases"]["execute"],
+                            "dry_run": True,
+                        })
+                    else:
+                        await ws_manager.emit(execution_id, {
+                            "type": "phase_start", "device_id": device_id,
+                            "phase": "execute", "commands": exec_cmds,
+                        })
+                        exec_output = await _exec_commands(service, device, exec_cmds, is_config=True)
+                        device_result["phases"]["execute"] = exec_output
+                        await ws_manager.emit(execution_id, {
+                            "type": "phase_done", "device_id": device_id,
+                            "phase": "execute", "output": exec_output,
+                        })
+
+                        # P0: Execute 失败 → 自动回滚
+                        if not exec_output.get("success", True):
+                            overall_ok = False
+                            device_result["status"] = "failed"
+                            await _do_rollback(execution_id, service, device, phases, variables)
+                            device_result["phases"]["rollback"] = {"triggered": True, "reason": "execute_failed"}
+                            await _save_device_result_to_db(execution_id, device_id, device, device_result, started_at_iso)
+                            results[device_id] = device_result
+                            return
+
+                # ──── PHASE 3: Post-Check ────
+                post_cmds = _render_phase_commands(phases.get('post_check', []), variables)
+                if post_cmds and not dry_run:
+                    await ws_manager.emit(execution_id, {
+                        "type": "phase_start", "device_id": device_id,
+                        "phase": "post_check", "commands": post_cmds,
+                    })
+                    post_output = await _exec_commands(service, device, post_cmds, is_config=False)
+                    device_result["phases"]["post_check"] = post_output
+                    await ws_manager.emit(execution_id, {
+                        "type": "phase_done", "device_id": device_id,
+                        "phase": "post_check", "output": post_output,
+                    })
+
+                    # P0: Post-Check 执行失败 → 自动回滚（连接中断/命令报错）
+                    if not post_output.get("success", True):
                         overall_ok = False
-                        device_result["status"] = "failed"
+                        device_result["status"] = "post_check_failed"
+                        await ws_manager.emit(execution_id, {
+                            "type": "post_check_failed", "device_id": device_id,
+                            "hostname": hostname,
+                            "message": "Post-check failed, triggering automatic rollback",
+                        })
                         await _do_rollback(execution_id, service, device, phases, variables)
-                        device_result["phases"]["rollback"] = {"triggered": True}
+                        device_result["phases"]["rollback"] = {"triggered": True, "reason": "post_check_failed"}
+                        await _save_device_result_to_db(execution_id, device_id, device, device_result, started_at_iso)
                         results[device_id] = device_result
                         return
 
-            # ──── PHASE 3: Post-Check ────
-            post_cmds = _render_phase_commands(phases.get('post_check', []), variables)
-            if post_cmds and not dry_run:
-                await ws_manager.emit(execution_id, {
-                    "type": "phase_start", "device_id": device_id,
-                    "phase": "post_check", "commands": post_cmds,
-                })
-                post_output = await _exec_commands(service, device, post_cmds, is_config=False)
-                device_result["phases"]["post_check"] = post_output
-                await ws_manager.emit(execution_id, {
-                    "type": "phase_done", "device_id": device_id,
-                    "phase": "post_check", "output": post_output,
-                })
+                # ──── P0: Save Phase（写入持久化存储）────
+                if not dry_run and exec_cmds:
+                    save_cmd = PLATFORM_SAVE_COMMANDS.get(platform)
+                    if save_cmd:
+                        await ws_manager.emit(execution_id, {
+                            "type": "phase_start", "device_id": device_id,
+                            "phase": "save", "commands": [save_cmd],
+                        })
+                        save_output = await _exec_commands(service, device, [save_cmd], is_config=False)
+                        device_result["phases"]["save"] = save_output
+                        await ws_manager.emit(execution_id, {
+                            "type": "phase_done", "device_id": device_id,
+                            "phase": "save", "output": save_output,
+                        })
 
-            await ws_manager.emit(execution_id, {
-                "type": "device_done", "device_id": device_id,
-                "hostname": hostname, "status": device_result["status"],
-            })
-            results[device_id] = device_result
+                await ws_manager.emit(execution_id, {
+                    "type": "device_done", "device_id": device_id,
+                    "hostname": hostname, "status": device_result["status"],
+                })
+                await _save_device_result_to_db(execution_id, device_id, device, device_result, started_at_iso)
+                results[device_id] = device_result
 
     # Run with concurrency control
     tasks = [_process_device(did, i) for i, did in enumerate(device_ids)]
@@ -2994,13 +3380,51 @@ async def _run_playbook(
         final_status = 'dry_run_complete'
 
     # Persist results
+    success_c = sum(1 for r in results.values() if r.get('status') == 'success')
+    failed_c  = sum(1 for r in results.values() if r.get('status') in ('failed', 'error'))
+    partial_c = sum(1 for r in results.values() if 'partial' in r.get('status', '') or 'check_failed' in r.get('status', ''))
     conn2 = get_db_connection()
     conn2.execute(
-        "UPDATE playbook_executions SET status=?, results_json=?, updated_at=? WHERE id=?",
-        (final_status, json.dumps(results), datetime.now().isoformat(), execution_id)
+        """UPDATE playbook_executions
+           SET status=?, results_json=?, updated_at=?,
+               total_devices=?, success_count=?, failed_count=?, partial_count=?
+           WHERE id=?""",
+        (final_status, json.dumps(results), datetime.now().isoformat(),
+         total, success_c, failed_c, partial_c, execution_id)
     )
     conn2.commit()
     conn2.close()
+
+    # ──── P3: Commit Confirmed 安全网 ────
+    # 若请求方指定了 commit_confirmed_ttl > 0，且本次执行全部成功，
+    # 启动一个倒计时任务：超时后自动对所有设备执行回滚。
+    # 调用 POST /api/playbooks/executions/{id}/confirm-commit 可取消定时器。
+    if commit_confirmed_ttl > 0 and overall_ok and not dry_run:
+        async def _auto_rollback():
+            await asyncio.sleep(commit_confirmed_ttl)
+            if execution_id not in _pending_rollbacks:
+                return  # 已被 confirm-commit 取消
+            del _pending_rollbacks[execution_id]
+            await ws_manager.emit(execution_id, {
+                "type": "commit_confirmed_timeout",
+                "message": f"Commit not confirmed within {commit_confirmed_ttl}s, auto-rollback triggered",
+                "execution_id": execution_id,
+            })
+            for did in device_ids:
+                dev = devices.get(did)
+                if dev:
+                    svc_type = 'mock' if dev.get('ip_address') in ['127.0.0.1', '0.0.0.0', 'localhost'] else 'netmiko'
+                    svc = AutomationService(driver_type=svc_type)
+                    await _do_rollback(execution_id, svc, dev, phases, variables)
+
+        task = asyncio.create_task(_auto_rollback())
+        _pending_rollbacks[execution_id] = task
+        await ws_manager.emit(execution_id, {
+            "type": "commit_confirm_pending",
+            "execution_id": execution_id,
+            "ttl": commit_confirmed_ttl,
+            "message": f"Changes deployed. Auto-rollback in {commit_confirmed_ttl}s unless confirmed.",
+        })
 
     await ws_manager.emit(execution_id, {
         "type": "complete",
@@ -3013,6 +3437,22 @@ async def _run_playbook(
         },
         "timestamp": datetime.now().isoformat(),
     })
+
+
+@router.post("/playbooks/executions/{execution_id}/confirm-commit")
+async def confirm_commit(execution_id: str):
+    """
+    P3 Commit Confirmed：取消该次执行的定时自动回滚任务，正式确认变更。
+    须在 commit_confirmed_ttl 秒内调用，否则自动回滚已触发。
+    """
+    task = _pending_rollbacks.pop(execution_id, None)
+    if task:
+        task.cancel()
+        logger.info(f"Commit confirmed for execution {execution_id}, auto-rollback cancelled")
+        return {"status": "confirmed", "execution_id": execution_id,
+                "message": "Commit confirmed. Auto-rollback cancelled."}
+    return {"status": "no_pending", "execution_id": execution_id,
+            "message": "No pending commit confirmation found (already confirmed or timed out)."}
 
 
 async def _exec_commands(service, device: dict, commands: list, is_config: bool) -> dict:

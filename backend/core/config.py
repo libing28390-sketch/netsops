@@ -18,7 +18,11 @@ class Settings(BaseSettings):
     TELEMETRY_ROLLUP_RETENTION_DAYS: int = 365
     ALERT_INTERFACE_DOWN_ENABLED: bool = True
     ALERT_INTERFACE_UTIL_THRESHOLD: float = 85.0
+    ALERT_CPU_THRESHOLD: float = 90.0
+    ALERT_MEMORY_THRESHOLD: float = 90.0
     ALERT_NOTIFY_WEBHOOK_URL: str = ""
+    # 「前往平台处理」按钮跳转地址，留空则不显示按钮
+    PLATFORM_URL: str = ""
 
     class Config:
         env_file = ".env"

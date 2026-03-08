@@ -188,10 +188,34 @@ def init_db():
             concurrency INTEGER DEFAULT 1,
             phases_json TEXT DEFAULT '{}',
             results_json TEXT DEFAULT '{}',
+            total_devices INTEGER DEFAULT 0,
+            success_count INTEGER DEFAULT 0,
+            failed_count INTEGER DEFAULT 0,
+            partial_count INTEGER DEFAULT 0,
             created_at TEXT,
             updated_at TEXT
         )
         ''')
+
+        # Per-device execution results (replaces bulky results_json blob)
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS execution_device_results (
+            id TEXT PRIMARY KEY,
+            execution_id TEXT NOT NULL,
+            device_id TEXT,
+            hostname TEXT DEFAULT '',
+            ip_address TEXT DEFAULT '',
+            status TEXT DEFAULT 'pending',
+            error_message TEXT DEFAULT '',
+            phases_json TEXT DEFAULT '{}',
+            started_at TEXT,
+            completed_at TEXT,
+            duration_ms INTEGER DEFAULT 0,
+            FOREIGN KEY (execution_id) REFERENCES playbook_executions(id)
+        )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_edr_execution_id ON execution_device_results(execution_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_edr_exec_status ON execution_device_results(execution_id, status)')
 
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS audit_events (
@@ -380,11 +404,19 @@ def init_db():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_alert_events_resolved_at ON alert_events(resolved_at)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_alert_events_dedupe_key ON alert_events(dedupe_key)')
 
-        # Migration: add platform column to playbook_executions if missing
+        # Migration: add columns to playbook_executions if missing
         cursor.execute("PRAGMA table_info(playbook_executions)")
         pb_cols = [c[1] for c in cursor.fetchall()]
         if 'platform' not in pb_cols:
             cursor.execute("ALTER TABLE playbook_executions ADD COLUMN platform TEXT DEFAULT 'cisco_ios'")
+        if 'total_devices' not in pb_cols:
+            cursor.execute("ALTER TABLE playbook_executions ADD COLUMN total_devices INTEGER DEFAULT 0")
+        if 'success_count' not in pb_cols:
+            cursor.execute("ALTER TABLE playbook_executions ADD COLUMN success_count INTEGER DEFAULT 0")
+        if 'failed_count' not in pb_cols:
+            cursor.execute("ALTER TABLE playbook_executions ADD COLUMN failed_count INTEGER DEFAULT 0")
+        if 'partial_count' not in pb_cols:
+            cursor.execute("ALTER TABLE playbook_executions ADD COLUMN partial_count INTEGER DEFAULT 0")
 
         # Migration: Add new columns if they don't exist
         cursor.execute("PRAGMA table_info(devices)")
@@ -430,6 +462,10 @@ def init_db():
         user_columns = [column[1] for column in cursor.fetchall()]
         if 'avatar_url' not in user_columns:
             cursor.execute('ALTER TABLE users ADD COLUMN avatar_url TEXT')
+        if 'notification_channels' not in user_columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN notification_channels TEXT DEFAULT '{}'")
+        if 'preferred_language' not in user_columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN preferred_language TEXT DEFAULT 'zh'")
 
         cursor.execute("PRAGMA table_info(compliance_findings)")
         finding_columns = [column[1] for column in cursor.fetchall()]

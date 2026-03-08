@@ -41,6 +41,9 @@ class ScrapliDriver(BaseDriver):
             'port': self.port,
             'platform': self.platform_type,
             'auth_strict_key': False,
+            'timeout_socket': 20,       # 连接超时
+            'timeout_transport': 60,    # 传输超时（含慢速设备）
+            'timeout_ops': 30,          # 单次操作超时
         }
         
         # 检测操作系统，在 Windows 上使用 paramiko 传输

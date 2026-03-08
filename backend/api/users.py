@@ -4,6 +4,7 @@ from slowapi.util import get_remote_address
 import os
 import re
 import uuid
+import json
 import logging
 import hmac
 import hashlib
@@ -12,6 +13,7 @@ import bcrypt
 from datetime import datetime
 from database import get_db_connection
 from services.audit_service import log_audit_event
+from services import notification_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -165,8 +167,19 @@ def validate_session_token(token: str) -> dict | None:
 def read_users():
     conn = get_db_connection()
     try:
-        users = conn.execute('SELECT id, username, role, status, last_login as lastLogin, avatar_url FROM users').fetchall()
-        return [dict(u) for u in users]
+        users = conn.execute(
+            'SELECT id, username, role, status, last_login as lastLogin, avatar_url, notification_channels FROM users'
+        ).fetchall()
+        result = []
+        for u in users:
+            row = dict(u)
+            # Parse notification_channels JSON string → dict
+            try:
+                row['notification_channels'] = json.loads(row.get('notification_channels') or '{}')
+            except Exception:
+                row['notification_channels'] = {}
+            result.append(row)
+        return result
     finally:
         conn.close()
 
@@ -317,19 +330,31 @@ def update_user(user_id: str, request: Request, user: dict = Body(...)):
         username = user.get('username', existing['username'])
         role = user.get('role', existing['role'])
         avatar_url = user.get('avatar_url', existing['avatar_url'])
+        preferred_language = user.get('preferred_language', existing['preferred_language'] if 'preferred_language' in (existing.keys() if existing else []) else 'zh')
+        if preferred_language not in ('zh', 'en'):
+            preferred_language = 'zh'
+        notification_channels_raw = user.get('notification_channels')
+        notification_channels_str = json.dumps(notification_channels_raw) if notification_channels_raw is not None else (existing['notification_channels'] or '{}')
         password = user.get('password')
         if password:
             strength_err = _validate_password_strength(password)
             if strength_err:
                 raise HTTPException(status_code=400, detail=strength_err)
             hashed = _hash_password(password)
-            conn.execute('UPDATE users SET username = ?, role = ?, password = ?, avatar_url = ? WHERE id = ?',
-                         (username, role, hashed, avatar_url, user_id))
+            conn.execute(
+                'UPDATE users SET username = ?, role = ?, password = ?, avatar_url = ?, notification_channels = ?, preferred_language = ? WHERE id = ?',
+                (username, role, hashed, avatar_url, notification_channels_str, preferred_language, user_id)
+            )
         else:
-            conn.execute('UPDATE users SET username = ?, role = ?, avatar_url = ? WHERE id = ?',
-                         (username, role, avatar_url, user_id))
+            conn.execute(
+                'UPDATE users SET username = ?, role = ?, avatar_url = ?, notification_channels = ?, preferred_language = ? WHERE id = ?',
+                (username, role, avatar_url, notification_channels_str, preferred_language, user_id)
+            )
         conn.commit()
-        result = conn.execute('SELECT id, username, role, status, last_login as lastLogin, avatar_url FROM users WHERE id = ?', (user_id,)).fetchone()
+        result = conn.execute(
+            'SELECT id, username, role, status, last_login as lastLogin, avatar_url, notification_channels, preferred_language FROM users WHERE id = ?',
+            (user_id,)
+        ).fetchone()
         log_audit_event(
             event_type='USER_UPDATE',
             category='identity',
@@ -344,7 +369,12 @@ def update_user(user_id: str, request: Request, user: dict = Body(...)):
             target_name=username,
             details={'role': role},
         )
-        return dict(result)
+        row = dict(result)
+        try:
+            row['notification_channels'] = json.loads(row.get('notification_channels') or '{}')
+        except Exception:
+            row['notification_channels'] = {}
+        return row
     except HTTPException:
         raise
     except Exception as e:
@@ -362,9 +392,87 @@ def check_session(request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     conn = get_db_connection()
     try:
-        user = conn.execute('SELECT id, username, role, avatar_url FROM users WHERE id = ?', (sess['user_id'],)).fetchone()
+        user = conn.execute(
+            'SELECT id, username, role, avatar_url, notification_channels, preferred_language FROM users WHERE id = ?',
+            (sess['user_id'],)
+        ).fetchone()
         if not user:
             raise HTTPException(status_code=401, detail="Session user not found")
-        return {"success": True, "user": dict(user)}
+        row = dict(user)
+        try:
+            row['notification_channels'] = json.loads(row.get('notification_channels') or '{}')
+        except Exception:
+            row['notification_channels'] = {}
+        return {"success": True, "user": row}
     finally:
         conn.close()
+
+
+@router.post("/users/{user_id}/notify-test")
+def test_notification_channel(user_id: str, request: Request, payload: dict = Body(...)):
+    """
+    对指定平台发送一条测试消息，验证 webhook 配置是否正确。
+    payload: {
+        "platform": "feishu" | "dingtalk" | "wechat",
+        "webhook_url": "https://...",   # 直接使用，无需提前保存
+        "secret": "..."                 # 钉钉加签密钥（可选）
+    }
+    """
+    platform = (payload.get('platform') or '').strip().lower()
+    if platform not in ('feishu', 'dingtalk', 'wechat'):
+        raise HTTPException(status_code=400, detail="platform must be feishu | dingtalk | wechat")
+
+    # 优先使用请求体中的 webhook_url（不保存即可测试）
+    webhook_url = (payload.get('webhook_url') or '').strip()
+    secret = (payload.get('secret') or '').strip()
+
+    # 如果请求体没有 webhook_url，则回退读 DB（兼容旧调用）
+    if not webhook_url:
+        conn = get_db_connection()
+        try:
+            user_row = conn.execute('SELECT username, notification_channels FROM users WHERE id = ?', (user_id,)).fetchone()
+            if not user_row:
+                raise HTTPException(status_code=404, detail="User not found")
+            try:
+                channels = json.loads(user_row['notification_channels'] or '{}')
+            except Exception:
+                channels = {}
+            ch = channels.get(platform) or {}
+            webhook_url = ch.get('webhook_url', '').strip()
+            secret = ch.get('secret', '').strip()
+            username = user_row['username']
+        finally:
+            conn.close()
+        if not webhook_url:
+            raise HTTPException(status_code=400, detail=f"{platform} webhook_url is not configured")
+    else:
+        conn = get_db_connection()
+        try:
+            user_row = conn.execute('SELECT username FROM users WHERE id = ?', (user_id,)).fetchone()
+            username = user_row['username'] if user_row else str(user_id)
+        finally:
+            conn.close()
+
+    test_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    test_alert = {
+        'title':            'NetAxis 连通性测试',
+        'object_name':      f'{platform.capitalize()} 机器人',
+        'ip_address':       'webhook',
+        'status':           'active',
+        'severity':         'info',
+        'message':          f'用户 {username} 发起的 Webhook 连通性测试，配置验证成功！',
+        'first_occurrence': test_ts,
+        'last_occurrence':  test_ts,
+    }
+
+    if platform == 'feishu':
+        ok, msg = notification_service.send_feishu(webhook_url, test_alert)
+    elif platform == 'dingtalk':
+        ok, msg = notification_service.send_dingtalk(webhook_url, test_alert, secret=secret)
+    else:
+        ok, msg = notification_service.send_wechat(webhook_url, test_alert)
+
+    if ok:
+        return {"success": True, "platform": platform, "message": "Test message sent successfully"}
+    else:
+        raise HTTPException(status_code=502, detail=f"Send failed: {msg[:300]}")

@@ -63,6 +63,7 @@ async def execute_task(request: Request, payload: dict = Body(...)):
     script_id = payload.get('script_id')
     command = payload.get('command')
     is_config_req = payload.get('isConfig')
+    save_history = payload.get('save_history', True)
     actor_username = payload.get('author') or payload.get('actor_username') or 'admin'
     actor_id = payload.get('actor_id')
     actor_role = payload.get('actor_role') or 'Administrator'
@@ -97,23 +98,34 @@ async def execute_task(request: Request, payload: dict = Body(...)):
             raise HTTPException(status_code=400, detail="No command or script provided")
 
         job_id = str(uuid.uuid4())
-        conn.execute('INSERT INTO jobs (id, device_id, task_name, status, created_at) VALUES (?, ?, ?, ?, ?)',
-                     (job_id, device_id, task_name, 'running', datetime.now().isoformat()))
-        conn.commit()
+        if save_history:
+            conn.execute('INSERT INTO jobs (id, device_id, task_name, status, created_at) VALUES (?, ?, ?, ?, ?)',
+                         (job_id, device_id, task_name, 'running', datetime.now().isoformat()))
+            conn.commit()
 
         try:
-            # 以命令内容为准判断是否走配置模式，不信任前端传入的 isConfig 标志。
-            # show 类命令（dis/display/show/ping/tracert）绝不进入配置模式，
-            # 防止前端将 CustomCommand 的 isConfig 错误设为 true。
-            _cmd_lower = final_command.lower().lstrip()
-            _show_prefixes = ('dis ', 'display ', 'show ', 'ping ', 'tracert ', 'traceroute ')
-            if any(_cmd_lower.startswith(p) for p in _show_prefixes):
-                is_config = False
-            else:
-                is_config = is_config_req if is_config_req is not None else \
-                    any(kw in _cmd_lower for kw in ['conf t', 'configure terminal', 'system-view'])
-            
             commands = [c.strip() for c in final_command.split('\n') if c.strip()]
+
+            # 以实际命令内容判断是否进入配置模式：
+            # 1. 只要有任一行是 show/display/ping 类只读命令 → exec 模式（防止误配置）
+            # 2. 否则：若前端明确传了 isConfig，以前端为准
+            # 3. 若前端未传：扫描全部行，出现常见配置关键词则走配置模式
+            _show_prefixes = ('dis ', 'display ', 'show ', 'ping ', 'tracert ', 'traceroute ')
+            _has_show = any(
+                c.lower().startswith(p) for c in commands for p in _show_prefixes
+            )
+            if _has_show:
+                is_config = False
+            elif is_config_req is not None:
+                is_config = is_config_req
+            else:
+                _joined = '\n'.join(commands).lower()
+                _config_kws = (
+                    'conf t', 'configure terminal', 'system-view',
+                    'interface ', 'ip route', 'ip address', 'vlan ',
+                    'router ', 'access-list', 'route-map', 'no shutdown',
+                )
+                is_config = any(kw in _joined for kw in _config_kws)
 
             # ── Safety check: block dangerous/destructive commands ──
             safety_err = _check_command_safety(commands)
@@ -166,8 +178,9 @@ async def execute_task(request: Request, payload: dict = Body(...)):
             total_elapsed = time.time() - exec_start
             logger.info(f"Total execution time: {total_elapsed:.2f}s")
             
-            conn.execute('UPDATE jobs SET status = ?, output = ? WHERE id = ?', ('success', result, job_id))
-            conn.commit()
+            if save_history:
+                conn.execute('UPDATE jobs SET status = ?, output = ? WHERE id = ?', ('success', result, job_id))
+                conn.commit()
             log_audit_event(
                 event_type='DIRECT_EXECUTION',
                 category='automation',
@@ -195,8 +208,9 @@ async def execute_task(request: Request, payload: dict = Body(...)):
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Job execution failed: {error_msg}", exc_info=True)
-            conn.execute('UPDATE jobs SET status = ?, output = ? WHERE id = ?', ('failed', error_msg, job_id))
-            conn.commit()
+            if save_history:
+                conn.execute('UPDATE jobs SET status = ?, output = ? WHERE id = ?', ('failed', error_msg, job_id))
+                conn.commit()
             log_audit_event(
                 event_type='DIRECT_EXECUTION',
                 category='automation',

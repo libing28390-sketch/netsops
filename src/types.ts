@@ -175,6 +175,18 @@ export interface DiffLine {
   content: string;
 }
 
+export interface NotificationChannel {
+  webhook_url: string;
+  enabled: boolean;
+  secret?: string; // DingTalk 签名密钥（可选）
+}
+
+export interface NotificationChannels {
+  feishu?: NotificationChannel;
+  dingtalk?: NotificationChannel;
+  wechat?: NotificationChannel;
+}
+
 export interface User {
   id: string;
   username: string;
@@ -182,6 +194,7 @@ export interface User {
   lastLogin?: string;
   status?: string;
   avatar_url?: string;
+  notification_channels?: NotificationChannels;
 }
 
 export type ThemeMode = 'light' | 'dark';

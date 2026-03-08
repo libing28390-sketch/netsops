@@ -13,6 +13,7 @@ from api.users import router as users_router
 from api.topology import router as topology_router, discover_lldp_neighbors
 from api.configs import router as configs_router, run_scheduled_backup, _get_schedule_from_db
 from api.playbooks import router as playbooks_router
+from services import notification_service
 from api.notifications import router as notifications_router
 from api.monitoring import router as monitoring_router
 from api.audit import router as audit_router
@@ -185,6 +186,12 @@ def _db_many(sql, rows):
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
+_CST = timezone(timedelta(hours=8))
+
+def _local_now_str() -> str:
+    """返回 CST 本地时间字符串，用于通知显示。"""
+    return datetime.now(_CST).strftime('%Y-%m-%d %H:%M:%S')
+
 def _send_webhook_notification(payload: dict):
     webhook = (settings.ALERT_NOTIFY_WEBHOOK_URL or '').strip()
     if not webhook:
@@ -205,12 +212,13 @@ def _send_webhook_notification(payload: dict):
 
 def _create_alert_event(dedupe_key: str, severity: str, title: str, message: str, device_id: str, interface_name: str | None = None):
     alert_id = str(uuid.uuid4())
-    now = _utc_now_iso()
+    now_utc = _utc_now_iso()
+    now_local = _local_now_str()
     _db_quick('''
         INSERT INTO alert_events (id, dedupe_key, source, severity, title, message, device_id, interface_name, created_at, resolved_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
-    ''', (alert_id, dedupe_key, 'network_monitor', severity, title, message, device_id, interface_name, now))
-    return alert_id, now
+    ''', (alert_id, dedupe_key, 'network_monitor', severity, title, message, device_id, interface_name, now_utc))
+    return alert_id, now_local
 
 def _resolve_alert_event(dedupe_key: str):
     now = _utc_now_iso()
@@ -295,31 +303,141 @@ async def status_monitor():
     COUNTER64_MAX = 2**64
     # Track currently open alerts to avoid duplicates.
     open_alerts: dict = {}
+    # 启动时从数据库恢复未解决的告警，防止重启后丢失恢复通知
+    try:
+        _open_rows = _db_quick(
+            "SELECT dedupe_key, created_at FROM alert_events WHERE resolved_at IS NULL",
+            fetchall=True,
+        )
+        if _open_rows:
+            for _row in _open_rows:
+                _ts_raw = _row['created_at']
+                try:
+                    # 转换为本地时间字符串，与新告警格式保持一致
+                    _dt = datetime.fromisoformat(_ts_raw).astimezone(_CST)
+                    _ts_local = _dt.strftime('%Y-%m-%d %H:%M:%S')
+                except Exception:
+                    _ts_local = _ts_raw
+                open_alerts[_row['dedupe_key']] = _ts_local
+            logger.info(f"[Alert] Restored {len(open_alerts)} open alert(s) from database")
+    except Exception as _exc:
+        logger.warning(f"[Alert] Failed to restore open alerts: {_exc}")
     # Throttle webhook notifications per alert key.
     webhook_last_sent: dict = {}
 
-    def maybe_notify_webhook(dedupe_key: str, severity: str, title: str, message: str, created_at: str):
+    def maybe_notify_webhook(dedupe_key: str, severity: str, title: str, message: str,
+                               created_at: str, ip_address: str = '', object_name: str = '',
+                               status: str = 'active', last_occurrence: str = '',
+                               duration_seconds=None, impact_window=None, alert_count=None):
         now_ts = datetime.now(timezone.utc)
-        last_ts = webhook_last_sent.get(dedupe_key)
-        if last_ts and (now_ts - last_ts).total_seconds() < 120:
-            return
-        webhook_last_sent[dedupe_key] = now_ts
-        if not (settings.ALERT_NOTIFY_WEBHOOK_URL or '').strip():
-            return
-        text = f"[{severity.upper()}] {title}\n{message}\nTime: {created_at}"
-        # Compatible with WeCom/other simple robot webhooks.
-        payload = {"msgtype": "text", "text": {"content": text}}
-        asyncio.create_task(asyncio.to_thread(_send_webhook_notification, payload))
+        # 恢复通知不受节流限制，且清除节流记录（为下次触发做准备）
+        if status == 'resolved':
+            webhook_last_sent.pop(dedupe_key, None)
+        else:
+            last_ts = webhook_last_sent.get(dedupe_key)
+            if last_ts and (now_ts - last_ts).total_seconds() < 120:
+                return
+            webhook_last_sent[dedupe_key] = now_ts
 
-    def set_alert_state(dedupe_key: str, is_active: bool, severity: str, title: str, message: str, device_id: str, interface_name: str | None = None):
+        alert_info = {
+            'title':            title,
+            'object_name':      object_name or dedupe_key,
+            'ip_address':       ip_address,
+            'status':           status,
+            'severity':         severity,
+            'message':          message,
+            'first_occurrence': created_at,
+            'last_occurrence':  last_occurrence or created_at,
+        }
+        if duration_seconds is not None:
+            alert_info['duration_seconds'] = duration_seconds
+        if impact_window is not None:
+            alert_info['impact_window'] = impact_window
+        if alert_count is not None:
+            alert_info['alert_count'] = alert_count
+
+        # 1. 全局 webhook（.env 配置，纯文字兼容）
+        if (settings.ALERT_NOTIFY_WEBHOOK_URL or '').strip():
+            plain = (
+                f"[{severity.upper()}] {title}\n"
+                f"对象: {object_name}  IP: {ip_address}\n"
+                f"{message}\n"
+                f"时间: {created_at}"
+            )
+            payload = {"msgtype": "text", "text": {"content": plain}}
+            asyncio.create_task(asyncio.to_thread(_send_webhook_notification, payload))
+
+        # 2. 遍历所有已启用 notification_channels 的用户
+        def _dispatch_user_channels():
+            try:
+                rows = _db_quick(
+                    "SELECT notification_channels, preferred_language FROM users WHERE notification_channels IS NOT NULL AND notification_channels != '{}'",
+                    fetchall=True,
+                )
+                if not rows:
+                    return
+                for row in rows:
+                    try:
+                        channels = json.loads(row['notification_channels'] or '{}')
+                    except Exception:
+                        continue
+                    if channels:
+                        user_lang = row['preferred_language'] if 'preferred_language' in row.keys() else 'zh'
+                        user_alert = {**alert_info, 'lang': user_lang or 'zh'}
+                        notification_service.send_all_channels(channels, user_alert)
+            except Exception as exc:
+                logger.warning(f"[Alert] User channel dispatch failed: {exc}")
+
+        asyncio.create_task(asyncio.to_thread(_dispatch_user_channels))
+
+    def set_alert_state(dedupe_key: str, is_active: bool, severity: str, title: str, message: str,
+                         device_id: str, interface_name: str | None = None,
+                         ip_address: str = '', status: str = ''):
         currently_open = open_alerts.get(dedupe_key)
         if is_active and not currently_open:
             _, created_at = _create_alert_event(dedupe_key, severity, title, message, device_id, interface_name)
-            open_alerts[dedupe_key] = True
-            maybe_notify_webhook(dedupe_key, severity, title, message, created_at)
+            open_alerts[dedupe_key] = created_at  # store first-occurrence time
+            object_name = interface_name if interface_name else dedupe_key
+            maybe_notify_webhook(
+                dedupe_key, severity, title, message,
+                created_at=created_at,
+                ip_address=ip_address,
+                object_name=object_name,
+                status=status or 'active',
+                last_occurrence=created_at,
+            )
         elif (not is_active) and currently_open:
             _resolve_alert_event(dedupe_key)
             open_alerts.pop(dedupe_key, None)
+            now_ts = _local_now_str()
+            object_name = interface_name if interface_name else dedupe_key
+            # 计算持续时长、影响时间窗、告警次数
+            try:
+                _dur_start = datetime.fromisoformat(currently_open)
+                _dur_end   = datetime.now()
+                _duration_seconds = max(0, int((_dur_end - _dur_start).total_seconds()))
+            except Exception:
+                _duration_seconds = None
+            _impact_window = (
+                f"{currently_open.split(' ')[-1]} → {now_ts.split(' ')[-1]}"
+                if ' ' in currently_open and ' ' in now_ts else None
+            )
+            _count_row = _db_quick(
+                "SELECT COUNT(*) AS cnt FROM alert_events WHERE dedupe_key = ?",
+                (dedupe_key,), fetch=True,
+            )
+            _alert_count = _count_row['cnt'] if _count_row else None
+            maybe_notify_webhook(
+                dedupe_key, severity, title, message,
+                created_at=currently_open,
+                ip_address=ip_address,
+                object_name=object_name,
+                status='resolved',
+                last_occurrence=now_ts,
+                duration_seconds=_duration_seconds,
+                impact_window=_impact_window,
+                alert_count=_alert_count,
+            )
 
     async def process_device(device, collect_intf: bool, collect_info: bool):
         async with sem:
@@ -341,6 +459,7 @@ async def status_monitor():
                 return
 
             # 1. Ping Check
+            dev_label = device['hostname'] or ip
             try:
                 # ping() is blocking; run it off the event loop to keep API endpoints responsive.
                 delay = await asyncio.to_thread(ping, ip, timeout=2)
@@ -349,11 +468,27 @@ async def status_monitor():
                 if device['status'] != new_status:
                     if new_status == 'offline':
                         mark_offline_and_clear_cache()
+                        set_alert_state(
+                            f"dev_offline:{dev_id}", True, 'critical', 'Device Offline',
+                            f"{dev_label} ({ip}) 无法连接，Ping 超时",
+                            dev_id, ip_address=ip, status='active',
+                        )
                     else:
                         _db_quick('UPDATE devices SET status = ? WHERE id = ?', (new_status, dev_id))
+                        set_alert_state(
+                            f"dev_offline:{dev_id}", False, 'critical', 'Device Offline',
+                            f"{dev_label} ({ip}) 已恢复连接",
+                            dev_id, ip_address=ip, status='resolved',
+                        )
                     logger.info(f"[Status Monitor] Device {ip} status changed to {new_status}")
             except Exception:
                 new_status = 'offline'
+                if device.get('status') != 'offline':
+                    set_alert_state(
+                        f"dev_offline:{dev_id}", True, 'critical', 'Device Offline',
+                        f"{dev_label} ({ip}) 无法连接，Ping 超时",
+                        dev_id, ip_address=ip, status='active',
+                    )
                 mark_offline_and_clear_cache()
 
             # 2. SNMP Metrics Collection (only if online)
@@ -398,6 +533,36 @@ async def status_monitor():
                 SET cpu_usage = ?, memory_usage = ?, cpu_history = ?, memory_history = ?, temp = ?, fan_status = ?, psu_status = ?
                 WHERE id = ?
             ''', (cpu_usage, memory_usage, json.dumps(cpu_history), json.dumps(mem_history), temp, fan, psu, dev_id))
+
+            # CPU / 内存阈值告警
+            if cpu_usage is not None:
+                cpu_key = f"cpu_high:{dev_id}"
+                if float(cpu_usage) >= float(settings.ALERT_CPU_THRESHOLD):
+                    set_alert_state(
+                        cpu_key, True, 'major', 'CPU Usage High',
+                        f"{dev_label} CPU 利用率达到 {cpu_usage:.1f}%，超过阈值 {settings.ALERT_CPU_THRESHOLD}%",
+                        dev_id, ip_address=ip, status='active',
+                    )
+                else:
+                    set_alert_state(
+                        cpu_key, False, 'major', 'CPU Usage High',
+                        f"{dev_label} CPU 利用率已恢复（当前 {cpu_usage:.1f}%）",
+                        dev_id, ip_address=ip, status='resolved',
+                    )
+            if memory_usage is not None:
+                mem_key = f"mem_high:{dev_id}"
+                if float(memory_usage) >= float(settings.ALERT_MEMORY_THRESHOLD):
+                    set_alert_state(
+                        mem_key, True, 'major', 'Memory Usage High',
+                        f"{dev_label} 内存利用率达到 {memory_usage:.1f}%，超过阈值 {settings.ALERT_MEMORY_THRESHOLD}%",
+                        dev_id, ip_address=ip, status='active',
+                    )
+                else:
+                    set_alert_state(
+                        mem_key, False, 'major', 'Memory Usage High',
+                        f"{dev_label} 内存利用率已恢复（当前 {memory_usage:.1f}%）",
+                        dev_id, ip_address=ip, status='resolved',
+                    )
 
             # 3. Device info collection (every ~10 minutes)
             if collect_info:
@@ -465,6 +630,18 @@ async def status_monitor():
                             cutoff = now_ts - FLAP_WINDOW_SECS
                             hist[:] = [t for t in hist if t > cutoff]
                             iface['flapping'] = len(hist) >= FLAP_THRESHOLD
+                            flap_alert_key = f"if_flap:{dev_id}:{iname}"
+                            set_alert_state(
+                                flap_alert_key, iface['flapping'], 'major', 'Interface Flapping',
+                                (
+                                    f"{iname} 接口震荡：10 分钟内状态翻转 {len(hist)} 次"
+                                    if iface['flapping'] else
+                                    f"{iname} 接口震荡已平息"
+                                ),
+                                dev_id, iname,
+                                ip_address=ip,
+                                status='active' if iface['flapping'] else 'resolved',
+                            )
 
                             if iname in prev:
                                 dt = now_ts - prev[iname]['ts']
@@ -519,37 +696,40 @@ async def status_monitor():
                                 down_key = f"if_down:{dev_id}:{iname}"
                                 if prev_status == 'up' and curr_status == 'down':
                                     set_alert_state(
-                                        down_key,
-                                        True,
-                                        'major',
-                                        'Interface down',
-                                        f"{device['hostname']} {iname} transitioned UP -> DOWN",
-                                        dev_id,
-                                        iname,
+                                        down_key, True, 'major', 'Interface Down',
+                                        f"{iname} 状态变更：UP → DOWN，请检查端口连接和用线",
+                                        dev_id, iname,
+                                        ip_address=ip, status='active',
                                     )
                                 elif prev_status == 'down' and curr_status == 'up':
                                     set_alert_state(
-                                        down_key,
-                                        False,
-                                        'major',
-                                        'Interface down',
-                                        f"{device['hostname']} {iname} recovered DOWN -> UP",
-                                        dev_id,
-                                        iname,
+                                        down_key, False, 'major', 'Interface Down',
+                                        f"{iname} 状态恢复：DOWN → UP",
+                                        dev_id, iname,
+                                        ip_address=ip, status='resolved',
                                     )
 
                             max_util = max(float(iface.get('bw_in_pct') or 0), float(iface.get('bw_out_pct') or 0))
                             util_active = max_util >= float(settings.ALERT_INTERFACE_UTIL_THRESHOLD)
                             util_key = f"if_util:{dev_id}:{iname}"
-                            set_alert_state(
-                                util_key,
-                                util_active,
-                                'major' if max_util < 95 else 'critical',
-                                'Interface utilization high',
-                                f"{device['hostname']} {iname} utilization {max_util:.1f}%",
-                                dev_id,
-                                iname,
-                            )
+                            if util_active:
+                                set_alert_state(
+                                    util_key, True,
+                                    'warning' if max_util < 95 else 'critical',
+                                    'Interface Utilization High',
+                                    f"{iname} 带宽占用率达到 {max_util:.1f}%，超过阈值 {settings.ALERT_INTERFACE_UTIL_THRESHOLD}%",
+                                    dev_id, iname,
+                                    ip_address=ip, status='active',
+                                )
+                            else:
+                                set_alert_state(
+                                    util_key, False,
+                                    'major',
+                                    'Interface Utilization High',
+                                    f"{iname} 带宽占用率已恢复正常（当前 {max_util:.1f}%）",
+                                    dev_id, iname,
+                                    ip_address=ip, status='resolved',
+                                )
 
                         prev_intf_octets[dev_id] = cur_snapshot
                         _db_many('''

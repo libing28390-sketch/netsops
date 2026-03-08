@@ -2,7 +2,7 @@
 import { motion } from 'motion/react';
 import { Routes, Route, useLocation, useNavigate, Navigate } from 'react-router-dom';
 import * as htmlToImage from 'html-to-image';
-import { Plus, Server, CheckCircle, CheckCircle2, XCircle, RotateCcw, Play, Activity, LayoutDashboard, Database, Zap, ShieldCheck, History, LogOut, Search, Bell, Settings, Download, Upload, FileText, ChevronLeft, ChevronRight, Filter, Globe, TrendingUp, PieChart as PieChartIcon, Clock, AlertTriangle, X, Edit2, AlertCircle, FolderOpen, Eye, EyeOff, Sun, Moon, User, ChevronDown, Copy, Menu, PanelLeftClose, Monitor, ExternalLink } from 'lucide-react';
+import { Plus, Server, CheckCircle, CheckCircle2, XCircle, RotateCcw, Play, Activity, LayoutDashboard, Database, Zap, ShieldCheck, History, LogOut, Search, Bell, Settings, Download, Upload, FileText, ChevronLeft, ChevronRight, Filter, Globe, TrendingUp, PieChart as PieChartIcon, Clock, AlertTriangle, X, Edit2, AlertCircle, FolderOpen, Eye, EyeOff, Sun, Moon, User, ChevronDown, Copy, Menu, PanelLeftClose, Monitor, ExternalLink, Trash2 } from 'lucide-react';
 import { useI18n } from './i18n.tsx';
 import * as XLSX from 'xlsx';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from 'recharts';
@@ -162,7 +162,12 @@ const App: React.FC = () => {
         if (r.ok) {
           const data = await r.json();
           setIsAuthenticated(true);
-          if (data?.user?.username) setCurrentUser(data.user);
+          if (data?.user?.username) {
+            setCurrentUser(data.user);
+            if (data.user.preferred_language === 'en' || data.user.preferred_language === 'zh') {
+              setLanguage(data.user.preferred_language);
+            }
+          }
         } else {
           localStorage.removeItem('netops_token');
         }
@@ -345,7 +350,12 @@ const App: React.FC = () => {
           localStorage.removeItem('netops_user');
         }
         setIsAuthenticated(true);
-        if (data.user?.username) setCurrentUser(data.user);
+        if (data.user?.username) {
+          setCurrentUser(data.user);
+          if (data.user.preferred_language === 'en' || data.user.preferred_language === 'zh') {
+            setLanguage(data.user.preferred_language);
+          }
+        }
         setUsers(prev => prev.map(u => u.id === data.user.id ? { ...u, lastLogin: data.user.lastLogin } : u));
         showToast(t('loginSuccess'), 'success');
       } else if (response.status === 429) {
@@ -488,6 +498,7 @@ const App: React.FC = () => {
   const [selectedAutomationTemplate, setSelectedAutomationTemplate] = useState<ConfigTemplate | null>(null);
   const [editedScriptContent, setEditedScriptContent] = useState<string>('');
   const [customCommand, setCustomCommand] = useState('');
+  const [customCommandMode, setCustomCommandMode] = useState<'query' | 'config'>('query');
   const [scriptParams, setScriptParams] = useState<Record<string, string>>({});
   // Batch execution
   const [batchMode, setBatchMode] = useState(false);
@@ -503,6 +514,11 @@ const App: React.FC = () => {
   const [showFavorites, setShowFavorites] = useState(false);
   // Script variable substitution — parsed from {{VAR}} in script content
   const [scriptVars, setScriptVars] = useState<Record<string, string>>({});
+
+  // Quick Query (read-only commands, no history saved)
+  const [quickQueryOutput, setQuickQueryOutput] = useState<string>('');
+  const [quickQueryRunning, setQuickQueryRunning] = useState(false);
+  const [quickQueryLabel, setQuickQueryLabel] = useState('');
 
   // ---------- Config Center ----------
   const [retentionDays, setRetentionDays] = useState<number>(365);
@@ -576,8 +592,24 @@ const App: React.FC = () => {
   });
   const [isSavingScenario, setIsSavingScenario] = useState(false);
   const [wsMessages, setWsMessages] = useState<any[]>([]);
+  const [deviceStatusMap, setDeviceStatusMap] = useState<Record<string, { hostname: string; status: string; currentPhase?: string; phases: Record<string, { success: boolean; output?: string }>; error?: string }>>({});
+  const [wsCompleteMsg, setWsCompleteMsg] = useState<any>(null);
   const [activeExecutionId, setActiveExecutionId] = useState<string | null>(null);
+  const [selectedExecutionDetail, setSelectedExecutionDetail] = useState<any | null>(null);
+  const [selectedExecutionLoading, setSelectedExecutionLoading] = useState(false);
   const [executionStatus, setExecutionStatus] = useState<string>('idle');
+  // History pagination & lazy device loading
+  const [playbookHistoryPage, setPlaybookHistoryPage] = useState(1);
+  const [playbookHistoryTotal, setPlaybookHistoryTotal] = useState(0);
+  const [playbookHistoryStatusFilter, setPlaybookHistoryStatusFilter] = useState('all');
+  const [playbookHistoryScenarioSearch, setPlaybookHistoryScenarioSearch] = useState('');
+  const [selectedExecDevices, setSelectedExecDevices] = useState<any[]>([]);
+  const [selectedExecDevicesTotal, setSelectedExecDevicesTotal] = useState(0);
+  const [selectedExecDevicesPage, setSelectedExecDevicesPage] = useState(1);
+  const [selectedExecDevicesStatusFilter, setSelectedExecDevicesStatusFilter] = useState('all');
+  const [selectedExecDevicesLoading, setSelectedExecDevicesLoading] = useState(false);
+  const [selectedDeviceDetail, setSelectedDeviceDetail] = useState<any | null>(null);
+  const [selectedDeviceDetailLoading, setSelectedDeviceDetailLoading] = useState(false);
   const wsRef = React.useRef<WebSocket | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -604,7 +636,6 @@ const App: React.FC = () => {
     if (activeTab === 'automation') {
       const map: Record<string, string> = {
         execute: t('directExecution'),
-        playbooks: 'Playbooks',
         scenarios: t('scenarioLibrary'),
         history: t('executionHistory'),
       };
@@ -737,11 +768,54 @@ const App: React.FC = () => {
     } catch { /* ignore */ }
   };
 
-  const loadPlaybookHistory = async () => {
+  const loadPlaybookHistory = async (
+    page = playbookHistoryPage,
+    statusFilter = playbookHistoryStatusFilter,
+    scenarioFilter = playbookHistoryScenarioSearch,
+  ) => {
     try {
-      const resp = await fetch('/api/playbooks');
-      if (resp.ok) setPlaybookExecutions(await resp.json());
+      const params = new URLSearchParams({
+        page: String(page),
+        page_size: '20',
+        status: statusFilter,
+        scenario: scenarioFilter,
+      });
+      const playbookResp = await fetch(`/api/playbooks?${params}`);
+      let playbookItems: any[] = [];
+      let playbookTotal = 0;
+      if (playbookResp.ok) {
+        const d = await playbookResp.json();
+        playbookItems = (d.items || []).map((e: any) => ({ ...e, _type: 'playbook' }));
+        playbookTotal = d.total || 0;
+      }
+      setPlaybookExecutions(playbookItems);
+      setPlaybookHistoryTotal(playbookTotal);
     } catch { /* ignore */ }
+  };
+
+  const loadExecDevices = async (
+    execId: string,
+    page = 1,
+    statusFilter = 'all',
+    search = '',
+  ) => {
+    setSelectedExecDevicesLoading(true);
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        page_size: '20',
+        status: statusFilter,
+        search,
+      });
+      const r = await fetch(`/api/playbooks/${execId}/devices?${params}`);
+      if (r.ok) {
+        const data = await r.json();
+        setSelectedExecDevices(data.items || []);
+        setSelectedExecDevicesTotal(data.total || 0);
+      }
+    } finally {
+      setSelectedExecDevicesLoading(false);
+    }
   };
 
   const loadNotifications = useCallback(async () => {
@@ -833,6 +907,9 @@ const App: React.FC = () => {
     const effectiveDryRun = dryRunOverride !== undefined ? dryRunOverride : quickPlaybookDryRun;
     if (dryRunOverride !== undefined) setQuickPlaybookDryRun(dryRunOverride);
 
+    setWsMessages([]);
+    setDeviceStatusMap({});
+    setWsCompleteMsg(null);
     setIsQuickPlaybookRunning(true);
     try {
       const resp = await fetch('/api/playbooks/execute', {
@@ -853,6 +930,7 @@ const App: React.FC = () => {
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
         showToast(`Execution failed: ${data.detail || resp.statusText}`, 'error');
+        setIsQuickPlaybookRunning(false);
         return;
       }
 
@@ -873,10 +951,45 @@ const App: React.FC = () => {
         scenarioNameZh: quickPlaybookScenario.name_zh,
         timestamp: Date.now(),
       });
+      // Open WebSocket for live per-device output in Panel 3
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const wsUrl = `${wsProtocol}://${window.location.host}/api/ws/playbook/${data.execution_id}`;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          setWsMessages(prev => [...prev, msg]);
+          // Aggregate into deviceStatusMap for Panel 3
+          if (msg.type === 'device_start') {
+            setDeviceStatusMap(prev => ({ ...prev, [msg.device_id]: { hostname: msg.hostname || String(msg.device_id), status: 'running', phases: {} } }));
+          } else if (msg.type === 'phase_done') {
+            setDeviceStatusMap(prev => {
+              const dev = prev[msg.device_id];
+              if (!dev) return prev;
+              return { ...prev, [msg.device_id]: { ...dev, phases: { ...dev.phases, [msg.phase]: { success: msg.output?.success ?? true, output: msg.output?.output } } } };
+            });
+          } else if (msg.type === 'device_done') {
+            setDeviceStatusMap(prev => {
+              const dev = prev[msg.device_id];
+              return dev ? { ...prev, [msg.device_id]: { ...dev, status: msg.status || 'success', currentPhase: undefined } } : prev;
+            });
+          } else if (msg.type === 'device_error') {
+            setDeviceStatusMap(prev => ({ ...prev, [msg.device_id]: { hostname: String(msg.device_id), status: 'error', phases: {}, error: msg.error || 'Unknown error' } }));
+          } else if (msg.type === 'complete') {
+            setWsCompleteMsg(msg);
+            setExecutionStatus(msg.status);
+            setIsQuickPlaybookRunning(false);
+            ws.close();
+            loadPlaybookHistory();
+          }
+        } catch { /* ignore */ }
+      };
+      ws.onerror = () => { setExecutionStatus('ws_error'); setIsQuickPlaybookRunning(false); };
+      ws.onclose = () => { wsRef.current = null; };
       loadPlaybookHistory();
     } catch {
       showToast('Connection error', 'error');
-    } finally {
       setIsQuickPlaybookRunning(false);
     }
   };
@@ -981,9 +1094,8 @@ const App: React.FC = () => {
       });
       showToast('Custom scenario created', 'success');
       await loadScenarios();
-      setSelectedScenario(data);
-      setPlaybookPlatform(data.default_platform || data.supported_platforms?.[0] || 'cisco_ios');
-      navigate('/automation/playbooks');
+      openQuickPlaybookModal(data);
+      navigate('/automation/execute');
     } catch {
       showToast('Connection error', 'error');
     } finally {
@@ -1027,7 +1139,7 @@ const App: React.FC = () => {
     }
   };
 
-  const executePlaybook = async () => {
+  const executePlaybook = async (dryRunOverride?: boolean) => {
     if (!selectedScenario) {
       showToast(language === 'zh' ? '请先选择场景' : 'Please select a scenario first', 'error');
       return;
@@ -1048,8 +1160,12 @@ const App: React.FC = () => {
       );
       return;
     }
+    const effectiveDryRun = dryRunOverride !== undefined ? dryRunOverride : playbookDryRun;
+    setPlaybookDryRun(effectiveDryRun);
     setExecutionStatus('starting');
     setWsMessages([]);
+    setDeviceStatusMap({});
+    setWsCompleteMsg(null);
     try {
       const resp = await fetch('/api/playbooks/execute', {
         method: 'POST',
@@ -1059,18 +1175,24 @@ const App: React.FC = () => {
           platform: playbookPlatform,
           device_ids: playbookDeviceIds,
           variables: playbookVars,
-          dry_run: playbookDryRun,
+          dry_run: effectiveDryRun,
           concurrency: playbookConcurrency,
           author: currentUser.username || 'admin',
           actor_id: currentUser.id,
           actor_role: currentUser.role || 'Administrator',
         }),
       });
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        showToast(`执行失败: ${errData.detail || resp.statusText}`, 'error');
+        setExecutionStatus('idle');
+        return;
+      }
       if (resp.ok) {
         const { execution_id } = await resp.json();
         setActiveExecutionId(execution_id);
         setExecutionStatus('running');
-        showToast(playbookDryRun ? (language === 'zh' ? 'Dry-Run 已启动' : 'Dry-Run started') : (language === 'zh' ? '执行任务已启动' : 'Execution started'), 'success');
+        showToast(effectiveDryRun ? (language === 'zh' ? 'Dry-Run 已启动' : 'Dry-Run started') : (language === 'zh' ? '执行任务已启动' : 'Execution started'), 'success');
         // Optimistic: add new execution to the list immediately
         setPlaybookExecutions(prev => [{
           id: execution_id,
@@ -1080,7 +1202,7 @@ const App: React.FC = () => {
           device_ids: JSON.stringify(playbookDeviceIds),
           variables: JSON.stringify(playbookVars),
           status: 'running',
-          dry_run: playbookDryRun ? 1 : 0,
+          dry_run: effectiveDryRun ? 1 : 0,
           author: 'admin',
           concurrency: playbookConcurrency,
           results_json: '{}',
@@ -1096,7 +1218,24 @@ const App: React.FC = () => {
           try {
             const msg = JSON.parse(ev.data);
             setWsMessages(prev => [...prev, msg]);
-            if (msg.type === 'complete') {
+            // Aggregate into deviceStatusMap
+            if (msg.type === 'device_start') {
+              setDeviceStatusMap(prev => ({ ...prev, [msg.device_id]: { hostname: msg.hostname || String(msg.device_id), status: 'running', phases: {} } }));
+            } else if (msg.type === 'phase_done') {
+              setDeviceStatusMap(prev => {
+                const dev = prev[msg.device_id];
+                if (!dev) return prev;
+                return { ...prev, [msg.device_id]: { ...dev, phases: { ...dev.phases, [msg.phase]: { success: msg.output?.success ?? true, output: msg.output?.output } } } };
+              });
+            } else if (msg.type === 'device_done') {
+              setDeviceStatusMap(prev => {
+                const dev = prev[msg.device_id];
+                return dev ? { ...prev, [msg.device_id]: { ...dev, status: msg.status || 'success', currentPhase: undefined } } : prev;
+              });
+            } else if (msg.type === 'device_error') {
+              setDeviceStatusMap(prev => ({ ...prev, [msg.device_id]: { hostname: String(msg.device_id), status: 'error', phases: {}, error: msg.error || 'Unknown error' } }));
+            } else if (msg.type === 'complete') {
+              setWsCompleteMsg(msg);
               setExecutionStatus(msg.status);
               ws.close();
               // Refresh to get final results
@@ -1121,8 +1260,9 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (activeTab === 'automation') {
+      if (automationPage === 'playbooks') { navigate('/automation/execute'); return; }
       loadScenarios();
-      if (automationPage === 'playbooks' || automationPage === 'scenarios' || automationPage === 'history') {
+      if (automationPage === 'execute' || automationPage === 'scenarios' || automationPage === 'history') {
         loadPlaybookHistory();
       }
     }
@@ -1144,6 +1284,8 @@ const App: React.FC = () => {
       setQuickRiskConfirmed(false);
       setShowCustomCommandModal(false);
       setShowCmdPreviewModal(false);
+      setQuickQueryOutput('');
+      setQuickQueryLabel('');
       return;
     }
 
@@ -1160,6 +1302,12 @@ const App: React.FC = () => {
     if (page === 'scenarios') {
       setShowAddScenarioModal(false);
       setScenarioSearch('');
+    }
+
+    if (page === 'history') {
+      setPlaybookHistoryPage(1);
+      setPlaybookHistoryStatusFilter('');
+      setPlaybookHistoryScenarioSearch('');
     }
   }, []);
 
@@ -1353,6 +1501,16 @@ const App: React.FC = () => {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showProfilePwd, setShowProfilePwd] = useState(false);
   const [profileForm, setProfileForm] = useState({ username: '', password: '', confirmPassword: '' });
+  const [notificationChannels, setNotificationChannels] = useState<{
+    feishu:   { webhook_url: string; enabled: boolean };
+    dingtalk: { webhook_url: string; enabled: boolean; secret: string };
+    wechat:   { webhook_url: string; enabled: boolean };
+  }>({
+    feishu:   { webhook_url: '', enabled: false },
+    dingtalk: { webhook_url: '', enabled: false, secret: '' },
+    wechat:   { webhook_url: '', enabled: false },
+  });
+  const [notifyTestLoading, setNotifyTestLoading] = useState<string>(''); // platform name being tested
   const [editingUser, setEditingUser] = useState<UserType | null>(null);
   const [editUserForm, setEditUserForm] = useState({ username: '', password: '', role: 'Operator' });
   const [showDeployTemplateModal, setShowDeployTemplateModal] = useState(false);
@@ -1390,6 +1548,14 @@ const App: React.FC = () => {
     setShowProfilePwd(false);
     setShowNotifications(false);
     setShowUserMenu(false);
+    // 加载通知渠道配置
+    const savedChannels = currentUserRecord?.notification_channels as any;
+    setNotificationChannels({
+      feishu:   { webhook_url: savedChannels?.feishu?.webhook_url   || '', enabled: !!savedChannels?.feishu?.enabled   },
+      dingtalk: { webhook_url: savedChannels?.dingtalk?.webhook_url || '', enabled: !!savedChannels?.dingtalk?.enabled, secret: savedChannels?.dingtalk?.secret || '' },
+      wechat:   { webhook_url: savedChannels?.wechat?.webhook_url   || '', enabled: !!savedChannels?.wechat?.enabled   },
+    });
+    setNotifyTestLoading('');
     setShowProfileModal(true);
   };
 
@@ -1443,10 +1609,11 @@ const App: React.FC = () => {
     }
 
     try {
-      const payload: Record<string, string> = {
+      const payload: Record<string, any> = {
         username: profileForm.username.trim(),
         role: (currentUserRecord?.role || currentUser.role || 'Operator') as string,
         avatar_url: profileAvatarPreview,
+        notification_channels: notificationChannels,
       };
       if (profileForm.password) payload.password = profileForm.password;
 
@@ -2677,7 +2844,7 @@ const App: React.FC = () => {
         showToast('Device updated successfully', 'success');
       } else {
         const data = await response.json();
-        showToast(`Failed to update device: ${data.error}`, 'error');
+        showToast(`Failed to update device: ${data.detail || data.error || response.statusText}`, 'error');
       }
     } catch (error) {
       showToast(`Error updating device: ${error}`, 'error');
@@ -3179,7 +3346,11 @@ const App: React.FC = () => {
             : (selectedScript?.id || selectedAutomationTemplate?.id),
           command: (taskName === 'VLAN Update' || taskName === 'Compliance Audit' || taskName === 'Custom Command') ? commandPayload : editedScriptContent,
           // Custom Command 的 isConfig 由后端按命令内容自动判断，前端不强制设定
-          isConfig: taskName === 'VLAN Update' || (taskName !== 'Custom Command' && (!!selectedScript || !!selectedAutomationTemplate)),
+          isConfig: taskName === 'VLAN Update'
+            ? true
+            : taskName === 'Custom Command'
+              ? customCommandMode === 'config'
+              : (!!selectedScript || !!selectedAutomationTemplate),
           author: currentUser.username || 'admin',
           actor_id: currentUser.id,
           actor_role: currentUser.role || 'Administrator',
@@ -3210,6 +3381,43 @@ const App: React.FC = () => {
       return false;
     } finally {
       setIsTestingConnection(false);
+    }
+  };
+
+  // Quick query — read-only command, no history saved
+  const runQuickQuery = async (label: string, commands: string) => {
+    const device = selectedDevice || (batchMode && batchDeviceIds.length === 1 ? devices.find(d => d.id === batchDeviceIds[0]) : null);
+    if (!device) {
+      showToast(language === 'zh' ? '请先选择一台设备' : 'Select a device first', 'error');
+      return;
+    }
+    setQuickQueryLabel(label);
+    setQuickQueryOutput('');
+    setQuickQueryRunning(true);
+    try {
+      const resp = await fetch('/api/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          device_id: device.id,
+          command: commands,
+          isConfig: false,
+          save_history: false,
+          author: currentUser.username || 'admin',
+          actor_id: currentUser.id,
+          actor_role: currentUser.role || 'Administrator',
+        }),
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        setQuickQueryOutput(data.output || 'No output');
+      } else {
+        setQuickQueryOutput(`Error: ${data.error || data.detail || 'Unknown error'}`);
+      }
+    } catch (e: any) {
+      setQuickQueryOutput(`Error: ${e.message || e}`);
+    } finally {
+      setQuickQueryRunning(false);
     }
   };
 
@@ -3247,7 +3455,9 @@ const App: React.FC = () => {
           body: JSON.stringify({
             device_id: device.id,
             command: commandPayload,
-            isConfig: taskName !== 'Custom Command' && taskName !== 'Compliance Audit',
+            isConfig: taskName === 'Custom Command'
+              ? customCommandMode === 'config'
+              : taskName !== 'Compliance Audit',
             author: currentUser.username || 'admin',
             actor_id: currentUser.id,
             actor_role: currentUser.role || 'Administrator',
@@ -3763,8 +3973,7 @@ const App: React.FC = () => {
             }`}>
               <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5">
                 {([
-                  { path: 'automation/execute',   icon: Play,      label: t('directExecution') },
-                  { path: 'automation/playbooks', icon: FileText,  label: 'Playbooks' },
+                  { path: 'automation/execute',   icon: Zap,        label: t('directExecution') },
                   { path: 'automation/scenarios', icon: FolderOpen, label: t('scenarioLibrary') },
                   { path: 'automation/history',   icon: History,   label: t('executionHistory') },
                 ] as const).map(item => {
@@ -4058,7 +4267,7 @@ const App: React.FC = () => {
                 setShowNotifications(false);
                 setShowUserMenu(v => !v);
               }}
-              className={`flex items-center gap-2 px-2 py-1.5 rounded-lg border transition-all ${resolvedTheme === 'dark' ? 'border-white/15 bg-white/5 hover:bg-white/10' : 'border-black/10 bg-white hover:bg-black/[0.02]'}`}
+              className={`flex items-center gap-2 px-2 py-1.5 rounded-lg transition-all ${resolvedTheme === 'dark' ? 'hover:bg-white/10' : 'hover:bg-black/[0.04]'}`}
             >
               <div className={`w-7 h-7 rounded-full border overflow-hidden flex items-center justify-center ${resolvedTheme === 'dark' ? 'bg-white/10 border-white/10 text-white/70' : 'bg-black/10 border-black/5 text-black/60'}`}>
                 {renderAvatarContent(currentAvatar, 15)}
@@ -4148,13 +4357,33 @@ const App: React.FC = () => {
                     </div>
                     <div className={`flex items-center rounded-md border p-0.5 ${resolvedTheme === 'dark' ? 'border-white/10 bg-white/5' : 'border-black/10 bg-black/[0.03]'}`}>
                       <button
-                        onClick={() => setLanguage('en' as any)}
+                        onClick={() => {
+                          setLanguage('en' as any);
+                          if (currentUser.id) {
+                            const token = localStorage.getItem('netops_token');
+                            fetch(`/api/users/${currentUser.id}`, {
+                              method: 'PUT',
+                              headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+                              body: JSON.stringify({ preferred_language: 'en' }),
+                            }).catch(() => {});
+                          }
+                        }}
                         className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-all ${language === 'en' ? 'bg-[#00bceb]/15 text-[#00bceb]' : (resolvedTheme === 'dark' ? 'text-white/45 hover:text-white' : 'text-black/40 hover:text-black')}`}
                       >
                         EN
                       </button>
                       <button
-                        onClick={() => setLanguage('zh' as any)}
+                        onClick={() => {
+                          setLanguage('zh' as any);
+                          if (currentUser.id) {
+                            const token = localStorage.getItem('netops_token');
+                            fetch(`/api/users/${currentUser.id}`, {
+                              method: 'PUT',
+                              headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+                              body: JSON.stringify({ preferred_language: 'zh' }),
+                            }).catch(() => {});
+                          }
+                        }}
                         className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-all ${language === 'zh' ? 'bg-[#00bceb]/15 text-[#00bceb]' : (resolvedTheme === 'dark' ? 'text-white/45 hover:text-white' : 'text-black/40 hover:text-black')}`}
                       >
                         中文
@@ -4251,7 +4480,7 @@ const App: React.FC = () => {
               setMonitorDashboardSiteFilter={setMonitorDashboardSiteFilter}
               monitorDashboardAlertFilter={monitorDashboardAlertFilter}
               setMonitorDashboardAlertFilter={setMonitorDashboardAlertFilter}
-              fetchMonitoringOverview={fetchMonitoringOverview}
+              fetchMonitoringOverview={() => fetchMonitoringOverview(true)}
               fetchMonitoringAlerts={fetchMonitoringAlerts}
               fetchMonitoringRealtime={fetchMonitoringRealtime}
               setMonitorRealtime={setMonitorRealtime}
@@ -4804,8 +5033,8 @@ const App: React.FC = () => {
               {/* ── Header ── */}
               <div className={sectionHeaderRowClass}>
                 <div>
-                  <h2 className="text-2xl font-medium tracking-tight">{t('automationCenter')}</h2>
-                  <p className="text-sm text-black/40">{t('deployChanges')}</p>
+                  <h2 className="text-2xl font-medium tracking-tight">{t('directExecution')}</h2>
+                  <p className="text-sm text-black/40">{language === 'zh' ? '选择场景，配置参数，批量下发到设备' : 'Select scenario, configure parameters, deploy to devices'}</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
@@ -4955,6 +5184,10 @@ const App: React.FC = () => {
                                     if (batchMode) {
                                       setBatchDeviceIds(prev => checked ? prev.filter(id => id !== device.id) : [...prev, device.id]);
                                     } else {
+                                      if (selectedDevice?.id !== device.id) {
+                                        setQuickQueryOutput('');
+                                        setQuickQueryLabel('');
+                                      }
                                       setSelectedDevice(device);
                                     }
                                   }}
@@ -5193,6 +5426,60 @@ const App: React.FC = () => {
                                 )}
                               </div>
                             </>
+                          ) : (quickQueryRunning || quickQueryOutput) ? (
+                            /* ── Terminal output in center panel ── */
+                            <div className="flex-1 flex flex-col overflow-hidden rounded-b-2xl" style={{ background: 'linear-gradient(180deg, #0d1117 0%, #151b23 100%)' }}>
+                              {/* Terminal Title Bar */}
+                              <div className="shrink-0 flex items-center justify-between px-4 py-2.5" style={{ background: 'linear-gradient(90deg, #1c2030 0%, #161b22 100%)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div className="flex gap-[6px] mr-1 shrink-0">
+                                    <span className="w-[10px] h-[10px] rounded-full bg-[#ff5f57]/80" />
+                                    <span className="w-[10px] h-[10px] rounded-full bg-[#febc2e]/80" />
+                                    <span className="w-[10px] h-[10px] rounded-full bg-[#28c840]/80" />
+                                  </div>
+                                  {quickQueryRunning
+                                    ? <RotateCcw size={13} className="animate-spin text-[#00bceb] shrink-0" />
+                                    : <Monitor size={13} className="text-emerald-400 shrink-0" />}
+                                  <span className="text-[12px] font-bold text-white/90 truncate">{quickQueryLabel}</span>
+                                  <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-md bg-white/[0.06] text-white/35 font-mono border border-white/[0.04]">{selectedDevice?.hostname || devices.find(d => d.id === batchDeviceIds[0])?.hostname || ''}</span>
+                                </div>
+                                <div className="flex items-center gap-0.5 shrink-0">
+                                  {!quickQueryRunning && quickQueryOutput && (
+                                    <button
+                                      onClick={async () => { const ok = await copyTextWithFallback(quickQueryOutput); showToast(ok ? (isZh ? '已复制' : 'Copied') : (isZh ? '复制失败' : 'Copy failed'), ok ? 'success' : 'error'); }}
+                                      className="text-white/25 hover:text-white/60 p-2 rounded-lg hover:bg-white/[0.06] transition-all"
+                                      title={isZh ? '复制' : 'Copy'}
+                                    >
+                                      <Copy size={13} />
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => { setQuickQueryOutput(''); setQuickQueryLabel(''); }}
+                                    className="text-white/25 hover:text-white/60 p-2 rounded-lg hover:bg-white/[0.06] transition-all"
+                                    title={isZh ? '关闭' : 'Close'}
+                                  >
+                                    <X size={13} />
+                                  </button>
+                                </div>
+                              </div>
+                              {/* Terminal Output — fills remaining space */}
+                              <div className="flex-1 overflow-auto terminal-scroll">
+                                {quickQueryRunning ? (
+                                  <div className="flex flex-col items-center justify-center py-16 gap-4">
+                                    <div className="w-10 h-10 rounded-full border-2 border-[#00bceb]/20 border-t-[#00bceb] animate-spin" />
+                                    <span className="text-xs text-white/25 font-mono">{isZh ? '正在查询...' : 'Querying...'}</span>
+                                  </div>
+                                ) : (
+                                  <div className="p-5">
+                                    <div className="flex items-start gap-2 mb-3 pb-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                                      <span className="text-emerald-400/60 font-mono font-bold text-[11px] mt-0.5 select-none shrink-0">❯</span>
+                                      <code className="text-[11px] font-mono text-emerald-400/40 leading-relaxed whitespace-pre-wrap">{quickQueryLabel}</code>
+                                    </div>
+                                    <pre className="text-[13px] font-mono text-[#e6edf3] leading-[1.75] whitespace-pre-wrap break-all select-text">{quickQueryOutput}</pre>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
                           ) : (
                             <div className="flex-1 flex flex-col items-center justify-center text-center gap-4 p-6">
                               <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-black/[0.03]">
@@ -5295,89 +5582,210 @@ const App: React.FC = () => {
                         </div>
 
                         {/* Body – context-aware: execution result → stats when idle → execution details when scenario selected */}
-                        {quickExecutionResult && !quickPlaybookScenario ? (
-                          <div className="flex-1 min-h-0 overflow-auto p-4 space-y-4">
-                            {/* Execution submitted card */}
-                            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-center space-y-3">
-                              <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-100">
-                                <CheckCircle2 size={24} className="text-emerald-600" />
-                              </div>
-                              <div>
-                                <p className="text-sm font-bold text-emerald-800">
-                                  {isZh ? '执行已提交' : 'Execution Submitted'}
-                                </p>
-                                <p className="text-xs text-emerald-600 mt-1">
-                                  {isZh ? (quickExecutionResult.scenarioNameZh || quickExecutionResult.scenarioName) : quickExecutionResult.scenarioName}
-                                </p>
-                              </div>
-                              <div className="flex items-center justify-center gap-3">
-                                <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1 rounded-full bg-white border border-emerald-200 text-emerald-700">
-                                  <Monitor size={10} />
-                                  {quickExecutionResult.deviceCount} {isZh ? '台设备' : 'device(s)'}
-                                </span>
-                                {quickExecutionResult.dryRun && (
-                                  <span className="inline-flex items-center text-[10px] font-bold px-2.5 py-1 rounded-full bg-amber-100 border border-amber-200 text-amber-700">
-                                    DRY-RUN
-                                  </span>
+                        {(isQuickPlaybookRunning || quickExecutionResult) ? (
+                          (() => {
+                            const completeMsg = wsCompleteMsg;
+                            const deviceEntries = Object.entries(deviceStatusMap);
+                            const scenarioTitle = quickExecutionResult
+                              ? (isZh ? (quickExecutionResult.scenarioNameZh || quickExecutionResult.scenarioName) : quickExecutionResult.scenarioName)
+                              : (quickPlaybookScenario ? (isZh ? (quickPlaybookScenario.name_zh || quickPlaybookScenario.name) : quickPlaybookScenario.name) : '');
+                            return (
+                              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                                {/* Status header */}
+                                <div className={`px-4 py-3 border-b flex items-center gap-2 ${completeMsg ? (completeMsg.status === 'success' ? 'bg-emerald-50 border-emerald-100' : completeMsg.status === 'partial_failure' ? 'bg-amber-50 border-amber-100' : 'bg-red-50 border-red-100') : 'bg-blue-50 border-blue-100'}`}>
+                                  {isQuickPlaybookRunning ? (
+                                    <RotateCcw size={14} className="text-blue-500 animate-spin shrink-0" />
+                                  ) : completeMsg?.status === 'success' ? (
+                                    <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />
+                                  ) : completeMsg?.status === 'partial_failure' ? (
+                                    <AlertTriangle size={14} className="text-amber-500 shrink-0" />
+                                  ) : (
+                                    <XCircle size={14} className="text-red-500 shrink-0" />
+                                  )}
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-bold text-black/70 truncate">{scenarioTitle}</p>
+                                    <p className="text-[10px] text-black/40">
+                                      {isQuickPlaybookRunning
+                                        ? (isZh ? '正在执行...' : 'Executing...')
+                                        : completeMsg
+                                          ? `${isZh ? '完成' : 'Done'} · ${completeMsg.summary?.success ?? 0}✓ ${completeMsg.summary?.failed ?? 0}✗`
+                                          : (isZh ? '已提交' : 'Submitted')}
+                                    </p>
+                                  </div>
+                                  {quickExecutionResult?.dryRun && (
+                                    <span className="ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">DRY</span>
+                                  )}
+                                </div>
+                                {/* Per-device cards */}
+                                <div className="flex-1 min-h-0 overflow-auto p-3 space-y-2">
+                                  {deviceEntries.length === 0 && isQuickPlaybookRunning && (
+                                    <div className="flex flex-col items-center justify-center h-24 gap-2">
+                                      <RotateCcw size={20} className="text-blue-400 animate-spin" />
+                                      <p className="text-xs text-black/30">{isZh ? '等待设备响应...' : 'Waiting for device response...'}</p>
+                                    </div>
+                                  )}
+                                  {deviceEntries.map(([devId, dev]: [string, { hostname: string; status: string; phases: Record<string, { success: boolean; output?: string }>; error?: string }]) => (
+                                    <div key={devId} className={`rounded-xl border p-3 space-y-1.5 ${dev.status === 'running' ? 'border-blue-100 bg-blue-50/40' : dev.status === 'success' ? 'border-emerald-100 bg-emerald-50/40' : dev.status === 'partial_failure' ? 'border-amber-100 bg-amber-50/40' : 'border-red-100 bg-red-50/40'}`}>
+                                      <div className="flex items-center gap-2">
+                                        {dev.status === 'running' ? (
+                                          <RotateCcw size={11} className="text-blue-500 animate-spin shrink-0" />
+                                        ) : dev.status === 'success' ? (
+                                          <CheckCircle2 size={11} className="text-emerald-500 shrink-0" />
+                                        ) : dev.status === 'partial_failure' ? (
+                                          <AlertTriangle size={11} className="text-amber-500 shrink-0" />
+                                        ) : (
+                                          <XCircle size={11} className="text-red-500 shrink-0" />
+                                        )}
+                                        <span className="text-xs font-semibold text-black/70 truncate">{dev.hostname}</span>
+                                      </div>
+                                      {Object.keys(dev.phases).length > 0 && (
+                                        <div className="flex flex-wrap gap-1 pl-4">
+                                          {Object.entries(dev.phases).map(([phase, ph]) => (
+                                            <span key={phase} className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${ph.success ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                                              {ph.success ? '✓' : '✗'} {phase}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      )}
+                                      {dev.error && (
+                                        <p className="text-[10px] text-red-600 pl-4 font-mono truncate">{dev.error}</p>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                                {/* Bottom buttons — shown only when execution is complete */}
+                                {!isQuickPlaybookRunning && (
+                                  <div className="p-3 pt-2 space-y-1.5 border-t border-black/5">
+                                    <button
+                                      onClick={() => navigate('/automation/history')}
+                                      className="w-full px-3 py-2 rounded-lg bg-[#00bceb] text-white text-xs font-bold hover:bg-[#0096bd] transition-all flex items-center justify-center gap-2"
+                                    >
+                                      <ExternalLink size={11} />
+                                      {isZh ? '查看完整历史' : 'View Full History'}
+                                    </button>
+                                    <button
+                                      onClick={() => { setWsMessages([]); setDeviceStatusMap({}); setWsCompleteMsg(null); setQuickExecutionResult(null); setExecutionStatus('idle'); setQuickPlaybookScenario(null); }}
+                                      className="w-full px-3 py-2 rounded-lg border border-black/10 text-xs font-semibold text-black/50 hover:bg-black/5 transition-all"
+                                    >
+                                      {isZh ? '新建任务' : 'New Task'}
+                                    </button>
+                                  </div>
                                 )}
                               </div>
-                            </div>
-                            {/* Action buttons */}
-                            <div className="space-y-2">
-                              <button
-                                onClick={() => { navigate('/automation/history'); }}
-                                className="w-full px-4 py-3 rounded-xl bg-[#00bceb] text-white text-xs font-bold hover:bg-[#0096bd] transition-all flex items-center justify-center gap-2"
-                              >
-                                <ExternalLink size={13} />
-                                {isZh ? '查看执行详情与结果' : 'View Execution Details & Results'}
-                              </button>
-                              <button
-                                onClick={() => setQuickExecutionResult(null)}
-                                className="w-full px-4 py-2.5 rounded-xl border border-black/10 text-xs font-semibold text-black/50 hover:bg-black/5 transition-all"
-                              >
-                                {isZh ? '继续执行新任务' : 'Start New Execution'}
-                              </button>
-                            </div>
-                          </div>
+                            );
+                          })()
                         ) : !quickPlaybookScenario ? (
-                          <div className="flex-1 min-h-0 overflow-auto p-4 space-y-4">
-                            {/* Quick stats */}
-                            <div className="grid grid-cols-2 gap-2">
-                              <div className="rounded-xl border border-black/5 bg-black/[0.02] p-3 text-center">
-                                <p className="text-lg font-bold text-black/70">{devices.length}</p>
-                                <p className="text-[10px] text-black/40">{isZh ? '设备总数' : 'Total Devices'}</p>
-                              </div>
-                              <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 p-3 text-center">
-                                <p className="text-lg font-bold text-emerald-600">{devices.filter(d => d.status === 'online').length}</p>
-                                <p className="text-[10px] text-emerald-600/60">{isZh ? '在线设备' : 'Online'}</p>
-                              </div>
-                              <div className="rounded-xl border border-black/5 bg-black/[0.02] p-3 text-center">
-                                <p className="text-lg font-bold text-black/70">{filteredScenarios.length}</p>
-                                <p className="text-[10px] text-black/40">{isZh ? '可用场景' : 'Scenarios'}</p>
-                              </div>
-                              <div className="rounded-xl border border-black/5 bg-black/[0.02] p-3 text-center">
-                                <p className="text-lg font-bold text-black/70">{devices.length > 0 ? Math.round(devices.filter(d => d.status === 'online').length / devices.length * 100) : 0}%</p>
-                                <p className="text-[10px] text-black/40">{isZh ? '在线率' : 'Uptime Rate'}</p>
-                              </div>
-                            </div>
-                            {/* Quick guide */}
-                            <div>
-                              <p className="text-[10px] font-bold uppercase tracking-widest text-black/35 mb-2">{isZh ? '快速开始' : 'Quick Start'}</p>
-                              <div className="space-y-2">
-                                {[
-                                  { step: '1', text: isZh ? '在左侧选择目标设备' : 'Select target device on the left', done: targetCount > 0 },
-                                  { step: '2', text: isZh ? '在中间选择执行场景' : 'Choose a scenario in the center', done: false },
-                                  { step: '3', text: isZh ? '填写参数后点击执行' : 'Fill variables and execute', done: false },
-                                ].map(item => (
-                                  <div key={item.step} className={`flex items-center gap-2.5 rounded-xl border px-3 py-2.5 ${item.done ? 'border-emerald-200 bg-emerald-50' : 'border-black/5 bg-black/[0.01]'}`}>
-                                    <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold flex-shrink-0 ${item.done ? 'bg-emerald-500 text-white' : 'bg-black/10 text-black/40'}`}>
-                                      {item.done ? '✓' : item.step}
-                                    </span>
-                                    <span className={`text-xs ${item.done ? 'text-emerald-700' : 'text-black/50'}`}>{item.text}</span>
+                          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                            {/* Quick Query section */}
+                            {(() => {
+                              const plat = (selectedDevice?.platform || (batchMode && batchDeviceIds.length === 1 ? devices.find(d => d.id === batchDeviceIds[0])?.platform : '') || '').toLowerCase();
+                              const isCisco = plat.includes('cisco') || plat.includes('arista') || plat.includes('rgos');
+                              const isHuawei = plat.includes('huawei') || plat.includes('h3c') || plat.includes('ce_');
+                              const isJuniper = plat.includes('juniper') || plat.includes('junos');
+                              const presets: { icon: string; label: string; labelEn: string; cmds: string; group: string }[] = [
+                                { icon: '📡', label: '接口状态', labelEn: 'Interfaces', group: 'net', cmds: isCisco ? 'show ip interface brief' : isHuawei ? 'display interface brief' : isJuniper ? 'show interfaces terse' : 'show ip interface brief' },
+                                { icon: '📋', label: 'ARP表', labelEn: 'ARP Table', group: 'net', cmds: isCisco ? 'show arp' : isHuawei ? 'display arp' : isJuniper ? 'show arp' : 'show arp' },
+                                { icon: '🏷️', label: 'MAC表', labelEn: 'MAC Table', group: 'net', cmds: isCisco ? 'show mac address-table' : isHuawei ? 'display mac-address' : isJuniper ? 'show ethernet-switching table' : 'show mac address-table' },
+                                { icon: '📊', label: 'VLAN', labelEn: 'VLAN', group: 'net', cmds: isCisco ? 'show vlan brief' : isHuawei ? 'display vlan' : isJuniper ? 'show vlans' : 'show vlan brief' },
+                                { icon: '📌', label: 'LLDP邻居', labelEn: 'LLDP', group: 'net', cmds: isCisco ? 'show lldp neighbors' : isHuawei ? 'display lldp neighbor brief' : isJuniper ? 'show lldp neighbors' : 'show lldp neighbors' },
+                                { icon: '🗺️', label: '路由表', labelEn: 'Routes', group: 'route', cmds: isCisco ? 'show ip route' : isHuawei ? 'display ip routing-table' : isJuniper ? 'show route' : 'show ip route' },
+                                { icon: '🔗', label: 'BGP邻居', labelEn: 'BGP Peers', group: 'route', cmds: isCisco ? 'show bgp summary' : isHuawei ? 'display bgp peer' : isJuniper ? 'show bgp summary' : 'show bgp summary' },
+                                { icon: '🔍', label: 'OSPF邻居', labelEn: 'OSPF Nbrs', group: 'route', cmds: isCisco ? 'show ip ospf neighbor' : isHuawei ? 'display ospf peer brief' : isJuniper ? 'show ospf neighbor' : 'show ip ospf neighbor' },
+                                { icon: '🏥', label: '设备信息', labelEn: 'Version', group: 'sys', cmds: isCisco ? 'show version' : isHuawei ? 'display version' : isJuniper ? 'show version' : 'show version' },
+                                { icon: '📝', label: '日志', labelEn: 'Logs', group: 'sys', cmds: isCisco ? 'show logging | tail 30' : isHuawei ? 'display logbuffer last 30' : isJuniper ? 'show log messages | last 30' : 'show logging | tail 30' },
+                                { icon: '⏱️', label: '运行时间', labelEn: 'Uptime', group: 'sys', cmds: isCisco ? 'show uptime' : isHuawei ? 'display clock\ndisplay version | include uptime' : isJuniper ? 'show system uptime' : 'show uptime' },
+                                { icon: '💾', label: '运行配置', labelEn: 'Running Config', group: 'sys', cmds: isCisco ? 'show running-config' : isHuawei ? 'display current-configuration' : isJuniper ? 'show configuration' : 'show running-config' },
+                              ];
+                              const userSavedCmds: { icon: string; label: string; labelEn: string; cmds: string }[] = (() => {
+                                try { return JSON.parse(localStorage.getItem('quickQuerySaved') || '[]'); } catch { return []; }
+                              })();
+                              const allCmds = [...presets, ...userSavedCmds.map(c => ({ ...c, group: 'custom' }))];
+                              const hasDevice = !!(selectedDevice || (batchMode && batchDeviceIds.length === 1));
+                              const deviceName = selectedDevice?.hostname || devices.find(d => d.id === batchDeviceIds[0])?.hostname || '';
+                              const activeCmd = allCmds.find(c => (isZh ? c.label : c.labelEn) === quickQueryLabel);
+
+                              // ═══════════════════════════════════════════
+                              // ── CATEGORIZED QUERY GRID MODE ──
+                              // ═══════════════════════════════════════════
+                              const categoryGroups = [
+                                { key: 'net', label: isZh ? '🌐 网络基础' : '🌐 Network', accent: '#3b82f6' },
+                                { key: 'route', label: isZh ? '🔀 路由协议' : '🔀 Routing', accent: '#f59e0b' },
+                                { key: 'sys', label: isZh ? '🖥️ 系统运维' : '🖥️ System', accent: '#10b981' },
+                                ...(userSavedCmds.length > 0 ? [{ key: 'custom', label: isZh ? '⭐ 自定义' : '⭐ Custom', accent: '#a855f7' }] : []),
+                              ];
+
+                              return (
+                                <div className="flex-1 overflow-auto p-4 space-y-4">
+                                  {/* Header */}
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2.5">
+                                      <div className="w-1 h-4 rounded-full bg-[#00bceb]" />
+                                      <span className="text-xs font-bold text-black/70">{isZh ? '快捷查询' : 'Quick Query'}</span>
+                                    </div>
+                                    {hasDevice && (
+                                      <span className="text-[10px] px-2.5 py-1 rounded-lg bg-gradient-to-r from-[#00bceb]/10 to-[#00bceb]/5 text-[#0087a9] font-mono font-bold border border-[#00bceb]/10">
+                                        {deviceName}
+                                      </span>
+                                    )}
                                   </div>
-                                ))}
-                              </div>
-                            </div>
+
+                                  {!hasDevice ? (
+                                    <div className="rounded-2xl border-2 border-dashed border-black/8 p-8 text-center">
+                                      <Server size={28} strokeWidth={1.2} className="mx-auto mb-3 text-black/10" />
+                                      <p className="text-sm text-black/30 font-medium">{isZh ? '← 先在左侧选择一台设备' : '← Select a device first'}</p>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      {categoryGroups.map(grp => {
+                                        const items = allCmds.filter(c => c.group === grp.key);
+                                        if (items.length === 0) return null;
+                                        return (
+                                          <div key={grp.key}>
+                                            <div className="flex items-center gap-2 mb-2">
+                                              <div className="h-3 w-0.5 rounded-full" style={{ background: grp.accent }} />
+                                              <span className="text-[10px] font-bold tracking-wide" style={{ color: grp.accent }}>{grp.label}</span>
+                                              <div className="flex-1 h-px" style={{ background: `linear-gradient(90deg, ${grp.accent}18, transparent)` }} />
+                                            </div>
+                                            <div className="grid grid-cols-4 gap-2">
+                                              {items.map((cmd, i) => (
+                                                <button key={`${grp.key}-${i}`}
+                                                  disabled={quickQueryRunning}
+                                                  onClick={() => runQuickQuery(isZh ? cmd.label : cmd.labelEn, cmd.cmds)}
+                                                  title={cmd.cmds}
+                                                  className="group relative flex flex-col items-center gap-1.5 px-2 py-3 rounded-xl border border-black/[0.05] bg-white hover:border-[#00bceb]/25 hover:shadow-lg hover:shadow-[#00bceb]/[0.06] hover:-translate-y-0.5 active:translate-y-0 transition-all duration-200 disabled:opacity-40 disabled:hover:translate-y-0"
+                                                >
+                                                  <span className="text-[18px] leading-none group-hover:scale-110 transition-transform duration-200">{cmd.icon}</span>
+                                                  <span className="text-[10px] font-semibold text-black/55 group-hover:text-[#0087a9] leading-tight text-center transition-colors">{isZh ? cmd.label : cmd.labelEn}</span>
+                                                </button>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </>
+                                  )}
+
+                                  {/* Scenario guide */}
+                                  <div className="pt-3 border-t border-black/5">
+                                    <p className="text-[10px] font-bold uppercase tracking-widest text-black/25 mb-2">{isZh ? '场景执行' : 'Scenario Execution'}</p>
+                                    <div className="space-y-1.5">
+                                      {[
+                                        { step: '1', text: isZh ? '在左侧选择目标设备' : 'Select target device on the left', done: targetCount > 0 },
+                                        { step: '2', text: isZh ? '在中间选择执行场景' : 'Choose a scenario in the center', done: false },
+                                        { step: '3', text: isZh ? '填写参数后点击执行' : 'Fill variables and execute', done: false },
+                                      ].map(item => (
+                                        <div key={item.step} className={`flex items-center gap-2.5 rounded-lg border px-3 py-2 ${item.done ? 'border-emerald-200 bg-emerald-50' : 'border-black/5 bg-black/[0.01]'}`}>
+                                          <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold flex-shrink-0 ${item.done ? 'bg-emerald-500 text-white' : 'bg-black/10 text-black/40'}`}>
+                                            {item.done ? '✓' : item.step}
+                                          </span>
+                                          <span className={`text-xs ${item.done ? 'text-emerald-700' : 'text-black/50'}`}>{item.text}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
                         ) : (
                         <>
@@ -5694,14 +6102,6 @@ const App: React.FC = () => {
 
                         {/* Execution options */}
                         <div className="flex items-center gap-4 pt-3 border-t border-black/5">
-                          <label className="flex items-center gap-2 text-xs">
-                            <button onClick={() => setPlaybookDryRun(!playbookDryRun)}
-                              className={`relative w-9 h-5 rounded-full transition-colors ${playbookDryRun ? 'bg-amber-400' : 'bg-black/10'}`}>
-                              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${playbookDryRun ? 'translate-x-4' : ''}`} />
-                            </button>
-                            {language === 'zh' ? 'Validation' : 'Validation'}
-                          </label>
-                          <span className="text-[10px] text-black/40">{playbookDryRun ? (language === 'zh' ? '仅校验，不下发配置' : 'Validate only, no config push') : (language === 'zh' ? '将真实下发配置变更' : 'Real config push enabled')}</span>
                           <div className="flex items-center gap-1.5">
                             <span className="text-[10px] text-black/40">{t('concurrency')}:</span>
                             <select value={playbookConcurrency} onChange={e => setPlaybookConcurrency(Number(e.target.value))}
@@ -5711,23 +6111,39 @@ const App: React.FC = () => {
                           </div>
                         </div>
 
-                        {/* Action buttons */}
-                        <div className="flex gap-2 pt-2">
-                          <button onClick={previewPlaybook}
-                            className="flex items-center gap-2 px-4 py-2 border border-black/10 rounded-xl text-xs font-medium hover:bg-black/5 transition-all">
-                            <Search size={13} /> {t('previewCommands')}
-                          </button>
-                          <button
-                            onClick={executePlaybook}
-                            disabled={playbookDeviceIds.length === 0 || executionStatus === 'starting'}
-                            className="flex items-center gap-2 px-4 py-2 bg-[#00bceb] text-white rounded-xl text-xs font-medium hover:bg-[#0096bd] transition-all disabled:opacity-50 shadow-lg shadow-[#00bceb]/20"
-                          >
-                            <Play size={13} /> {executionStatus === 'starting'
-                              ? (language === 'zh' ? '启动中...' : 'Starting...')
-                              : (playbookDryRun
-                                ? (language === 'zh' ? 'Run Validation' : 'Run Validation')
-                                : (language === 'zh' ? 'Apply Changes' : 'Apply Changes'))}
-                          </button>
+                        {/* Action buttons — two explicit buttons, same UI as execute page */}
+                        <div className="pt-2 space-y-2">
+                          <p className="text-[10px] text-black/35 text-center">
+                            {language === 'zh' ? '推荐：先运行校验确认无误，再应用变更' : 'Recommended: validate first, then apply changes'}
+                          </p>
+                          <div className="grid grid-cols-3 gap-2">
+                            <button onClick={previewPlaybook}
+                              className="flex items-center justify-center gap-1 px-3 py-2.5 border border-black/10 rounded-xl text-xs font-bold hover:bg-black/5 transition-all">
+                              <Search size={12} /> {t('previewCommands')}
+                            </button>
+                            <button
+                              onClick={() => executePlaybook(true)}
+                              disabled={playbookDeviceIds.length === 0 || executionStatus === 'starting'}
+                              className={`px-3 py-2.5 rounded-xl text-xs font-bold transition-all border ${
+                                playbookDeviceIds.length === 0 || executionStatus === 'starting'
+                                  ? 'bg-black/5 text-black/25 border-black/8 cursor-not-allowed'
+                                  : 'bg-white text-black/70 border-black/15 hover:bg-black/5'
+                              }`}
+                            >
+                              {executionStatus === 'starting' && playbookDryRun ? (language === 'zh' ? '校验中...' : 'Validating...') : (language === 'zh' ? '运行校验' : 'Run Validation')}
+                            </button>
+                            <button
+                              onClick={() => executePlaybook(false)}
+                              disabled={playbookDeviceIds.length === 0 || executionStatus === 'starting'}
+                              className={`px-3 py-2.5 rounded-xl text-xs font-bold text-white transition-all ${
+                                playbookDeviceIds.length === 0 || executionStatus === 'starting'
+                                  ? 'bg-black/15 text-black/30 cursor-not-allowed'
+                                  : 'bg-[#00bceb] hover:bg-[#0096bd] shadow-lg shadow-[#00bceb]/20'
+                              }`}
+                            >
+                              {executionStatus === 'starting' && !playbookDryRun ? (language === 'zh' ? '下发中...' : 'Applying...') : (language === 'zh' ? '应用变更' : 'Apply Changes')}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -5849,32 +6265,13 @@ const App: React.FC = () => {
                       </div>
                       <div className="flex gap-2">
                         <button
-                          onClick={() => {
-                            setSelectedScenario(sc);
-                            setPlaybookVars({});
-                            setPlaybookPreview(null);
-                            setPlaybookPlatform(sc.default_platform || sc.supported_platforms?.[0] || 'cisco_ios');
-                            navigate('/automation/playbooks');
-                          }}
+                          onClick={() => { openQuickPlaybookModal(sc); navigate('/automation/execute'); }}
                           className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-[#00bceb] text-white rounded-xl text-xs font-medium hover:bg-[#0096bd] transition-all"
                         >
                           <Play size={12} /> {t('useScenario')}
                         </button>
                         <button
-                          onClick={async () => {
-                            const defPlatform = sc.default_platform || sc.supported_platforms?.[0] || 'cisco_ios';
-                            const resp = await fetch('/api/playbooks/preview', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ scenario_id: sc.id, platform: defPlatform, variables: {} }),
-                            });
-                            if (resp.ok) {
-                              setSelectedScenario(sc);
-                              setPlaybookPlatform(defPlatform);
-                              setPlaybookPreview(await resp.json());
-                              navigate('/automation/playbooks');
-                            }
-                          }}
+                          onClick={() => { openQuickPlaybookModal(sc); navigate('/automation/execute'); }}
                           className="px-3 py-2 border border-black/10 rounded-xl text-xs font-medium hover:bg-black/5 transition-all"
                         >
                           {t('previewCommands')}
@@ -5890,7 +6287,9 @@ const App: React.FC = () => {
           {/* ================================================================
                /automation/history — 执行历史 + 实时 WebSocket 流
           ================================================================ */}
-          {activeTab === 'automation' && automationPage === 'history' && (
+          {activeTab === 'automation' && automationPage === 'history' && (() => {
+            const isZh = language === 'zh';
+            return (
             <div className="h-full flex flex-col overflow-hidden">
               <div className="flex justify-between items-end mb-5 flex-shrink-0">
                 <div>
@@ -5906,10 +6305,53 @@ const App: React.FC = () => {
               <div className="flex-1 grid grid-cols-1 md:grid-cols-12 gap-5 overflow-hidden">
                 {/* Left: Execution list */}
                 <div className="md:col-span-4 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
-                  <div className="p-4 border-b border-black/5 bg-black/[0.01]">
-                    <h3 className="text-[10px] font-bold uppercase tracking-widest text-black/40">
-                      {playbookExecutions.length} {t('executions')}
-                    </h3>
+                  {/* Header with count + search + filters */}
+                  <div className="border-b border-black/5 bg-black/[0.01]">
+                    <div className="px-4 pt-3 pb-2 flex items-center justify-between">
+                      <h3 className="text-[10px] font-bold uppercase tracking-widest text-black/40">
+                        {playbookHistoryTotal > 0 ? `${playbookHistoryTotal} ${t('executions')}` : `${playbookExecutions.length} ${t('executions')}`}
+                      </h3>
+                    </div>
+                    {/* Search bar */}
+                    <div className="px-3 pb-2">
+                      <div className="relative">
+                        <Search size={11} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-black/25" />
+                        <input
+                          type="text"
+                          value={playbookHistoryScenarioSearch}
+                          onChange={e => {
+                            setPlaybookHistoryScenarioSearch(e.target.value);
+                            setPlaybookHistoryPage(1);
+                            loadPlaybookHistory(1, playbookHistoryStatusFilter, e.target.value);
+                          }}
+                          placeholder={isZh ? '搜索场景名称...' : 'Search scenario...'}
+                          className="w-full text-[11px] pl-7 pr-7 py-1.5 rounded-lg bg-black/[0.03] border border-black/5 focus:outline-none focus:border-black/15 focus:bg-white transition-all placeholder:text-black/20"
+                        />
+                        {playbookHistoryScenarioSearch && (
+                          <button onClick={() => { setPlaybookHistoryScenarioSearch(''); setPlaybookHistoryPage(1); loadPlaybookHistory(1, playbookHistoryStatusFilter, ''); }}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-black/25 hover:text-black/50">
+                            <X size={11} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {/* Status filter pills */}
+                    <div className="px-3 pb-2.5 flex items-center gap-1 flex-wrap">
+                      {[
+                        { key: 'all', label: isZh ? '全部' : 'All', cls: 'bg-black/10 text-black/70' },
+                        { key: 'success', label: '✓', cls: 'bg-emerald-100 text-emerald-700' },
+                        { key: 'failed', label: '✗', cls: 'bg-red-100 text-red-700' },
+                        { key: 'partial_failure', label: isZh ? '部分' : 'Partial', cls: 'bg-amber-100 text-amber-700' },
+                        { key: 'dry_run_complete', label: 'DRY', cls: 'bg-cyan-100 text-cyan-700' },
+                      ].map(f => (
+                        <button key={f.key}
+                          onClick={() => { setPlaybookHistoryStatusFilter(f.key); setPlaybookHistoryPage(1); loadPlaybookHistory(1, f.key, playbookHistoryScenarioSearch); }}
+                          className={`text-[9px] font-bold px-2 py-0.5 rounded-md transition-all ${
+                            playbookHistoryStatusFilter === f.key ? `${f.cls} shadow-sm` : 'text-black/30 hover:bg-black/[0.04]'
+                          }`}
+                        >{f.label}</button>
+                      ))}
+                    </div>
                   </div>
                   <div className="flex-1 overflow-auto">
                     {playbookExecutions.length === 0 ? (
@@ -5919,36 +6361,114 @@ const App: React.FC = () => {
                       </div>
                     ) : playbookExecutions.map(exec => {
                       const isLive = exec.id === activeExecutionId && executionStatus === 'running';
+                      const accentColor = exec.status === 'success' ? 'bg-emerald-400' :
+                        exec.status === 'running' || exec.status === 'pending' ? 'bg-blue-400' :
+                        exec.status === 'dry_run_complete' ? 'bg-amber-400' : 'bg-red-400';
+                      const devCount = exec.total_devices || (() => { try { return JSON.parse(exec.device_ids || '[]').length; } catch { return 0; } })();
                       return (
                         <button
                           key={exec.id}
-                          onClick={() => setActiveExecutionId(exec.id)}
-                          className={`w-full p-4 text-left border-b border-black/5 transition-all ${
-                            activeExecutionId === exec.id ? 'bg-black/[0.03]' : 'hover:bg-black/[0.01]'
+                          onClick={async () => {
+                            setActiveExecutionId(exec.id);
+                            setSelectedExecutionDetail(null);
+                            setSelectedExecDevices([]);
+                            setSelectedExecDevicesTotal(0);
+                            setSelectedExecDevicesPage(1);
+                            setSelectedExecDevicesStatusFilter('all');
+                            setSelectedDeviceDetail(null);
+                            if (executionStatus !== 'running') {
+                              if (exec._type === 'job') {
+                                setSelectedExecutionDetail(exec);
+                              } else {
+                                setSelectedExecutionLoading(true);
+                                try {
+                                  const r = await fetch(`/api/playbooks/${exec.id}/summary`);
+                                  if (r.ok) setSelectedExecutionDetail(await r.json());
+                                  await loadExecDevices(exec.id, 1, 'all', '');
+                                } finally {
+                                  setSelectedExecutionLoading(false);
+                                }
+                              }
+                            }
+                          }}
+                          className={`w-full text-left border-b border-black/5 transition-all flex group/row ${
+                            activeExecutionId === exec.id ? 'bg-black/[0.04]' : 'hover:bg-black/[0.015]'
                           }`}
                         >
-                          <div className="flex items-center gap-2">
-                            {isLive && <span className="w-2 h-2 rounded-full bg-[#00bceb] animate-pulse" />}
-                            <span className="text-xs font-bold">{exec.scenario_name}</span>
-                            <span className={`ml-auto text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${
-                              exec.status === 'success' ? 'bg-emerald-50 text-emerald-600' :
-                              exec.status === 'running' || exec.status === 'pending' ? 'bg-blue-50 text-blue-600' :
-                              exec.status === 'dry_run_complete' ? 'bg-amber-50 text-amber-600' :
-                              'bg-red-50 text-red-600'
-                            }`}>{exec.dry_run ? 'DRY-RUN' : exec.status}</span>
-                          </div>
-                          <div className="flex items-center gap-3 mt-1 text-[10px] text-black/40">
-                            <span>{JSON.parse(exec.device_ids || '[]').length} devices</span>
-                            <span>⏱ {new Date(exec.created_at).toLocaleString()}</span>
+                          {/* Left accent bar */}
+                          <div className={`w-1 shrink-0 ${activeExecutionId === exec.id ? accentColor : 'bg-transparent'}`} />
+                          <div className="flex-1 p-3.5 pl-3 min-w-0">
+                            <div className="flex items-center gap-2">
+                              {isLive && <span className="w-2 h-2 rounded-full bg-[#00bceb] animate-pulse shrink-0" />}
+                              <span className="text-xs font-bold truncate">{exec.scenario_name}</span>
+                              {exec._type === 'job' && <span className="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded bg-cyan-50 text-cyan-600 shrink-0">DIRECT</span>}
+                              <span className={`ml-auto shrink-0 text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${
+                                exec.status === 'success' ? 'bg-emerald-50 text-emerald-600' :
+                                exec.status === 'running' || exec.status === 'pending' ? 'bg-blue-50 text-blue-600' :
+                                exec.status === 'dry_run_complete' ? 'bg-amber-50 text-amber-600' :
+                                'bg-red-50 text-red-600'
+                              }`}>{exec._type === 'job' ? exec.status : (exec.dry_run ? 'DRY-RUN' : exec.status?.replace(/_/g, ' '))}</span>
+                              {/* Delete button — visible on hover */}
+                              {exec._type !== 'job' && !isLive && (
+                                <button
+                                  title={isZh ? '删除此记录' : 'Delete this record'}
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    if (!confirm(isZh ? `确定删除「${exec.scenario_name}」的执行记录？` : `Delete execution "${exec.scenario_name}"?`)) return;
+                                    try {
+                                      const r = await fetch(`/api/playbooks/${exec.id}`, { method: 'DELETE' });
+                                      if (r.ok) {
+                                        showToast(isZh ? '已删除' : 'Deleted', 'success');
+                                        if (activeExecutionId === exec.id) { setActiveExecutionId(null); setSelectedExecutionDetail(null); }
+                                        loadPlaybookHistory();
+                                      } else { showToast(isZh ? '删除失败' : 'Delete failed', 'error'); }
+                                    } catch { showToast(isZh ? '删除失败' : 'Delete failed', 'error'); }
+                                  }}
+                                  className="ml-1 shrink-0 p-1 rounded-md text-black/0 group-hover/row:text-black/25 hover:!text-red-500 hover:!bg-red-50 transition-all"
+                                >
+                                  <Trash2 size={11} />
+                                </button>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2.5 mt-1.5 text-[10px] text-black/35">
+                              {exec._type === 'job'
+                                ? <span className="truncate">{devices.find((d: any) => d.id === exec.device_id)?.hostname || `Device #${exec.device_id}`}</span>
+                                : <span className="flex items-center gap-0.5"><Server size={9} />{devCount}</span>
+                              }
+                              <span className="text-black/15">·</span>
+                              <span className="truncate">{new Date(exec.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                              {exec.success_count > 0 && <span className="text-emerald-500">✓{exec.success_count}</span>}
+                              {exec.failed_count > 0 && <span className="text-red-500">✗{exec.failed_count}</span>}
+                            </div>
                           </div>
                         </button>
                       );
                     })}
                   </div>
+                  {/* History pagination */}
+                  {playbookHistoryTotal > 20 && (
+                    <div className="p-3 border-t border-black/5 flex items-center justify-center gap-2">
+                      <button
+                        disabled={playbookHistoryPage <= 1}
+                        onClick={() => { const p = playbookHistoryPage - 1; setPlaybookHistoryPage(p); loadPlaybookHistory(p); }}
+                        className="px-2 py-1 text-[10px] rounded border border-black/10 disabled:opacity-30"
+                      >
+                        <ChevronLeft size={10} />
+                      </button>
+                      <span className="text-[10px] text-black/40">{playbookHistoryPage} / {Math.ceil(playbookHistoryTotal / 20)}</span>
+                      <button
+                        disabled={playbookHistoryPage * 20 >= playbookHistoryTotal}
+                        onClick={() => { const p = playbookHistoryPage + 1; setPlaybookHistoryPage(p); loadPlaybookHistory(p); }}
+                        className="px-2 py-1 text-[10px] rounded border border-black/10 disabled:opacity-30"
+                      >
+                        <ChevronRight size={10} />
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Right: Live output / execution details */}
-                <div className="md:col-span-8 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
+                <div className="md:col-span-8 flex flex-col bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden relative">
                   {activeExecutionId && executionStatus === 'running' ? (
                     /* ── Live WebSocket stream ── */
                     <div className="flex flex-col h-full">
@@ -5996,63 +6516,281 @@ const App: React.FC = () => {
                   ) : activeExecutionId ? (
                     /* ── Static result view ── */
                     (() => {
-                      const exec = playbookExecutions.find((e: any) => e.id === activeExecutionId);
+                      if (selectedExecutionLoading) return (
+                        <div className="h-full flex items-center justify-center text-black/30">
+                          <RotateCcw size={20} className="animate-spin" />
+                        </div>
+                      );
+                      const exec = selectedExecutionDetail || playbookExecutions.find((e: any) => e.id === activeExecutionId);
                       if (!exec) return <div className="p-8 text-center text-black/20 text-sm">{t('noData')}</div>;
-                      const results = (() => { try { return JSON.parse(exec.results_json || '{}'); } catch { return {}; } })();
-                      const deviceIds = (() => { try { return JSON.parse(exec.device_ids || '[]'); } catch { return []; } })();
+
+                      // Direct execution (job) detail view
+                      if (exec._type === 'job') {
+                        const dev = devices.find((d: any) => d.id === exec.device_id);
+                        return (
+                          <div className="flex flex-col h-full">
+                            <div className="p-4 border-b border-black/5 bg-black/[0.01]">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h3 className="text-sm font-bold">{exec.task_name}</h3>
+                                <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-cyan-50 text-cyan-600">DIRECT</span>
+                                <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${
+                                  exec.status === 'success' ? 'bg-emerald-50 text-emerald-600' :
+                                  exec.status === 'failed' || exec.status === 'blocked' ? 'bg-red-50 text-red-600' :
+                                  exec.status === 'running' ? 'bg-blue-50 text-blue-600' :
+                                  'bg-gray-50 text-gray-600'
+                                }`}>{exec.status}</span>
+                              </div>
+                              <p className="text-[10px] text-black/40 mt-0.5">
+                                {dev?.hostname || `Device #${exec.device_id}`}{dev?.ip_address ? ` (${dev.ip_address})` : ''} · {new Date(exec.created_at).toLocaleString()}
+                              </p>
+                            </div>
+                            <div className="flex-1 overflow-auto p-4">
+                              <pre className="text-[11px] font-mono text-black/60 bg-black/[0.02] rounded-xl p-3 whitespace-pre-wrap min-h-full">{exec.output || 'No output'}</pre>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      const totalDevices = exec.total_devices || (() => { try { return JSON.parse(exec.device_ids || '[]').length; } catch { return 0; } })();
+                      const successCount = exec.success_count || 0;
+                      const failedCount = exec.failed_count || 0;
+                      const partialCount = exec.partial_count || 0;
+                      const durationSec = exec.duration_ms ? (exec.duration_ms / 1000).toFixed(1) : null;
+                      const statusBadge = exec.status === 'success' ? 'bg-emerald-50 text-emerald-600'
+                        : exec.status === 'dry_run_complete' ? 'bg-amber-50 text-amber-600'
+                        : 'bg-red-50 text-red-600';
                       return (
                         <div className="flex flex-col h-full">
-                          <div className="p-4 border-b border-black/5 bg-black/[0.01]">
-                            <div className="flex items-center gap-3">
-                              <h3 className="text-sm font-bold">{exec.scenario_name}</h3>
-                              <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${
-                                exec.status === 'success' ? 'bg-emerald-50 text-emerald-600' :
-                                exec.status === 'dry_run_complete' ? 'bg-amber-50 text-amber-600' :
-                                'bg-red-50 text-red-600'
-                              }`}>{exec.status}</span>
+                          {/* ── Header with stats ribbon ── */}
+                          <div className="p-5 border-b border-black/5 bg-gradient-to-r from-black/[0.015] to-transparent">
+                            <div className="flex items-center gap-3 mb-2">
+                              <h3 className="text-base font-bold tracking-tight">{exec.scenario_name}</h3>
+                              <span className={`text-[9px] font-bold uppercase px-2.5 py-1 rounded-full ${statusBadge}`}>{exec.dry_run ? 'DRY-RUN' : exec.status?.replace(/_/g, ' ')}</span>
                             </div>
-                            <p className="text-[10px] text-black/40 mt-0.5">
-                              {deviceIds.length} devices · {exec.author} · {new Date(exec.created_at).toLocaleString()}
-                            </p>
+                            <div className="flex items-center gap-4 text-[10px] text-black/40">
+                              <span className="flex items-center gap-1"><Server size={10} />{totalDevices} {isZh ? '台设备' : 'devices'}</span>
+                              <span className="flex items-center gap-1"><User size={10} />{exec.author}</span>
+                              <span className="flex items-center gap-1"><Clock size={10} />{new Date(exec.created_at).toLocaleString()}</span>
+                              {durationSec && <span className="flex items-center gap-1">⏱ {durationSec}s</span>}
+                            </div>
+                            {/* Stats mini-cards */}
+                            {totalDevices > 0 && (
+                              <div className="flex gap-2 mt-3">
+                                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-100">
+                                  <CheckCircle2 size={11} className="text-emerald-500" />
+                                  <span className="text-[11px] font-bold text-emerald-700">{successCount}</span>
+                                  <span className="text-[9px] text-emerald-500">{isZh ? '成功' : 'OK'}</span>
+                                </div>
+                                {failedCount > 0 && (
+                                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 border border-red-100">
+                                    <XCircle size={11} className="text-red-500" />
+                                    <span className="text-[11px] font-bold text-red-700">{failedCount}</span>
+                                    <span className="text-[9px] text-red-500">{isZh ? '失败' : 'Failed'}</span>
+                                  </div>
+                                )}
+                                {partialCount > 0 && (
+                                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-100">
+                                    <AlertTriangle size={11} className="text-amber-500" />
+                                    <span className="text-[11px] font-bold text-amber-700">{partialCount}</span>
+                                    <span className="text-[9px] text-amber-500">{isZh ? '部分' : 'Partial'}</span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          {/* Status filter toolbar */}
+                          <div className="px-4 py-2.5 border-b border-black/5 flex items-center gap-1.5 flex-wrap bg-black/[0.008]">
+                            {[
+                              { key: 'all', label: isZh ? '全部' : 'All', activeCls: 'bg-black/10 text-black/70', icon: null },
+                              { key: 'success', label: isZh ? '成功' : 'Success', activeCls: 'bg-emerald-100 text-emerald-700', icon: '✓' },
+                              { key: 'failed', label: isZh ? '失败' : 'Failed', activeCls: 'bg-red-100 text-red-700', icon: '✗' },
+                              { key: 'error', label: isZh ? '错误' : 'Error', activeCls: 'bg-orange-100 text-orange-700', icon: '!' },
+                              { key: 'post_check_failed', label: isZh ? '检查失败' : 'Check Failed', activeCls: 'bg-amber-100 text-amber-700', icon: '⚠' },
+                            ].map(st => (
+                              <button key={st.key}
+                                onClick={async () => {
+                                  setSelectedExecDevicesStatusFilter(st.key);
+                                  setSelectedExecDevicesPage(1);
+                                  await loadExecDevices(exec.id, 1, st.key, '');
+                                }}
+                                className={`text-[10px] font-semibold px-2.5 py-1 rounded-lg transition-all flex items-center gap-1 ${
+                                  selectedExecDevicesStatusFilter === st.key
+                                    ? `${st.activeCls} shadow-sm`
+                                    : 'text-black/35 hover:bg-black/[0.04] hover:text-black/50'
+                                }`}
+                              >
+                                {st.icon && <span className="text-[9px]">{st.icon}</span>}
+                                {st.key === 'all' ? `${st.label} (${selectedExecDevicesTotal})` : st.label}
+                              </button>
+                            ))}
                           </div>
                           <div className="flex-1 overflow-auto p-4 space-y-3">
-                            {deviceIds.map((did: string) => {
-                              const r = results[did];
-                              const dev = devices.find(d => d.id === did);
+                            {selectedExecDevicesLoading ? (
+                              <div className="flex items-center justify-center py-8">
+                                <RotateCcw size={16} className="animate-spin text-black/30" />
+                              </div>
+                            ) : selectedExecDevices.length === 0 ? (
+                              <div className="text-center py-12 text-black/20">
+                                <Search size={24} strokeWidth={1} className="mx-auto mb-2 text-black/15" />
+                                <p className="text-xs">{isZh ? '没有匹配的设备' : 'No matching devices'}</p>
+                              </div>
+                            ) : selectedExecDevices.map((device: any) => {
+                              const isOk = device.status === 'success';
+                              const borderCls = isOk ? 'border-emerald-100 hover:border-emerald-200' : 'border-red-100 hover:border-red-200';
+                              const bgCls = isOk ? 'bg-emerald-50/30' : 'bg-red-50/30';
+                              const iconBgCls = isOk ? 'bg-emerald-100' : 'bg-red-100';
+                              const statusBadgeCls = isOk ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600';
                               return (
-                                <div key={did} className="rounded-xl border border-black/5 overflow-hidden">
-                                  <div className="flex items-center justify-between px-4 py-2.5 bg-black/[0.02] border-b border-black/5">
-                                    <div className="flex items-center gap-2">
-                                      {r?.status === 'success' ? <CheckCircle size={14} className="text-emerald-500" /> : <XCircle size={14} className="text-red-500" />}
-                                      <span className="text-xs font-bold">{dev?.hostname || did}</span>
+                              <button key={device.device_id}
+                                onClick={async () => {
+                                  setSelectedDeviceDetailLoading(true);
+                                  setSelectedDeviceDetail(null);
+                                  try {
+                                    const r = await fetch(`/api/playbooks/${exec.id}/devices/${device.device_id}`);
+                                    if (r.ok) setSelectedDeviceDetail(await r.json());
+                                  } finally {
+                                    setSelectedDeviceDetailLoading(false);
+                                  }
+                                }}
+                                className={`w-full rounded-xl border overflow-hidden text-left transition-all group hover:shadow-md ${borderCls}`}
+                              >
+                                <div className={`flex items-center justify-between px-4 py-3 ${bgCls}`}>
+                                  <div className="flex items-center gap-2.5">
+                                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${iconBgCls}`}>
+                                      {isOk
+                                        ? <CheckCircle2 size={13} className="text-emerald-600" />
+                                        : <XCircle size={13} className="text-red-600" />
+                                      }
                                     </div>
-                                    <span className={`text-[9px] font-bold uppercase ${r?.status === 'success' ? 'text-emerald-500' : 'text-red-500'}`}>{r?.status || 'unknown'}</span>
+                                    <div>
+                                      <span className="text-xs font-bold text-black/75 block">{device.hostname}</span>
+                                      {device.ip_address && <span className="text-[10px] text-black/30">{device.ip_address}</span>}
+                                    </div>
                                   </div>
-                                  {r?.phases && Object.entries(r.phases).map(([phase, data]: [string, any]) => (
-                                    <div key={phase} className="px-4 py-2 border-b border-black/5 last:border-0">
-                                      <p className="text-[10px] font-bold uppercase text-black/30 mb-1">{phase.replace('_', ' ')}</p>
-                                      {data?.output && (
-                                        <pre className="text-[11px] font-mono text-black/60 bg-black/[0.02] rounded-lg p-2 max-h-32 overflow-auto whitespace-pre-wrap">{typeof data.output === 'string' ? data.output : JSON.stringify(data.output, null, 2)}</pre>
-                                      )}
-                                    </div>
-                                  ))}
+                                  <div className="flex items-center gap-2.5">
+                                    {device.duration_ms > 0 && (
+                                      <span className="text-[10px] text-black/25 flex items-center gap-0.5">
+                                        <Clock size={9} />{(device.duration_ms / 1000).toFixed(1)}s
+                                      </span>
+                                    )}
+                                    <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${statusBadgeCls}`}>
+                                      {device.status?.replace(/_/g, ' ')}
+                                    </span>
+                                    <ChevronRight size={12} className="text-black/15 group-hover:text-black/30 transition-colors" />
+                                  </div>
                                 </div>
+                                {device.error_message && (
+                                  <div className="px-4 py-2 bg-red-50/50 border-t border-red-100/50">
+                                    <p className="text-[10px] text-red-600 font-mono truncate flex items-center gap-1">
+                                      <AlertCircle size={9} className="shrink-0" />{device.error_message}
+                                    </p>
+                                  </div>
+                                )}
+                              </button>
                               );
                             })}
+                            {/* Device list pagination */}
+                            {selectedExecDevicesTotal > 20 && (
+                              <div className="flex justify-center gap-2 pt-2">
+                                <button
+                                  disabled={selectedExecDevicesPage <= 1}
+                                  onClick={() => { const p = selectedExecDevicesPage - 1; setSelectedExecDevicesPage(p); loadExecDevices(exec.id, p, selectedExecDevicesStatusFilter); }}
+                                  className="px-2 py-1 text-xs rounded border border-black/10 disabled:opacity-30"
+                                ><ChevronLeft size={12} /></button>
+                                <span className="text-xs text-black/40 px-2 py-1">{selectedExecDevicesPage} / {Math.ceil(selectedExecDevicesTotal / 20)}</span>
+                                <button
+                                  disabled={selectedExecDevicesPage * 20 >= selectedExecDevicesTotal}
+                                  onClick={() => { const p = selectedExecDevicesPage + 1; setSelectedExecDevicesPage(p); loadExecDevices(exec.id, p, selectedExecDevicesStatusFilter); }}
+                                  className="px-2 py-1 text-xs rounded border border-black/10 disabled:opacity-30"
+                                ><ChevronRight size={12} /></button>
+                              </div>
+                            )}
                           </div>
+                          {/* Device detail overlay */}
+                          {(selectedDeviceDetail || selectedDeviceDetailLoading) && (
+                            <div className="absolute inset-0 bg-white z-10 flex flex-col rounded-2xl">
+                              <div className="p-4 border-b border-black/5 flex items-center gap-3 bg-gradient-to-r from-black/[0.015] to-transparent">
+                                <button onClick={() => setSelectedDeviceDetail(null)} className="p-1.5 rounded-lg hover:bg-black/5 transition-colors" title="Back">
+                                  <ChevronLeft size={14} />
+                                </button>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm font-bold truncate">{selectedDeviceDetail?.hostname || '...'}</span>
+                                    {selectedDeviceDetail?.ip_address && <span className="text-[10px] text-black/30">{selectedDeviceDetail.ip_address}</span>}
+                                    {selectedDeviceDetail?.status && (
+                                      <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${
+                                        selectedDeviceDetail.status === 'success' ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'
+                                      }`}>{selectedDeviceDetail.status?.replace(/_/g, ' ')}</span>
+                                    )}
+                                  </div>
+                                  {selectedDeviceDetail?.duration_ms > 0 && (
+                                    <p className="text-[10px] text-black/30 mt-0.5">⏱ {(selectedDeviceDetail.duration_ms / 1000).toFixed(1)}s</p>
+                                  )}
+                                </div>
+                              </div>
+                              {selectedDeviceDetailLoading ? (
+                                <div className="flex-1 flex items-center justify-center"><RotateCcw size={16} className="animate-spin text-black/30" /></div>
+                              ) : selectedDeviceDetail && (
+                                <div className="flex-1 overflow-auto p-4 space-y-3">
+                                  {selectedDeviceDetail.error_message && (
+                                    <div className="rounded-xl border border-red-100 bg-red-50/60 p-4 flex items-start gap-3">
+                                      <div className="w-8 h-8 rounded-lg bg-red-100 flex items-center justify-center shrink-0">
+                                        <AlertCircle size={14} className="text-red-600" />
+                                      </div>
+                                      <div className="min-w-0">
+                                        <p className="text-[10px] font-bold text-red-700 mb-1">{isZh ? '错误信息' : 'Error Message'}</p>
+                                        <pre className="text-[11px] font-mono text-red-600 whitespace-pre-wrap break-all">{selectedDeviceDetail.error_message}</pre>
+                                      </div>
+                                    </div>
+                                  )}
+                                  {(() => {
+                                    const phases = (() => { try { return JSON.parse(selectedDeviceDetail.phases_json || '{}'); } catch { return {}; } })();
+                                    return Object.entries(phases).map(([phase, data]: [string, any]) => (
+                                      <div key={phase} className="rounded-xl border border-black/5 overflow-hidden">
+                                        <div className="flex items-center justify-between px-4 py-2.5 bg-black/[0.02] border-b border-black/5">
+                                          <p className="text-[10px] font-bold uppercase tracking-wider text-black/40">{phase.replace(/_/g, ' ')}</p>
+                                          {data?.success !== undefined && (
+                                            <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                                              data.success ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'
+                                            }`}>
+                                              {data.success ? '✓ Pass' : '✗ Fail'}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="px-4 py-3">
+                                          {data?.commands && (
+                                            <p className="text-[10px] text-black/30 mb-1.5">{Array.isArray(data.commands) ? data.commands.length : 0} {isZh ? '条命令' : 'commands'}</p>
+                                          )}
+                                          {data?.output ? (
+                                            <pre className="text-[11px] font-mono text-black/60 bg-black/[0.02] rounded-lg p-3 max-h-48 overflow-auto whitespace-pre-wrap">{typeof data.output === 'string' ? data.output : JSON.stringify(data.output, null, 2)}</pre>
+                                          ) : (
+                                            <p className="text-[10px] text-black/20 italic">{isZh ? '无输出' : 'No output'}</p>
+                                          )}
+                                        </div>
+                                      </div>
+                                    ));
+                                  })()}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       );
                     })()
                   ) : (
                     <div className="h-full flex flex-col items-center justify-center text-black/20 p-8">
-                      <History size={36} strokeWidth={1} />
-                      <p className="mt-3 text-sm">{t('selectExecutionHint')}</p>
+                      <div className="w-16 h-16 rounded-2xl bg-black/[0.03] flex items-center justify-center mb-4">
+                        <History size={28} strokeWidth={1} className="text-black/15" />
+                      </div>
+                      <p className="text-sm font-medium text-black/25">{t('selectExecutionHint')}</p>
+                      <p className="text-[11px] text-black/15 mt-1">{isZh ? '点击左侧列表查看详情' : 'Click an item from the list to view details'}</p>
                     </div>
                   )}
                 </div>
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {activeTab === 'compliance' && (
             <ComplianceTab
@@ -7248,27 +7986,61 @@ const App: React.FC = () => {
             className="w-full max-w-3xl max-h-[86vh] rounded-3xl bg-white shadow-2xl border border-black/8 overflow-hidden flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-6 py-5 border-b border-black/6 bg-[linear-gradient(135deg,rgba(0,188,235,0.08),rgba(0,82,122,0.04))] flex items-start justify-between gap-4">
-              <div>
-                <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-[#0087a9]">
-                  {language === 'zh' ? 'Direct Execution' : 'Direct Execution'}
-                </p>
-                <h3 className="mt-1 text-xl font-semibold text-black/85">
-                  {language === 'zh' ? '下发自定义配置命令' : 'Push Custom Config Commands'}
-                </h3>
-                <p className="mt-1 text-sm text-black/45">
-                  {language === 'zh'
-                    ? '用于临时下发自定义 show/config 命令，系统会根据命令内容自动判断是否进入配置模式。'
-                    : 'Run ad-hoc show/config commands. The backend auto-detects whether configuration mode is required.'}
-                </p>
+            <div className="px-6 py-5 border-b border-black/6 bg-[linear-gradient(135deg,rgba(0,188,235,0.08),rgba(0,82,122,0.04))]">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-[#0087a9]">
+                    {language === 'zh' ? 'Direct Execution' : 'Direct Execution'}
+                  </p>
+                  <h3 className="mt-1 text-xl font-semibold text-black/85">
+                    {language === 'zh' ? '自定义命令' : 'Custom Command'}
+                  </h3>
+                </div>
+                <button
+                  onClick={closeCustomCommandModal}
+                  title={language === 'zh' ? '关闭' : 'Close'}
+                  className="text-black/35 hover:text-black/70 transition-colors mt-1"
+                >
+                  <X size={20} />
+                </button>
               </div>
-              <button
-                onClick={closeCustomCommandModal}
-                title={language === 'zh' ? '关闭' : 'Close'}
-                className="text-black/35 hover:text-black/70 transition-colors"
-              >
-                <X size={20} />
-              </button>
+              {/* Mode toggle — primary control, always visible in header */}
+              <div className="mt-4 flex items-center gap-3">
+                <span className="text-[11px] font-semibold text-black/40">
+                  {language === 'zh' ? '执行模式' : 'Mode'}
+                </span>
+                <div className="flex items-center bg-black/[0.06] rounded-xl p-[3px] gap-[3px]">
+                  <button
+                    onClick={() => setCustomCommandMode('query')}
+                    className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[12px] font-semibold transition-all ${
+                      customCommandMode === 'query'
+                        ? 'bg-white text-[#0087a9] shadow-sm shadow-black/10'
+                        : 'text-black/40 hover:text-black/60'
+                    }`}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" className="opacity-80"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.8"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+                    {language === 'zh' ? '查看' : 'Query'}
+                  </button>
+                  <button
+                    onClick={() => setCustomCommandMode('config')}
+                    className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[12px] font-semibold transition-all ${
+                      customCommandMode === 'config'
+                        ? 'bg-[#005b75] text-white shadow-sm shadow-[#005b75]/30'
+                        : 'text-black/40 hover:text-black/60'
+                    }`}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" className="opacity-80"><path d="M2 4h12M2 8h8M2 12h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+                    {language === 'zh' ? '配置' : 'Config'}
+                  </button>
+                </div>
+                <span className={`text-[11px] font-medium transition-colors ${
+                  customCommandMode === 'query' ? 'text-sky-600' : 'text-amber-600'
+                }`}>
+                  {customCommandMode === 'query'
+                    ? (language === 'zh' ? 'Exec 模式 — 只读，不改变配置' : 'Exec mode — read-only, no changes')
+                    : (language === 'zh' ? 'Config 模式 — 自动进入配置视图' : 'Config mode — enters config view automatically')}
+                </span>
+              </div>
             </div>
 
             <div className="flex-1 min-h-0 overflow-auto p-6 space-y-5 bg-[#fbfdff]">
@@ -7276,36 +8048,54 @@ const App: React.FC = () => {
                 <div className="space-y-4">
                   <div className="rounded-2xl border border-black/8 bg-white p-4 shadow-sm">
                     <div className="flex items-center justify-between gap-3 mb-3">
-                      <div>
-                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-black/35">
-                          {language === 'zh' ? '命令内容' : 'Command Content'}
-                        </p>
-                        <p className="mt-1 text-xs text-black/40">
-                          {language === 'zh'
-                            ? '支持多行命令，按行发送。`show/display/dis/ping` 命令不会进入配置模式。'
-                            : 'Supports multi-line commands. `show/display/dis/ping` commands stay in exec mode.'}
-                        </p>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-black/35">
+                        {language === 'zh' ? '命令内容' : 'Command Content'}
+                      </p>
+                      <div className="flex items-center gap-1.5">
+                        {customCommandMode === 'query' && (
+                          <button
+                            disabled={!customCommand.trim()}
+                            onClick={() => {
+                              const label = prompt(language === 'zh' ? '给这个查询起个名字：' : 'Name this query:', '');
+                              if (!label) return;
+                              try {
+                                const saved: { icon: string; label: string; labelEn: string; cmds: string }[] = JSON.parse(localStorage.getItem('quickQuerySaved') || '[]');
+                                saved.push({ icon: '⭐', label, labelEn: label, cmds: customCommand.trim() });
+                                localStorage.setItem('quickQuerySaved', JSON.stringify(saved));
+                                showToast(language === 'zh' ? '已保存到快捷查询' : 'Saved to Quick Query', 'success');
+                              } catch { /* ignore */ }
+                            }}
+                            className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold border transition-all ${customCommand.trim()
+                              ? 'border-[#00bceb]/30 text-[#0087a9] hover:bg-[#00bceb]/10' : 'border-black/8 text-black/25 cursor-not-allowed'}`}
+                          >
+                            {language === 'zh' ? '+ 快捷查询' : '+ Quick Query'}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => saveFavorite(customCommand)}
+                          disabled={!customCommand.trim()}
+                          className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold border transition-all ${customCommand.trim()
+                            ? (isFavorited(customCommand)
+                              ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                              : 'border-black/10 text-black/60 hover:bg-black/5')
+                            : 'border-black/8 text-black/25 cursor-not-allowed'}`}
+                        >
+                          {isFavorited(customCommand)
+                            ? (language === 'zh' ? '取消收藏' : 'Unfavorite')
+                            : (language === 'zh' ? '收藏命令' : 'Save Favorite')}
+                        </button>
                       </div>
-                      <button
-                        onClick={() => saveFavorite(customCommand)}
-                        disabled={!customCommand.trim()}
-                        className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold border transition-all ${customCommand.trim()
-                          ? (isFavorited(customCommand)
-                            ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100'
-                            : 'border-black/10 text-black/60 hover:bg-black/5')
-                          : 'border-black/8 text-black/25 cursor-not-allowed'}`}
-                      >
-                        {isFavorited(customCommand)
-                          ? (language === 'zh' ? '取消收藏' : 'Unfavorite')
-                          : (language === 'zh' ? '收藏命令' : 'Save Favorite')}
-                      </button>
                     </div>
                     <textarea
                       value={customCommand}
                       onChange={(e) => setCustomCommand(e.target.value)}
-                      placeholder={language === 'zh'
-                        ? '例如:\ninterface Vlan100\n description Branch Office\n ip address 10.10.0.1 255.255.255.0'
-                        : 'Example:\ninterface Vlan100\n description Branch Office\n ip address 10.10.0.1 255.255.255.0'}
+                      placeholder={customCommandMode === 'query'
+                        ? (language === 'zh'
+                          ? '例如:\nshow ip interface brief\nshow version\ndisplay version'
+                          : 'Example:\nshow ip interface brief\nshow version\ndisplay version')
+                        : (language === 'zh'
+                          ? '例如:\ninterface Vlan100\n description Branch Office\n ip address 10.10.0.1 255.255.255.0'
+                          : 'Example:\ninterface Vlan100\n description Branch Office\n ip address 10.10.0.1 255.255.255.0')}
                       className="w-full min-h-[260px] resize-y rounded-2xl border border-black/10 bg-[#0c1622] px-4 py-3 text-[13px] leading-6 text-[#d9f3ff] font-mono outline-none focus:border-[#00bceb]/50"
                     />
                   </div>
@@ -7344,23 +8134,38 @@ const App: React.FC = () => {
                       {language === 'zh' ? '执行目标' : 'Execution Target'}
                     </p>
                     <div className="rounded-xl border border-black/8 bg-black/[0.02] px-3 py-3">
-                      <p className="text-xs font-semibold text-black/75">
-                        {batchMode
-                          ? (language === 'zh' ? `批量模式 · ${batchDeviceIds.length} 台设备` : `Batch mode · ${batchDeviceIds.length} devices`)
-                          : (selectedDevice
-                            ? `${selectedDevice.hostname} (${selectedDevice.ip_address})`
-                            : (language === 'zh' ? '未选择设备' : 'No device selected'))}
-                      </p>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-semibold text-black/75">
+                          {batchMode
+                            ? (language === 'zh' ? `批量模式 · ${batchDeviceIds.length} 台设备` : `Batch mode · ${batchDeviceIds.length} devices`)
+                            : (selectedDevice
+                              ? `${selectedDevice.hostname} (${selectedDevice.ip_address})`
+                              : (language === 'zh' ? '未选择设备' : 'No device selected'))}
+                        </p>
+                        {!batchMode && selectedDevice && (
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-[#00bceb]/10 text-[#0087a9] font-mono">
+                            {selectedDevice.platform || 'unknown'}
+                          </span>
+                        )}
+                      </div>
                       <p className="mt-1 text-[11px] text-black/40">
                         {batchMode
                           ? (language === 'zh' ? '使用左侧设备列表维护批量目标。' : 'Manage batch targets from the device list on the left.')
                           : (language === 'zh' ? '当前将下发到左侧选中的单台设备。' : 'Command will run on the device selected in the left panel.')}
                       </p>
                     </div>
-                    <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-xs text-blue-700 leading-5">
-                      {language === 'zh'
-                        ? '提示：后端会自动识别命令类型。`show`、`display`、`dis`、`ping`、`tracert` 等查询命令不会进入配置模式，其余配置命令会按需进入。'
-                        : 'Tip: the backend detects command type automatically. `show`, `display`, `dis`, `ping`, and `tracert` stay in exec mode; config commands enter config mode when needed.'}
+                    <div className={`rounded-xl px-3 py-3 text-xs leading-5 transition-all ${
+                      customCommandMode === 'query'
+                        ? 'border border-sky-200 bg-sky-50 text-sky-700'
+                        : 'border border-amber-200 bg-amber-50 text-amber-700'
+                    }`}>
+                      {customCommandMode === 'query'
+                        ? (language === 'zh'
+                          ? '查看模式：命令在 Exec 模式下执行，适用于 show、display、ping、tracert 等只读命令。'
+                          : 'Query mode: commands run in exec mode. Use for show, display, ping, tracert — read-only, no config changes.')
+                        : (language === 'zh'
+                          ? <>配置模式——各平台自动进入配置视图：<br/>· Cisco：<code className="font-mono">configure terminal</code><br/>· Huawei / H3C：<code className="font-mono">system-view</code><br/>· Arista EOS：<code className="font-mono">configure session</code>（事务，失败自动回滚）<br/>· Juniper：<code className="font-mono">configure</code></>
+                          : <><b>Config mode</b> — config view entered automatically per platform:<br/>· Cisco: <code className="font-mono">configure terminal</code><br/>· Huawei / H3C: <code className="font-mono">system-view</code><br/>· Arista EOS: <code className="font-mono">configure session</code> (transactional, auto-rollback on error)<br/>· Juniper: <code className="font-mono">configure</code></>)}
                     </div>
                   </div>
 
@@ -7617,14 +8422,14 @@ const App: React.FC = () => {
           <motion.div
             initial={{ opacity: 0, y: 12, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            className={`w-full max-w-md rounded-2xl border shadow-2xl overflow-hidden ${resolvedTheme === 'dark' ? 'bg-[#121c2d] border-white/10' : 'bg-white border-black/10'}`}
+            className={`w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden ${resolvedTheme === 'dark' ? 'bg-[#121c2d] border-white/10' : 'bg-white border-black/10'}`}
           >
             <div className={`px-6 py-4 border-b ${resolvedTheme === 'dark' ? 'border-white/10' : 'border-black/10'}`}>
               <h3 className={`text-lg font-bold ${resolvedTheme === 'dark' ? 'text-white/90' : 'text-[#0b2a3c]'}`}>Profile</h3>
               <p className={`text-xs mt-1 ${resolvedTheme === 'dark' ? 'text-white/45' : 'text-black/45'}`}>Manage your account information</p>
             </div>
 
-            <div className="px-6 py-5 space-y-4">
+            <div className="px-6 py-5 space-y-4 max-h-[75vh] overflow-y-auto">
               <div>
                 <label className={`block text-[10px] font-bold uppercase tracking-widest mb-1.5 ${resolvedTheme === 'dark' ? 'text-white/55' : 'text-black/45'}`}>Avatar</label>
                 <div className="flex items-center gap-3">
@@ -7711,6 +8516,169 @@ const App: React.FC = () => {
                   placeholder="Confirm new password"
                   className={`w-full rounded-xl px-3 py-2.5 text-sm outline-none border transition-all ${resolvedTheme === 'dark' ? 'bg-white/5 border-white/15 text-white placeholder-white/30 focus:border-[#00bceb]/60' : 'bg-black/[0.02] border-black/10 text-[#0b2a3c] placeholder-black/30 focus:border-[#00bceb]/50'}`}
                 />
+              </div>
+
+              {/* ── 通知渠道配置 ── */}
+              <div className={`pt-3 border-t ${resolvedTheme === 'dark' ? 'border-white/10' : 'border-black/8'}`}>
+                <div className="flex items-center gap-2 mb-1">
+                  <Bell size={13} className={resolvedTheme === 'dark' ? 'text-[#00bceb]' : 'text-[#008bb0]'} />
+                  <span className={`text-[10px] font-bold uppercase tracking-widest ${resolvedTheme === 'dark' ? 'text-white/55' : 'text-black/45'}`}>
+                    告警通知渠道
+                  </span>
+                </div>
+                <p className={`text-[11px] mb-3 leading-relaxed ${resolvedTheme === 'dark' ? 'text-white/30' : 'text-black/35'}`}>
+                  接收接口 DOWN、带宽超阈值等网络告警推送。<br/>
+                  开启后填入 Webhook 地址，点击「发送测试消息」验证连通性，确认无误后保存。
+                </p>
+
+                {([
+                  {
+                    key: 'feishu',
+                    label: '飞书',
+                    sub: 'Feishu',
+                    icon: 'FS',
+                    iconBg: 'bg-[#1664FF]',
+                    badge: 'bg-blue-500/10 text-blue-500',
+                    hint: 'https://open.feishu.cn/open-apis/bot/v2/hook/…',
+                    hasSecret: false,
+                    docsUrl: 'https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot',
+                    docsLabel: '配置教程 →',
+                    tip: '在飞书群 ➜ 设置 ➜ 群机器人 ➜ 添加机器人 ➜ 自定义机器人，复制 Webhook URL 粘贴到此处。消息格式：彩色卡片（含8字段）。',
+                  },
+                  {
+                    key: 'dingtalk',
+                    label: '钉钉',
+                    sub: 'DingTalk',
+                    icon: 'DT',
+                    iconBg: 'bg-[#3296FA]',
+                    badge: 'bg-sky-500/10 text-sky-500',
+                    hint: 'https://oapi.dingtalk.com/robot/send?access_token=…',
+                    hasSecret: true,
+                    docsUrl: 'https://open.dingtalk.com/document/robots/custom-robot-access',
+                    docsLabel: '配置教程 →',
+                    tip: '在钉钉群 ➜ 群设置 ➜ 智能群助手 ➜ 添加机器人 ➜ 自定义。安全设置选「加签」时把密钥填入下方 Secret 栏；选「自定义关键词」时关键词填 NetAxis 即可。',
+                  },
+                  {
+                    key: 'wechat',
+                    label: '企业微信',
+                    sub: 'WeCom',
+                    icon: 'WC',
+                    iconBg: 'bg-[#07C160]',
+                    badge: 'bg-green-500/10 text-green-500',
+                    hint: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…',
+                    hasSecret: false,
+                    docsUrl: 'https://developer.work.weixin.qq.com/document/path/91770',
+                    docsLabel: '配置教程 →',
+                    tip: '在企业微信群 ➜ 右键群名称 ➜ 添加群机器人 ➜ 新创建一个机器人，复制 Webhook URL 粘贴到此处。',
+                  },
+                ] as const).map(({ key, label, sub, icon, iconBg, badge, hint, hasSecret, docsUrl, docsLabel, tip }) => {
+                  const ch = notificationChannels[key];
+                  const isEnabled = ch.enabled;
+                  return (
+                    <div key={key} className={`mb-2.5 rounded-xl border overflow-hidden transition-all ${
+                      isEnabled
+                        ? (resolvedTheme === 'dark' ? 'border-[#00bceb]/25 bg-[#00bceb]/[0.04]' : 'border-[#00bceb]/30 bg-[#00bceb]/[0.03]')
+                        : (resolvedTheme === 'dark' ? 'border-white/8 bg-transparent' : 'border-black/6 bg-transparent')
+                    }`}>
+                      {/* 卡片头 */}
+                      <div className="flex items-center gap-2.5 px-3 py-2.5">
+                        <span className={`w-7 h-7 rounded-lg ${iconBg} flex items-center justify-center text-[9px] font-black text-white shrink-0 shadow-sm`}>
+                          {icon}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className={`text-[12px] font-semibold ${resolvedTheme === 'dark' ? 'text-white/85' : 'text-black/75'}`}>{label}</span>
+                            <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full ${badge}`}>{sub}</span>
+                          </div>
+                        </div>
+                        {/* 教程链接 */}
+                        <a
+                          href={docsUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={`text-[10px] shrink-0 mr-1 ${resolvedTheme === 'dark' ? 'text-white/25 hover:text-[#00bceb]' : 'text-black/30 hover:text-[#008bb0]'} transition-colors`}
+                        >
+                          {docsLabel}
+                        </a>
+                        {/* Toggle */}
+                        <button
+                          type="button"
+                          title={isEnabled ? '关闭此渠道' : '开启此渠道'}
+                          onClick={() => setNotificationChannels(prev => ({ ...prev, [key]: { ...prev[key], enabled: !prev[key].enabled } }))}
+                          className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${isEnabled ? 'bg-[#00bceb]' : (resolvedTheme === 'dark' ? 'bg-white/15' : 'bg-black/12')}`}
+                        >
+                          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${isEnabled ? 'left-[18px]' : 'left-0.5'}`} />
+                        </button>
+                      </div>
+
+                      {/* 展开内容：始终显示 URL 输入（方便未开启时也能填好再一起保存） */}
+                      <div className={`px-3 pb-3 flex flex-col gap-1.5`}>
+                        {/* 提示文字 */}
+                        <p className={`text-[10px] leading-relaxed ${resolvedTheme === 'dark' ? 'text-white/30' : 'text-black/35'}`}>{tip}</p>
+                        {/* Webhook URL */}
+                        <input
+                          type="text"
+                          value={ch.webhook_url}
+                          onChange={(e) => setNotificationChannels(prev => ({ ...prev, [key]: { ...prev[key], webhook_url: e.target.value } }))}
+                          placeholder={hint}
+                          className={`w-full rounded-lg px-2.5 py-2 text-[11px] outline-none border transition-all font-mono ${resolvedTheme === 'dark'
+                            ? 'bg-black/20 border-white/10 text-white/80 placeholder-white/20 focus:border-[#00bceb]/50'
+                            : 'bg-white/60 border-black/8 text-[#0b2a3c] placeholder-black/20 focus:border-[#00bceb]/40'}`}
+                        />
+                        {/* 钉钉加签 Secret */}
+                        {hasSecret && (
+                          <input
+                            type="password"
+                            value={(ch as any).secret || ''}
+                            onChange={(e) => setNotificationChannels(prev => ({ ...prev, [key]: { ...prev[key], secret: e.target.value } }))}
+                            placeholder="加签 Secret（可选，留空则不验签）"
+                            className={`w-full rounded-lg px-2.5 py-2 text-[11px] outline-none border transition-all font-mono ${resolvedTheme === 'dark'
+                              ? 'bg-black/20 border-white/10 text-white/80 placeholder-white/20 focus:border-[#00bceb]/50'
+                              : 'bg-white/60 border-black/8 text-[#0b2a3c] placeholder-black/20 focus:border-[#00bceb]/40'}`}
+                          />
+                        )}
+                        {/* 发送测试 */}
+                        <button
+                          type="button"
+                          title={`向 ${label} 发送测试告警`}
+                          disabled={!ch.webhook_url.trim() || notifyTestLoading === key}
+                          onClick={async () => {
+                            const profileUserId = currentUser.id ?? currentUserRecord?.id;
+                            if (!profileUserId) return;
+                            setNotifyTestLoading(key);
+                            try {
+                              const res = await fetch(`/api/users/${profileUserId}/notify-test`, {
+                                method: 'POST',
+                                headers: {
+                                  'Content-Type': 'application/json',
+                                  'Authorization': `Bearer ${localStorage.getItem('sessionToken') || ''}`,
+                                },
+                                body: JSON.stringify({
+                                  platform: key,
+                                  webhook_url: ch.webhook_url,
+                                  secret: (ch as any).secret || '',
+                                }),
+                              });
+                              const d = await res.json();
+                              if (res.ok) showToast(`${label} 测试消息已发送 ✓`, 'success');
+                              else showToast(`发送失败: ${d.detail || d.error}`, 'error');
+                            } catch { showToast('连接错误', 'error'); }
+                            finally { setNotifyTestLoading(''); }
+                          }}
+                          className={`w-full py-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center justify-center gap-1.5 ${
+                            !ch.webhook_url.trim() || notifyTestLoading === key
+                              ? (resolvedTheme === 'dark' ? 'bg-white/5 text-white/20 cursor-not-allowed' : 'bg-black/4 text-black/20 cursor-not-allowed')
+                              : (resolvedTheme === 'dark' ? 'bg-[#00bceb]/12 text-[#00bceb] hover:bg-[#00bceb]/22 border border-[#00bceb]/20' : 'bg-[#e8f9ff] text-[#007fa3] hover:bg-[#d2f2fd] border border-[#00bceb]/20')
+                          }`}
+                        >
+                          {notifyTestLoading === key
+                            ? <><span className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />发送中...</>
+                            : '📨 发送测试消息'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
               <p className={`text-[11px] ${resolvedTheme === 'dark' ? 'text-white/40' : 'text-black/40'}`}>Last login: {currentUserLastLogin}</p>
