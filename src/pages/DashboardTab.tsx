@@ -1,7 +1,7 @@
 import React from 'react';
-import { Server, Activity, ShieldCheck, AlertCircle, TrendingUp, PieChart as PieChartIcon, History, Clock, ChevronRight, X, Zap } from 'lucide-react';
+import { Server, Activity, ShieldCheck, AlertCircle, TrendingUp, PieChart as PieChartIcon, History, Clock, ChevronRight, X, Zap, MonitorSmartphone } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from 'recharts';
-import type { Device, Job, ScheduledTask } from '../types';
+import type { Device, Job, ScheduledTask, HostResourceSnapshot } from '../types';
 import { sectionHeaderRowClass } from '../components/shared';
 
 interface DashboardTabProps {
@@ -15,6 +15,8 @@ interface DashboardTabProps {
   dashBannerCollapsed: boolean;
   setDashBannerCollapsed: (v: boolean) => void;
   dashLastRefresh: Date;
+  hostResources: HostResourceSnapshot | null;
+  unreadNotificationCount: number;
   language: string;
   t: (key: string) => string;
   setActiveTab: (tab: string) => void;
@@ -24,7 +26,7 @@ interface DashboardTabProps {
 const DashboardTab: React.FC<DashboardTabProps> = ({
   devices, jobs, scheduledTasks, trendDays, setTrendDays,
   complianceTrend, platformData, dashBannerCollapsed, setDashBannerCollapsed,
-  dashLastRefresh, language, t, setActiveTab, navigate,
+  dashLastRefresh, hostResources, unreadNotificationCount, language, t, setActiveTab, navigate,
 }) => {
   const onlineCount = devices.filter(d => d.status === 'online').length;
   const onlinePct = devices.length > 0 ? Math.round((onlineCount / devices.length) * 100) : 0;
@@ -32,10 +34,18 @@ const DashboardTab: React.FC<DashboardTabProps> = ({
   const now24h = Date.now() - 86400000;
   const failedCount24h = jobs.filter(j => j.status === 'failed' && j.created_at && new Date(j.created_at).getTime() > now24h).length;
 
-  const healthLevel = (onlinePct < 30 || (devices.length > 0 && compPct === 0)) ? 'critical'
-    : (onlinePct < 60 || compPct < 50) ? 'degraded' : 'healthy';
+  const healthLevel = hostResources?.status === 'critical' || unreadNotificationCount >= 5 || onlinePct < 30 || (devices.length > 0 && compPct === 0)
+    ? 'critical'
+    : hostResources?.status === 'degraded' || unreadNotificationCount > 0 || onlinePct < 60 || compPct < 50
+      ? 'degraded'
+      : 'healthy';
   const healthLabel = healthLevel === 'critical' ? t('systemCritical') : healthLevel === 'degraded' ? t('systemDegraded') : t('systemHealthy');
   const healthColor = healthLevel === 'critical' ? 'bg-red-100 text-red-700' : healthLevel === 'degraded' ? 'bg-orange-100 text-orange-700' : 'bg-emerald-100 text-emerald-700';
+  const hostStatusText = hostResources?.status === 'critical'
+    ? (language === 'zh' ? '宿主机严重' : 'Host Critical')
+    : hostResources?.status === 'degraded'
+      ? (language === 'zh' ? '宿主机告警' : 'Host Warning')
+      : (language === 'zh' ? '宿主机正常' : 'Host Healthy');
 
   const dashAgoSec = Math.round((Date.now() - dashLastRefresh.getTime()) / 1000);
 
@@ -48,6 +58,7 @@ const DashboardTab: React.FC<DashboardTabProps> = ({
         </div>
         <div className="flex gap-2 items-center">
           <span className="text-[10px] text-black/30">{t('lastRefreshed')} {dashAgoSec}{t('secondsAgo')}</span>
+          {hostResources && <span className="px-3 py-1 text-[10px] font-bold rounded-full uppercase tracking-wider bg-[#00172D]/5 text-[#00172D]">{hostStatusText}</span>}
           <span className={`px-3 py-1 text-[10px] font-bold rounded-full uppercase tracking-wider ${healthColor} ${healthLevel === 'critical' ? 'animate-pulse' : ''}`}>{healthLabel}</span>
         </div>
       </div>
@@ -60,8 +71,12 @@ const DashboardTab: React.FC<DashboardTabProps> = ({
               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#00a5cd]">NetPilot Command Center</p>
               <h3 className="mt-1 text-xl font-bold text-[#0d2c40]">{t('todaySnapshot')}</h3>
               <p className="mt-1 text-xs text-[#21546d]/80">{t('todaySnapshotDesc')}</p>
+              {hostResources && <p className="mt-2 text-[11px] text-[#21546d]/85">{language === 'zh' ? `平台宿主机: CPU ${Math.round(hostResources.cpu_percent || 0)}% / 内存 ${Math.round(hostResources.memory_percent || 0)}% / 磁盘 ${Math.round(hostResources.disk_percent || 0)}%` : `Platform host: CPU ${Math.round(hostResources.cpu_percent || 0)}% / Memory ${Math.round(hostResources.memory_percent || 0)}% / Disk ${Math.round(hostResources.disk_percent || 0)}%`}</p>}
             </div>
             <div className="flex flex-wrap gap-2">
+              <button onClick={() => navigate('/monitoring')} className="px-3 py-2 text-xs font-semibold rounded-lg border border-[#00bceb]/30 text-[#008db1] hover:bg-[#00bceb]/8 transition-all">
+                {language === 'zh' ? '查看平台资源' : 'View Host Resources'}
+              </button>
               <button onClick={() => navigate('/automation/execute')} className="px-3 py-2 text-xs font-semibold rounded-lg bg-[#00bceb] text-white hover:bg-[#009ac2] transition-all">
                 {t('openAutomation')}
               </button>
@@ -73,12 +88,13 @@ const DashboardTab: React.FC<DashboardTabProps> = ({
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-6">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 md:gap-6">
         {[
           { label: t('totalAssets'), value: devices.length, icon: Server, color: 'text-[#005073]', bg: 'bg-[#005073]/5', tab: 'inventory' },
           { label: t('onlineNodes'), value: onlineCount, icon: Activity, color: onlinePct < 30 ? 'text-red-600' : onlinePct < 60 ? 'text-orange-600' : 'text-emerald-600', bg: onlinePct < 30 ? 'bg-red-50' : onlinePct < 60 ? 'bg-orange-50' : 'bg-emerald-50', tab: 'inventory' },
           { label: t('complianceRate'), value: `${compPct}%`, icon: ShieldCheck, color: compPct === 0 ? 'text-red-600' : compPct < 50 ? 'text-orange-600' : 'text-[#00bceb]', bg: compPct === 0 ? 'bg-red-50' : compPct < 50 ? 'bg-orange-50' : 'bg-[#00bceb]/5', tab: 'compliance' },
           { label: t('failedTasks'), value: failedCount24h, icon: AlertCircle, color: failedCount24h > 0 ? 'text-red-600' : 'text-black/40', bg: failedCount24h > 0 ? 'bg-red-50' : 'bg-black/5', tab: 'history' },
+          { label: language === 'zh' ? '平台宿主机' : 'Platform Host', value: hostResources ? `${Math.round(Math.max(hostResources.cpu_percent || 0, hostResources.memory_percent || 0, hostResources.disk_percent || 0))}%` : '--', icon: MonitorSmartphone, color: hostResources?.status === 'critical' ? 'text-red-600' : hostResources?.status === 'degraded' ? 'text-orange-600' : 'text-[#005073]', bg: hostResources?.status === 'critical' ? 'bg-red-50' : hostResources?.status === 'degraded' ? 'bg-orange-50' : 'bg-[#005073]/5', tab: 'monitoring' },
         ].map((stat, i) => (
           <div key={i} onClick={() => setActiveTab(stat.tab)} className="bg-white p-6 rounded-2xl shadow-sm border border-black/5 flex items-center justify-between group hover:shadow-md hover:border-black/10 transition-all cursor-pointer">
             <div>

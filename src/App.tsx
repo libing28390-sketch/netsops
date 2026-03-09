@@ -8,7 +8,7 @@ import * as XLSX from 'xlsx';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from 'recharts';
 import TopologyGraph from './components/TopologyGraph.tsx';
 import MonitoringCenter from './components/MonitoringCenter.tsx';
-import type { ConfigVersion, Device, Job, AuditEvent, ComplianceFinding, ComplianceRunPoint, ComplianceOverview, ScheduledTask, Script, ConfigTemplate, ConfigSnapshot, DiffLine, User as UserType, ThemeMode, SessionUser, NotificationItem } from './types';
+import type { ConfigVersion, Device, Job, AuditEvent, ComplianceFinding, ComplianceRunPoint, ComplianceOverview, ScheduledTask, Script, ConfigTemplate, ConfigSnapshot, DiffLine, User as UserType, ThemeMode, SessionUser, NotificationItem, HostResourceSnapshot } from './types';
 import { PLATFORM_LABELS, getPlatformLabel, getVendorFromPlatform } from './types';
 import { sectionHeaderRowClass, sectionToolbarClass, primaryActionBtnClass, secondaryActionBtnClass, darkActionBtnClass, severityBadgeClass, complianceStatusBadgeClass, auditStatusBadgeClass, parseJsonObject } from './components/shared';
 import Pagination from './components/Pagination';
@@ -31,6 +31,7 @@ interface AppRuntimeBoundaryState {
 }
 
 class AppRuntimeBoundary extends React.Component<AppRuntimeBoundaryProps, AppRuntimeBoundaryState> {
+  declare props: Readonly<AppRuntimeBoundaryProps>;
   state: AppRuntimeBoundaryState = { hasError: false, errorMessage: '' };
 
   static getDerivedStateFromError(error: Error): AppRuntimeBoundaryState {
@@ -79,6 +80,7 @@ class AppRuntimeBoundary extends React.Component<AppRuntimeBoundaryProps, AppRun
 }
 
 const LEGACY_SSH_ERROR_CODE = 'legacy_ssh_algorithms';
+const SSH_AUTH_ERROR_CODE = 'ssh_authentication_failed';
 
 const buildConnectionTestMessage = (detail: any, errorCode?: string): string => {
   const normalizedDetail = typeof detail === 'string'
@@ -87,6 +89,10 @@ const buildConnectionTestMessage = (detail: any, errorCode?: string): string => 
 
   if (errorCode === LEGACY_SSH_ERROR_CODE) {
     return normalizedDetail || '设备 SSH 算法较旧，平台已尝试兼容，但当前协商仍然失败。';
+  }
+
+  if (errorCode === SSH_AUTH_ERROR_CODE) {
+    return normalizedDetail || '设备已可达，但 SSH 认证被拒绝，请检查账号密码或设备 AAA/VTY 配置。';
   }
 
   return normalizedDetail || 'Connection failed';
@@ -223,6 +229,7 @@ const App: React.FC = () => {
         body: JSON.stringify({
           name: tpl.name,
           type: tpl.type,
+          vendor: tpl.vendor || '',
           content: editorContent,
           lastUsed: 'Just now'
         })
@@ -237,52 +244,6 @@ const App: React.FC = () => {
       }
     } catch (error) {
       showToast('Connection error', 'error');
-    }
-  };
-
-  const handleDeployTemplate = async () => {
-    if (!deployTargetDevice) {
-      showToast(t('selectDevice'), 'error');
-      return;
-    }
-    
-    const device = devices.find(d => d.id === deployTargetDevice);
-    if (!device) return;
-
-    setShowDeployTemplateModal(false);
-    setIsTestingConnection(true); // Reuse testing state for loading indicator
-    
-    try {
-      const response = await fetch('/api/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          device_id: device.id,
-          command: editorContent,
-          isConfig: true,
-          author: currentUser.username || 'admin',
-          actor_id: currentUser.id,
-          actor_role: currentUser.role || 'Administrator',
-        })
-      });
-      
-      const data = await response.json();
-      if (response.ok) {
-        showToast(`Template deployed to ${device.hostname}`, 'success');
-        const jobsRes = await fetch('/api/jobs');
-        if (jobsRes.ok) {
-          const updatedJobs = await jobsRes.json();
-          setJobs(updatedJobs);
-          const newJob = updatedJobs.find((j: any) => j.id === data.jobId);
-          if (newJob) setSelectedJob(newJob);
-        }
-      } else {
-        showToast(`Deploy failed: ${data.error}`, 'error');
-      }
-    } catch (error) {
-      showToast(`Execution error: ${error}`, 'error');
-    } finally {
-      setIsTestingConnection(false);
     }
   };
 
@@ -478,6 +439,7 @@ const App: React.FC = () => {
       type: 'Jinja2',
       lastUsed: 'Never',
       category: 'custom',
+      vendor: 'Custom',
       content: '# Enter your template here'
     };
     
@@ -498,12 +460,72 @@ const App: React.FC = () => {
     }
   };
 
+  const handleOpenTemplateDeploy = () => {
+    if (!editorContent.trim()) {
+      showToast(language === 'zh' ? '模板内容为空，无法提交到执行台' : 'Template content is empty and cannot be sent to Automation', 'error');
+      return;
+    }
+
+    const targetDeviceIds = configScopedDevices.map((device) => device.id);
+    if (targetDeviceIds.length === 0) {
+      showToast(
+        language === 'zh' ? '当前发布范围没有匹配设备，无法提交到 Automation' : 'No devices match the current release scope, so nothing can be sent to Automation',
+        'error'
+      );
+      return;
+    }
+
+    const initialVariableValues = configVariableKeys.reduce((acc, key) => {
+      if (key in configVariableMap) acc[key] = configVariableMap[key];
+      return acc;
+    }, {} as Record<string, string>);
+
+    const primaryTargetId = configScopedDevices.find((device) => device.status === 'online')?.id || targetDeviceIds[0];
+
+    setAutomationGroupOpen(true);
+    navigate('/automation/execute', {
+      state: {
+        configAutomationBridge: {
+          source: 'configuration',
+          mode: 'config',
+          command: editorContent,
+          templateName: selectedConfigTemplate?.name || 'Template Command',
+          targetDeviceIds,
+          primaryTargetId,
+          variableValues: initialVariableValues,
+        },
+      },
+    });
+
+    showToast(
+      language === 'zh'
+        ? `已转到 Automation 执行台，载入 ${targetDeviceIds.length} 台目标设备`
+        : `Sent to Automation workspace with ${targetDeviceIds.length} target device(s)`,
+      'info'
+    );
+  };
+
   const handleDiscardChanges = () => {
     const tpl = configTemplates.find(t => t.id === selectedTemplateId);
     if (tpl) {
       setEditorContent(tpl.content);
       showToast(t('changesDiscarded'), 'info');
     }
+  };
+
+  const handleValidateTemplateWorkspace = () => {
+    setConfigWorkspaceView('checks');
+    if (configValidationIssues.length === 0) {
+      showToast(
+        language === 'zh'
+          ? `校验通过，可提交到 Automation 执行 ${configScopedDevices.length} 台设备`
+          : `Validation passed. Ready to send ${configScopedDevices.length} target devices to Automation`,
+        'success'
+      );
+      return;
+    }
+
+    showToast(configValidationIssues[0], 'error');
   };
   // getVendorFromPlatform, PLATFORM_LABELS, getPlatformLabel imported from ./types
 
@@ -603,6 +625,11 @@ const App: React.FC = () => {
     execute: '',
     post_check: '',
     rollback: '',
+  });
+  const [newScenarioVariables, setNewScenarioVariables] = useState<Array<{ key: string; label: string; type: string; required: boolean; placeholder?: string }>>([]);
+  const [scenarioDraftOrigin, setScenarioDraftOrigin] = useState<{ kind: 'manual' | 'template'; templateName?: string; variableKeys: string[] }>({
+    kind: 'manual',
+    variableKeys: [],
   });
   const [isSavingScenario, setIsSavingScenario] = useState(false);
   const [wsMessages, setWsMessages] = useState<any[]>([]);
@@ -841,7 +868,9 @@ const App: React.FC = () => {
       const data = await resp.json();
       setNotifications((data || []).map((n: any) => ({
         id: String(n.id),
-        title: n.title,
+        title: n.source === 'system_resource'
+          ? (language === 'zh' ? `平台资源告警: ${n.title}` : `Platform Resource Alert: ${n.title}`)
+          : n.title,
         message: n.message,
         time: n.time,
         source: n.source,
@@ -851,7 +880,7 @@ const App: React.FC = () => {
     } catch {
       // ignore polling errors
     }
-  }, [currentUser.id, notificationReadMap]);
+  }, [currentUser.id, language, notificationReadMap]);
 
   const markNotificationsAsRead = useCallback(async (ids: string[]) => {
     if (!ids.length || !currentUser.id) return;
@@ -1054,6 +1083,97 @@ const App: React.FC = () => {
       setQuickPlaybookPlatform(quickAutoPlatform);
     }
   }, [quickPlaybookScenario, quickAutoPlatform, quickPlaybookPlatform]);
+  const resetScenarioDraft = useCallback(() => {
+    setShowAddScenarioModal(false);
+    setNewScenarioForm({
+      name: '',
+      name_zh: '',
+      description: '',
+      description_zh: '',
+      category: 'Custom',
+      icon: '🧩',
+      risk: 'medium',
+      platform: 'cisco_ios',
+      pre_check: '',
+      execute: '',
+      post_check: '',
+      rollback: '',
+    });
+    setNewScenarioVariables([]);
+    setScenarioDraftOrigin({ kind: 'manual', variableKeys: [] });
+  }, []);
+
+  const inferScenarioVariableType = (key: string): 'text' | 'number' => {
+    const normalized = key.toLowerCase();
+    if (/(id|vlan|asn|metric|count|port|timeout|mtu|weight|preference|cost|bandwidth|delay)$/.test(normalized)) {
+      return 'number';
+    }
+    return 'text';
+  };
+
+  const formatScenarioVariableLabel = (key: string) => key
+    .replace(/[._-]+/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+
+  const handleCreateScenarioDraftFromTemplate = () => {
+    if (!selectedConfigTemplate) {
+      showToast(language === 'zh' ? '请先选择模板资产' : 'Select a template asset first', 'error');
+      return;
+    }
+
+    if (!editorContent.trim()) {
+      showToast(language === 'zh' ? '模板内容为空，无法生成场景草稿' : 'Template content is empty and cannot be converted into a scenario draft', 'error');
+      return;
+    }
+
+    const platformFromScope = configScopePlatform !== 'all'
+      ? configScopePlatform
+      : (configPlatformOptions[0]
+        || ({
+          Cisco: 'cisco_ios',
+          Juniper: 'juniper_junos',
+          Huawei: 'huawei_vrp',
+          H3C: 'h3c_comware',
+          Arista: 'arista_eos',
+        } as Record<string, string>)[selectedConfigTemplate.vendor || '']
+        || 'cisco_ios');
+
+    const detectedVariables = extractVars(editorContent);
+    const variableDrafts = detectedVariables.map((key) => ({
+      key,
+      label: formatScenarioVariableLabel(key),
+      type: inferScenarioVariableType(key),
+      required: true,
+      placeholder: configVariableMap[key] || key,
+    }));
+
+    setNewScenarioForm({
+      name: `${selectedConfigTemplate.name} Draft`,
+      name_zh: `${selectedConfigTemplate.name} 草稿`,
+      description: `Imported from configuration template ${selectedConfigTemplate.name}`,
+      description_zh: `由配置模板 ${selectedConfigTemplate.name} 转换而来`,
+      category: 'Config Template',
+      icon: '🧩',
+      risk: configScopedDevices.length > 10 ? 'high' : configScopedDevices.length > 1 ? 'medium' : 'low',
+      platform: platformFromScope,
+      pre_check: '',
+      execute: editorContent,
+      post_check: '',
+      rollback: '',
+    });
+    setNewScenarioVariables(variableDrafts);
+    setScenarioDraftOrigin({
+      kind: 'template',
+      templateName: selectedConfigTemplate.name,
+      variableKeys: detectedVariables,
+    });
+    setShowAddScenarioModal(true);
+  };
+
+  const openManualScenarioDraft = () => {
+    resetScenarioDraft();
+    setShowAddScenarioModal(true);
+  };
 
   const createScenario = async () => {
     if (!newScenarioForm.name.trim()) {
@@ -1076,7 +1196,7 @@ const App: React.FC = () => {
       risk: newScenarioForm.risk,
       supported_platforms: [platform],
       default_platform: platform,
-      variables: [],
+      variables: newScenarioVariables,
       platform_phases: {
         [platform]: {
           pre_check: splitLines(newScenarioForm.pre_check),
@@ -1100,12 +1220,7 @@ const App: React.FC = () => {
         return;
       }
 
-      setShowAddScenarioModal(false);
-      setNewScenarioForm({
-        name: '', name_zh: '', description: '', description_zh: '',
-        category: 'Custom', icon: '🧩', risk: 'medium', platform: 'cisco_ios',
-        pre_check: '', execute: '', post_check: '', rollback: '',
-      });
+      resetScenarioDraft();
       showToast('Custom scenario created', 'success');
       await loadScenarios();
       openQuickPlaybookModal(data);
@@ -1527,8 +1642,10 @@ const App: React.FC = () => {
   const [notifyTestLoading, setNotifyTestLoading] = useState<string>(''); // platform name being tested
   const [editingUser, setEditingUser] = useState<UserType | null>(null);
   const [editUserForm, setEditUserForm] = useState({ username: '', password: '', role: 'Operator' });
-  const [showDeployTemplateModal, setShowDeployTemplateModal] = useState(false);
-  const [deployTargetDevice, setDeployTargetDevice] = useState<string>('');
+  const [configWorkspaceView, setConfigWorkspaceView] = useState<'source' | 'rendered' | 'checks'>('source');
+  const [configScopePlatform, setConfigScopePlatform] = useState<string>('all');
+  const [configScopeRole, setConfigScopeRole] = useState<string>('all');
+  const [configScopeSite, setConfigScopeSite] = useState<string>('all');
   const [newUserForm, setNewUserForm] = useState({ username: '', password: '', role: 'Operator' });
   const [isLoading, setIsLoading] = useState(true);
   const currentUserRecord = users.find(u => u.username === currentUser.username);
@@ -1536,6 +1653,109 @@ const App: React.FC = () => {
   const unreadNotifications = notifications.filter(n => !n.read);
   const unreadNotificationCount = notifications.filter(n => !n.read).length;
   const currentAvatar = currentUser.avatar_url || currentUserRecord?.avatar_url || '';
+  const automationBridgeState = (location.state as { configAutomationBridge?: {
+    source?: string;
+    mode?: 'query' | 'config';
+    command?: string;
+    templateName?: string;
+    targetDeviceIds?: string[];
+    primaryTargetId?: string;
+    variableValues?: Record<string, string>;
+  } } | null)?.configAutomationBridge;
+  const selectedConfigTemplate = useMemo(
+    () => configTemplates.find((template) => template.id === selectedTemplateId) || null,
+    [configTemplates, selectedTemplateId]
+  );
+  const configVariableKeys = useMemo(() => extractVars(editorContent), [editorContent]);
+  const configVariableMap = useMemo(
+    () => globalVars.reduce((acc, item) => {
+      acc[item.key] = String(item.value ?? '');
+      return acc;
+    }, {} as Record<string, string>),
+    [globalVars]
+  );
+  const configMissingVariables = useMemo(
+    () => configVariableKeys.filter((key) => !String(configVariableMap[key] ?? '').trim()),
+    [configVariableKeys, configVariableMap]
+  );
+  const configRenderedPreview = useMemo(
+    () => editorContent.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, key: string) => configVariableMap[key] ?? `{{ ${key} }}`),
+    [editorContent, configVariableMap]
+  );
+  const configVendorScopedDevices = useMemo(() => {
+    const vendor = (selectedConfigTemplate?.vendor || '').trim();
+    if (!vendor || vendor.toLowerCase() === 'custom') return devices;
+    return devices.filter((device) => getVendorFromPlatform(device.platform).toLowerCase() === vendor.toLowerCase());
+  }, [devices, selectedConfigTemplate]);
+  const configPlatformOptions = useMemo(
+    () => Array.from(new Set(configVendorScopedDevices.map((device) => device.platform).filter(Boolean))).sort(),
+    [configVendorScopedDevices]
+  );
+  const configRoleOptions = useMemo(
+    () => Array.from(new Set(configVendorScopedDevices.map((device) => device.role).filter(Boolean))).sort(),
+    [configVendorScopedDevices]
+  );
+  const configSiteOptions = useMemo(
+    () => Array.from(new Set(configVendorScopedDevices.map((device) => device.site).filter(Boolean))).sort(),
+    [configVendorScopedDevices]
+  );
+  const configScopedDevices = useMemo(() => configVendorScopedDevices.filter((device) => {
+    if (configScopePlatform !== 'all' && device.platform !== configScopePlatform) return false;
+    if (configScopeRole !== 'all' && device.role !== configScopeRole) return false;
+    if (configScopeSite !== 'all' && device.site !== configScopeSite) return false;
+    return true;
+  }), [configVendorScopedDevices, configScopePlatform, configScopeRole, configScopeSite]);
+  const configScopedOnlineCount = useMemo(
+    () => configScopedDevices.filter((device) => device.status === 'online').length,
+    [configScopedDevices]
+  );
+  const configValidationIssues = useMemo(() => {
+    const issues: string[] = [];
+    if (!selectedConfigTemplate) {
+      issues.push(language === 'zh' ? '尚未选择模板资产' : 'No template asset selected');
+    }
+    if (!editorContent.trim()) {
+      issues.push(language === 'zh' ? '模板内容为空' : 'Template content is empty');
+    }
+    if (configMissingVariables.length > 0) {
+      issues.push(
+        language === 'zh'
+          ? `仍有未赋值变量: ${configMissingVariables.join('、')}`
+          : `Missing variable values: ${configMissingVariables.join(', ')}`
+      );
+    }
+    if (configScopedDevices.length === 0) {
+      issues.push(language === 'zh' ? '当前发布范围内没有匹配设备' : 'No devices match the current release scope');
+    }
+    return issues;
+  }, [selectedConfigTemplate, editorContent, configMissingVariables, configScopedDevices, language]);
+  const configValidationWarnings = useMemo(() => {
+    const warnings: string[] = [];
+    const offlineCount = configScopedDevices.filter((device) => device.status !== 'online').length;
+    if (offlineCount > 0) {
+      warnings.push(
+        language === 'zh'
+          ? `${offlineCount} 台目标设备当前不在线，建议先做连接性确认`
+          : `${offlineCount} target devices are not online; verify reachability before release`
+      );
+    }
+    if (configScopedDevices.length > 20) {
+      warnings.push(
+        language === 'zh'
+          ? '当前发布范围较大，建议先小范围灰度'
+          : 'Release scope is large; consider a staged rollout first'
+      );
+    }
+    return warnings;
+  }, [configScopedDevices, language]);
+  const configReadinessScore = useMemo(() => {
+    let score = 100;
+    if (!editorContent.trim()) score -= 45;
+    score -= Math.min(30, configMissingVariables.length * 15);
+    if (configScopedDevices.length === 0) score -= 30;
+    score -= Math.min(20, configScopedDevices.filter((device) => device.status !== 'online').length * 5);
+    return Math.max(0, score);
+  }, [editorContent, configMissingVariables, configScopedDevices]);
   const hasQuickTargets = batchMode ? batchDeviceIds.length > 0 : !!selectedDevice;
   const quickMissingRequiredFields = useMemo(() => {
     const vars = quickPlaybookScenario?.variables || [];
@@ -1544,6 +1764,48 @@ const App: React.FC = () => {
       .map((v: any) => (language === 'zh' ? (v.label_zh || v.label || v.key) : (v.label || v.key)));
   }, [quickPlaybookScenario, quickPlaybookVars, language]);
   const customCommandVars = useMemo(() => extractVars(customCommand), [customCommand]);
+
+  useEffect(() => {
+    setConfigWorkspaceView('source');
+    setConfigScopePlatform('all');
+    setConfigScopeRole('all');
+    setConfigScopeSite('all');
+  }, [selectedTemplateId]);
+
+  useEffect(() => {
+    if (activeTab !== 'automation' || automationPage !== 'execute' || !automationBridgeState) return;
+
+    const targetDeviceIds = Array.isArray(automationBridgeState.targetDeviceIds) ? automationBridgeState.targetDeviceIds : [];
+    const primaryTargetId = automationBridgeState.primaryTargetId;
+    const primaryDevice = devices.find((device) => device.id === primaryTargetId)
+      || devices.find((device) => targetDeviceIds.includes(device.id))
+      || null;
+
+    setAutomationSearch('');
+    setQuickPlaybookScenario(null);
+    setQuickPlaybookPreview(null);
+    setQuickPlaybookVars({});
+    setQuickRiskConfirmed(false);
+    setQuickQueryOutput('');
+    setQuickQueryLabel('');
+    setCustomCommand(automationBridgeState.command || '');
+    setCustomCommandMode(automationBridgeState.mode === 'query' ? 'query' : 'config');
+    setScriptVars(automationBridgeState.variableValues || {});
+
+    if (targetDeviceIds.length > 1) {
+      setBatchMode(true);
+      setBatchDeviceIds(targetDeviceIds);
+      setSelectedDevice(primaryDevice);
+    } else {
+      setBatchMode(false);
+      setBatchDeviceIds([]);
+      setSelectedDevice(primaryDevice);
+    }
+
+    setShowCustomCommandModal(true);
+
+    navigate('/automation/execute', { replace: true, state: null });
+  }, [activeTab, automationPage, automationBridgeState, devices, navigate]);
 
   const handleLogout = () => {
     localStorage.removeItem('netops_token');
@@ -1873,14 +2135,15 @@ const App: React.FC = () => {
   const [inventoryRefreshTick, setInventoryRefreshTick] = useState(0);
   const [devicesLastUpdatedAt, setDevicesLastUpdatedAt] = useState<number | null>(null);
   const [intfNowTick, setIntfNowTick] = useState(0);
+  const [hostResources, setHostResources] = useState<HostResourceSnapshot | null>(null);
   const onlineDeviceCount = devices.filter(device => device.status === 'online').length;
   const runningJobCount = jobs.filter(job => job.status === 'running').length;
   const complianceDeviceCount = devices.filter(device => device.compliance === 'compliant').length;
   const onlineDevicePct = devices.length > 0 ? Math.round((onlineDeviceCount / devices.length) * 100) : 0;
   const compliancePct = devices.length > 0 ? Math.round((complianceDeviceCount / devices.length) * 100) : 0;
-  const sidebarHealthLevel = unreadNotificationCount >= 5 || onlineDevicePct < 30 || (devices.length > 0 && compliancePct === 0)
+  const sidebarHealthLevel = hostResources?.status === 'critical' || unreadNotificationCount >= 5 || onlineDevicePct < 30 || (devices.length > 0 && compliancePct === 0)
     ? 'critical'
-    : unreadNotificationCount > 0 || onlineDevicePct < 60 || compliancePct < 50
+    : hostResources?.status === 'degraded' || unreadNotificationCount > 0 || onlineDevicePct < 60 || compliancePct < 50
       ? 'warning'
       : 'healthy';
   const sidebarHealthLabel = sidebarHealthLevel === 'critical'
@@ -2046,6 +2309,18 @@ const App: React.FC = () => {
     }
   }, []);
 
+  const fetchHostResources = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const resp = await fetch('/api/health/resources', { signal });
+      if (!resp.ok) return;
+      const payload = await resp.json() as HostResourceSnapshot;
+      setHostResources(payload);
+    } catch (error) {
+      if (isAbortError(error)) return;
+      // ignore transient errors
+    }
+  }, []);
+
   const fetchMonitoringAlerts = useCallback(async (signal?: AbortSignal) => {
     const reqEpoch = monitorRequestEpochRef.current;
     try {
@@ -2135,6 +2410,24 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
+    let currentController: AbortController | null = null;
+    const runResources = () => {
+      if (currentController) currentController.abort();
+      currentController = new AbortController();
+      fetchHostResources(currentController.signal);
+    };
+
+    runResources();
+    if (!monitorPageVisible) return;
+    const timer = window.setInterval(runResources, 15000);
+    return () => {
+      window.clearInterval(timer);
+      if (currentController) currentController.abort();
+    };
+  }, [isAuthenticated, fetchHostResources, monitorPageVisible]);
+
+  useEffect(() => {
     if (!isAuthenticated || activeTab !== 'monitoring') return;
     let currentController: AbortController | null = null;
     const runOverview = (forceRefresh = false) => {
@@ -2169,6 +2462,21 @@ const App: React.FC = () => {
       if (currentController) currentController.abort();
     };
   }, [isAuthenticated, activeTab, fetchMonitoringAlerts, monitorPageVisible]);
+
+  const formatResourcePercent = (value: number | null | undefined) => {
+    if (value == null || !Number.isFinite(value)) return '--';
+    return `${Math.round(value)}%`;
+  };
+
+  const hostResourceTone = hostResources?.status === 'critical'
+    ? 'bg-red-500/15 text-red-200 border-red-400/25'
+    : hostResources?.status === 'degraded'
+      ? 'bg-amber-500/15 text-amber-100 border-amber-300/25'
+      : 'bg-emerald-500/15 text-emerald-100 border-emerald-300/25';
+
+  const hostResourceSummary = hostResources
+    ? `CPU ${formatResourcePercent(hostResources.cpu_percent)} · MEM ${formatResourcePercent(hostResources.memory_percent)} · DISK ${formatResourcePercent(hostResources.disk_percent)}`
+    : (language === 'zh' ? '等待资源数据' : 'Waiting for resource data');
 
   useEffect(() => {
     setMonitorAlertsPage(1);
@@ -3507,12 +3815,12 @@ const App: React.FC = () => {
 
   // Apply {{VAR}} substitution to a command/script string
   function applyScriptVars(text: string) {
-    return text.replace(/\{\{(\w+)\}\}/g, (_, k) => scriptVars[k] ?? `{{${k}}}`);
+    return text.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, key) => scriptVars[key] ?? `{{${key}}}`);
   }
 
   // Extract variable names from {{VAR}} in a given text
   function extractVars(text: string): string[] {
-    const matches = [...text.matchAll(/\{\{(\w+)\}\}/g)];
+    const matches = [...text.matchAll(/\{\{\s*([\w.-]+)\s*\}\}/g)];
     return [...new Set(matches.map(m => m[1]))];
   }
 
@@ -3907,7 +4215,16 @@ const App: React.FC = () => {
               }`}
             >
               <item.icon size={17} />
-              {item.label}
+              <span className="flex-1 text-left">{item.label}</span>
+              {item.id === 'monitoring' && (
+                <span className={`shrink-0 rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em] ${hostResourceTone}`} title={hostResourceSummary}>
+                  {hostResources
+                    ? (language === 'zh'
+                      ? `主机 ${formatResourcePercent(hostResources.cpu_percent)} / ${formatResourcePercent(hostResources.memory_percent)}`
+                      : `Host ${formatResourcePercent(hostResources.cpu_percent)} / ${formatResourcePercent(hostResources.memory_percent)}`)
+                    : (language === 'zh' ? '主机 --' : 'Host --')}
+                </span>
+              )}
             </button>
           ))}
 
@@ -4264,6 +4581,38 @@ const App: React.FC = () => {
                         <div className="flex items-start gap-3">
                           <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${item.read ? 'bg-transparent border border-transparent' : 'bg-[#00bceb]'}`} />
                           <div className="min-w-0">
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                              <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.14em] ${
+                                item.source === 'system_resource'
+                                  ? 'bg-red-100 text-red-700'
+                                  : item.source === 'network_monitor'
+                                    ? 'bg-cyan-100 text-cyan-700'
+                                    : 'bg-black/5 text-black/45'
+                              }`}>
+                                {item.source === 'system_resource'
+                                  ? (language === 'zh' ? '平台资源' : 'Platform')
+                                  : item.source === 'network_monitor'
+                                    ? (language === 'zh' ? '网络监控' : 'Network')
+                                    : (item.source || (language === 'zh' ? '通知' : 'Notice'))}
+                              </span>
+                              {item.severity && <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.14em] ${
+                                item.severity === 'critical' || item.severity === 'high'
+                                  ? 'bg-red-100 text-red-700'
+                                  : item.severity === 'major' || item.severity === 'medium'
+                                    ? 'bg-amber-100 text-amber-700'
+                                    : 'bg-emerald-100 text-emerald-700'
+                              }`}>
+                                {item.severity === 'critical'
+                                  ? (language === 'zh' ? '严重' : 'Critical')
+                                  : item.severity === 'major'
+                                    ? (language === 'zh' ? '告警' : 'Major')
+                                    : item.severity === 'high'
+                                      ? (language === 'zh' ? '高' : 'High')
+                                      : item.severity === 'medium'
+                                        ? (language === 'zh' ? '中' : 'Medium')
+                                        : (language === 'zh' ? '低' : 'Low')}
+                              </span>}
+                            </div>
                             <p className={`text-sm font-semibold truncate ${resolvedTheme === 'dark' ? 'text-white/90' : 'text-black/80'}`}>{item.title}</p>
                             <p className={`text-xs mt-0.5 ${resolvedTheme === 'dark' ? 'text-white/55' : 'text-black/50'}`}>{item.message}</p>
                             <p className={`text-[10px] mt-1 ${resolvedTheme === 'dark' ? 'text-white/40' : 'text-black/40'}`}>{item.time ? new Date(item.time).toLocaleString() : ''}</p>
@@ -4447,6 +4796,8 @@ const App: React.FC = () => {
               dashBannerCollapsed={dashBannerCollapsed}
               setDashBannerCollapsed={setDashBannerCollapsed}
               dashLastRefresh={dashLastRefresh}
+              hostResources={hostResources}
+              unreadNotificationCount={unreadNotificationCount}
               language={language}
               t={t}
               setActiveTab={setActiveTab}
@@ -4499,9 +4850,11 @@ const App: React.FC = () => {
               setMonitorDashboardSiteFilter={setMonitorDashboardSiteFilter}
               monitorDashboardAlertFilter={monitorDashboardAlertFilter}
               setMonitorDashboardAlertFilter={setMonitorDashboardAlertFilter}
+              hostResources={hostResources}
               fetchMonitoringOverview={() => fetchMonitoringOverview(true)}
               fetchMonitoringAlerts={fetchMonitoringAlerts}
               fetchMonitoringRealtime={fetchMonitoringRealtime}
+              fetchHostResources={fetchHostResources}
               setMonitorRealtime={setMonitorRealtime}
               showToast={showToast}
             />
@@ -6240,7 +6593,7 @@ const App: React.FC = () => {
                     />
                   </div>
                   <button
-                    onClick={() => setShowAddScenarioModal(true)}
+                    onClick={openManualScenarioDraft}
                     className="px-3 py-2 bg-[#00bceb] text-white rounded-xl text-xs font-semibold hover:bg-[#0096bd] transition-all"
                   >
                     + Custom Scenario
@@ -7729,18 +8082,22 @@ const App: React.FC = () => {
 
 
                     {activeTab === 'configuration' && (
-            <div className="h-full flex flex-col space-y-8">
+            <div className="h-full flex flex-col gap-5 overflow-hidden">
               <div className={sectionHeaderRowClass}>
                 <div>
                   <h2 className="text-2xl font-medium tracking-tight">{t('configManagement')}</h2>
-                  <p className="text-sm text-black/40">{t('manageTemplates')}</p>
+                  <p className="text-sm text-black/40">
+                    {language === 'zh'
+                      ? '把模板资产、渲染预览、发布范围和发布检查放到同一个工作台里。'
+                      : 'Bring template assets, rendered preview, release scope, and preflight checks into one workspace.'}
+                  </p>
                 </div>
-                <div className="flex gap-3">
+                <div className="flex flex-wrap gap-3">
                   <label className="cursor-pointer px-4 py-2 border border-black/10 rounded-xl text-sm font-medium hover:bg-black/5 transition-all">
                     {t('importVars')}
                     <input type="file" className="hidden" accept=".xlsx, .xls, .csv" onChange={handleImportVars} />
                   </label>
-                  <button 
+                  <button
                     onClick={handleNewTemplate}
                     className="bg-[#00bceb] text-white px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-[#0096bd] transition-all shadow-lg shadow-[#00bceb]/20"
                   >
@@ -7750,92 +8107,179 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex-1 grid grid-cols-1 md:grid-cols-12 gap-4 md:gap-8 overflow-hidden">
-                <div className="md:col-span-4 flex flex-col gap-6 overflow-auto md:pr-2">
-                  {/* Usage Guide */}
-                  <div className="bg-emerald-50 rounded-2xl border border-emerald-100 p-6 shadow-sm">
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className="p-2 bg-emerald-100 text-emerald-600 rounded-lg">
-                        <ShieldCheck size={18} />
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 flex-shrink-0">
+                <div className="bg-white rounded-2xl border border-black/5 p-4 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase tracking-[0.24em] text-black/35 font-bold">
+                      {language === 'zh' ? '模板资产' : 'Template Assets'}
+                    </span>
+                    <FolderOpen size={14} className="text-black/25" />
+                  </div>
+                  <p className="mt-3 text-3xl font-semibold text-black">{configTemplates.length}</p>
+                  <p className="mt-1 text-xs text-black/45">
+                    {language === 'zh'
+                      ? `${configTemplates.filter((tpl) => tpl.category === 'official').length} 个官方模板，${configTemplates.filter((tpl) => tpl.category !== 'official').length} 个自定义模板`
+                      : `${configTemplates.filter((tpl) => tpl.category === 'official').length} official, ${configTemplates.filter((tpl) => tpl.category !== 'official').length} custom`}
+                  </p>
+                </div>
+                <div className="bg-white rounded-2xl border border-black/5 p-4 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase tracking-[0.24em] text-black/35 font-bold">
+                      {language === 'zh' ? '变量完备度' : 'Variable Coverage'}
+                    </span>
+                    <Database size={14} className="text-black/25" />
+                  </div>
+                  <p className="mt-3 text-3xl font-semibold text-black">{configVariableKeys.length - configMissingVariables.length}/{configVariableKeys.length || 0}</p>
+                  <p className="mt-1 text-xs text-black/45">
+                    {configMissingVariables.length === 0
+                      ? (language === 'zh' ? '当前模板变量已全部赋值' : 'All variables are populated for the selected template')
+                      : (language === 'zh' ? `缺失 ${configMissingVariables.length} 个变量` : `${configMissingVariables.length} variables missing`)}
+                  </p>
+                </div>
+                <div className="bg-white rounded-2xl border border-black/5 p-4 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase tracking-[0.24em] text-black/35 font-bold">
+                      {language === 'zh' ? '匹配设备' : 'Matched Targets'}
+                    </span>
+                    <Server size={14} className="text-black/25" />
+                  </div>
+                  <p className="mt-3 text-3xl font-semibold text-black">{configScopedDevices.length}</p>
+                  <p className="mt-1 text-xs text-black/45">
+                    {language === 'zh'
+                      ? `${configScopedOnlineCount} 台在线，可用于当前发布范围`
+                      : `${configScopedOnlineCount} online devices in current release scope`}
+                  </p>
+                </div>
+                <div className="bg-white rounded-2xl border border-black/5 p-4 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase tracking-[0.24em] text-black/35 font-bold">
+                      {language === 'zh' ? '发布就绪度' : 'Release Readiness'}
+                    </span>
+                    <ShieldCheck size={14} className="text-black/25" />
+                  </div>
+                  <p className="mt-3 text-3xl font-semibold text-black">{configReadinessScore}</p>
+                  <p className="mt-1 text-xs text-black/45">
+                    {configValidationIssues.length === 0
+                      ? (language === 'zh' ? '通过基础校验，可进入发布动作' : 'Base checks passed. Ready for release actions')
+                      : (language === 'zh' ? `${configValidationIssues.length} 个阻断项待处理` : `${configValidationIssues.length} blocking issues to resolve`)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-12 gap-4 overflow-hidden">
+                <div className="xl:col-span-3 flex flex-col gap-4 min-h-0 overflow-auto pr-1">
+                  <div className="bg-[#f3fbfd] rounded-2xl border border-[#b7edf7] p-5 shadow-sm">
+                    <div className="flex items-start gap-3">
+                      <div className="p-2 rounded-xl bg-[#00bceb]/10 text-[#0096bd]">
+                        <Activity size={18} />
                       </div>
-                      <h3 className="text-sm font-semibold text-emerald-900">{t('usageGuide')}</h3>
+                      <div>
+                        <h3 className="text-sm font-semibold text-slate-900">
+                          {language === 'zh' ? '配置中心工作流' : 'Configuration Workflow'}
+                        </h3>
+                        <p className="mt-1 text-xs leading-5 text-slate-600">
+                          {language === 'zh'
+                            ? '先选模板资产，再完成变量渲染和发布范围确认，最后做发布前检查后再下发。'
+                            : 'Select a template asset, complete variable rendering and release scope, then run preflight checks before deployment.'}
+                        </p>
+                      </div>
                     </div>
-                    <ul className="space-y-2 text-xs text-emerald-800/70 list-disc list-inside">
-                      <li>{t('guideStep1')}</li>
-                      <li>{t('guideStep2')}</li>
-                      <li>{t('guideStep3')}</li>
-                    </ul>
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-black/5 p-6 shadow-sm">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-black/40 mb-4">{t('templates')}</h3>
-                    <div className="space-y-6">
+                  <div className="bg-white rounded-2xl border border-black/5 p-5 shadow-sm min-h-0 flex flex-col">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-black/40">{t('templates')}</h3>
+                        <p className="mt-1 text-[11px] text-black/35">
+                          {language === 'zh' ? '按厂商分组的模板资产库' : 'Template asset library grouped by vendor'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="space-y-5 overflow-auto pr-1">
                       {Object.entries(
                         configTemplates.reduce((acc, tpl) => {
                           const vendor = tpl.vendor || 'Custom';
                           if (!acc[vendor]) acc[vendor] = [];
                           acc[vendor].push(tpl);
                           return acc;
-                        }, {} as Record<string, typeof configTemplates>)
-                      ).map(([vendor, templates]) => (
+                        }, {} as Record<string, ConfigTemplate[]>) as Record<string, ConfigTemplate[]>
+                      ).map(([vendor, templates]: [string, ConfigTemplate[]]) => (
                         <div key={vendor} className="space-y-2">
-                          <h4 className="text-[10px] font-bold uppercase tracking-widest text-black/30 px-1">{vendor}</h4>
-                          <div className="space-y-1">
-                            {(templates as typeof configTemplates).map((tpl) => (
-                              <button 
-                                key={tpl.id} 
-                                onClick={() => setSelectedTemplateId(tpl.id)}
-                                className={`w-full p-3 rounded-lg text-left transition-all border ${
-                                  selectedTemplateId === tpl.id 
-                                    ? 'bg-black text-white border-black shadow-md' 
-                                    : 'hover:bg-black/5 text-black/60 hover:text-black border-transparent hover:border-black/5'
-                                } group`}
-                              >
-                                <div className="flex justify-between items-center">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-sm font-medium">{tpl.name}</span>
-                                    {tpl.category === 'official' && (
-                                      <span className="text-[8px] bg-blue-100 text-blue-600 px-1 rounded font-bold uppercase">{t('official')}</span>
-                                    )}
+                          <div className="flex items-center justify-between px-1">
+                            <h4 className="text-[10px] font-bold uppercase tracking-[0.22em] text-black/30">{vendor}</h4>
+                            <span className="text-[10px] text-black/25">{templates.length}</span>
+                          </div>
+                          <div className="space-y-2">
+                            {templates.map((tpl) => {
+                              const templateVars = extractVars(tpl.content);
+                              const isSelected = selectedTemplateId === tpl.id;
+                              return (
+                                <button
+                                  key={tpl.id}
+                                  onClick={() => setSelectedTemplateId(tpl.id)}
+                                  className={`w-full rounded-xl border p-3 text-left transition-all ${isSelected
+                                    ? 'border-black bg-black text-white shadow-md'
+                                    : 'border-black/5 bg-white hover:border-black/15 hover:bg-black/[0.02] text-black/75'}`}
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="text-sm font-semibold">{tpl.name}</span>
+                                        {tpl.category === 'official' && (
+                                          <span className={`text-[8px] px-1.5 py-0.5 rounded-full font-bold uppercase ${isSelected ? 'bg-white/10 text-white/70' : 'bg-blue-100 text-blue-700'}`}>
+                                            {t('official')}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className={`mt-1 text-[10px] ${isSelected ? 'text-white/45' : 'text-black/35'}`}>
+                                        {language === 'zh' ? `最近使用 ${tpl.lastUsed}` : `Last used ${tpl.lastUsed}`}
+                                      </p>
+                                    </div>
+                                    <span className={`text-[10px] font-bold uppercase ${isSelected ? 'text-white/45' : 'text-black/30'}`}>{tpl.type}</span>
                                   </div>
-                                  <span className={`text-[10px] font-bold uppercase ${selectedTemplateId === tpl.id ? 'text-white/40' : 'text-black/30'}`}>
-                                    {tpl.type}
-                                  </span>
-                                </div>
-                                <div className="flex justify-between items-center mt-1">
-                                  <p className={`text-[10px] ${selectedTemplateId === tpl.id ? 'text-white/40' : 'text-black/40'}`}>
-                                    Last used: {tpl.lastUsed}
-                                  </p>
-                                </div>
-                              </button>
-                            ))}
+                                  <div className="mt-3 flex items-center gap-2 flex-wrap text-[10px]">
+                                    <span className={`px-2 py-1 rounded-full ${isSelected ? 'bg-white/10 text-white/60' : 'bg-black/[0.04] text-black/45'}`}>
+                                      {templateVars.length} {language === 'zh' ? '变量' : 'vars'}
+                                    </span>
+                                    <span className={`px-2 py-1 rounded-full ${isSelected ? 'bg-white/10 text-white/60' : 'bg-black/[0.04] text-black/45'}`}>
+                                      {tpl.vendor || 'Custom'}
+                                    </span>
+                                  </div>
+                                </button>
+                              );
+                            })}
                           </div>
                         </div>
                       ))}
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-black/5 p-6 shadow-sm">
+                  <div className="bg-white rounded-2xl border border-black/5 p-5 shadow-sm min-h-0 flex flex-col">
                     <div className="flex justify-between items-center mb-4">
-                      <h3 className="text-xs font-semibold uppercase tracking-wider text-black/40">{t('globalVars')}</h3>
-                      <button 
+                      <div>
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-black/40">{t('globalVars')}</h3>
+                        <p className="mt-1 text-[11px] text-black/35">
+                          {language === 'zh' ? '渲染模板时复用的全局参数' : 'Reusable variables for template rendering'}
+                        </p>
+                      </div>
+                      <button
                         onClick={handleAddVar}
                         className="text-[10px] text-blue-600 font-bold hover:underline uppercase"
                       >
                         {t('addVar')}
                       </button>
                     </div>
-                    <div className="space-y-3">
+                    <div className="space-y-3 overflow-auto pr-1">
                       {globalVars.map((v, i) => (
                         <div key={v.id || i} className="group relative flex justify-between items-center py-2 border-b border-black/5">
-                          <div className="flex flex-col">
-                            <span className="text-xs font-mono text-black/60">{v.key}</span>
+                          <div className="flex flex-col min-w-0">
+                            <span className="text-xs font-mono text-black/60 truncate">{v.key}</span>
                             <span className="text-[10px] text-black/30 font-mono">{'{{ ' + v.key + ' }}'}</span>
                           </div>
-                          <div className="flex items-center gap-3">
-                            <span className="text-xs font-medium">{v.value}</span>
+                          <div className="flex items-center gap-3 ml-3">
+                            <span className="text-xs font-medium max-w-[120px] truncate">{v.value}</span>
                             <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                              <button 
+                              <button
                                 onClick={() => {
                                   navigator.clipboard.writeText('{{ ' + v.key + ' }}');
                                   showToast(t('copied'), 'success');
@@ -7845,7 +8289,7 @@ const App: React.FC = () => {
                               >
                                 <FileText size={12} />
                               </button>
-                              <button 
+                              <button
                                 onClick={() => v.id && handleDeleteVar(v.id)}
                                 className="bg-white shadow-sm border border-black/5 p-1 rounded text-red-400 hover:text-red-600"
                                 title="Delete variable"
@@ -7865,68 +8309,135 @@ const App: React.FC = () => {
                   </div>
                 </div>
 
-                  <div className="md:col-span-8 bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden flex flex-col">
-                    <div className="p-6 border-b border-black/5 bg-black/[0.01] flex justify-between items-center">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 bg-black/5 rounded-lg text-black/60">
+                <div className="xl:col-span-6 min-h-0 bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden flex flex-col">
+                  <div className="p-5 border-b border-black/5 bg-black/[0.015]">
+                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                      <div className="flex items-start gap-3 min-w-0">
+                        <div className="p-2 bg-black/5 rounded-xl text-black/60">
                           <Settings size={18} />
                         </div>
-                        <div className="flex flex-col gap-1">
-                          <div className="flex items-center gap-2">
-                            <input 
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
                               type="text"
-                              value={configTemplates.find(t => t.id === selectedTemplateId)?.name || ''}
+                              value={selectedConfigTemplate?.name || ''}
                               onChange={(e) => {
                                 const newName = e.target.value;
-                                setConfigTemplates(prev => prev.map(t => 
-                                  t.id === selectedTemplateId ? { ...t, name: newName } : t
+                                setConfigTemplates((prev) => prev.map((template) =>
+                                  template.id === selectedTemplateId ? { ...template, name: newName } : template
                                 ));
                               }}
-                              className="bg-black/5 px-2 py-0.5 rounded font-medium border border-black/5 focus:border-black/20 outline-none transition-all min-w-[200px]"
+                              className="bg-black/5 px-3 py-1.5 rounded-xl font-medium border border-black/5 focus:border-black/20 outline-none transition-all min-w-[240px] max-w-full"
                               placeholder="Template Name"
                             />
-                            <select 
-                              value={configTemplates.find(t => t.id === selectedTemplateId)?.type || 'Jinja2'}
+                            <select
+                              value={selectedConfigTemplate?.vendor || 'Custom'}
                               onChange={(e) => {
-                                const newType = e.target.value as 'Jinja2' | 'YAML';
-                                setConfigTemplates(prev => prev.map(t => 
-                                  t.id === selectedTemplateId ? { ...t, type: newType } : t
+                                const newVendor = e.target.value;
+                                setConfigTemplates((prev) => prev.map((template) =>
+                                  template.id === selectedTemplateId ? { ...template, vendor: newVendor } : template
                                 ));
                               }}
-                              className="bg-black/5 text-[10px] font-bold uppercase px-1.5 py-0.5 rounded outline-none"
+                              className="bg-black/5 text-xs px-2.5 py-1.5 rounded-xl outline-none"
+                            >
+                              {['Cisco', 'Juniper', 'Huawei', 'H3C', 'Arista', 'Other', 'Custom'].map((vendor) => (
+                                <option key={vendor} value={vendor}>{vendor}</option>
+                              ))}
+                            </select>
+                            <select
+                              value={selectedConfigTemplate?.type || 'Jinja2'}
+                              onChange={(e) => {
+                                const newType = e.target.value as 'Jinja2' | 'YAML';
+                                setConfigTemplates((prev) => prev.map((template) =>
+                                  template.id === selectedTemplateId ? { ...template, type: newType } : template
+                                ));
+                              }}
+                              className="bg-black/5 text-xs font-bold uppercase px-2.5 py-1.5 rounded-xl outline-none"
                             >
                               <option value="Jinja2">Jinja2</option>
                               <option value="YAML">YAML</option>
                             </select>
                           </div>
-                          <p className="text-[10px] text-black/40 uppercase tracking-widest">
-                            {t('editorMode')}
+                          <p className="mt-2 text-[11px] text-black/40">
+                            {language === 'zh'
+                              ? '上方维护模板名称、适用厂商和格式；下方切换源码、渲染结果和发布前检查。'
+                              : 'Manage template name, vendor, and format here, then switch between source, rendered result, and release checks below.'}
                           </p>
                         </div>
                       </div>
-                      <div className="flex gap-2">
-                        <button 
+                      <div className="flex flex-wrap gap-2">
+                        <button
                           onClick={handleDiscardChanges}
-                          className="px-3 py-1.5 text-xs font-medium text-black/40 hover:text-black"
+                          className="px-3 py-2 text-xs font-medium text-black/50 hover:text-black border border-black/10 rounded-xl hover:bg-black/[0.03]"
                         >
                           {t('discard')}
                         </button>
-                        <button 
+                        <button
+                          onClick={() => setConfigWorkspaceView('rendered')}
+                          className="px-3 py-2 text-xs font-medium text-black/70 border border-black/10 rounded-xl hover:bg-black/[0.03] flex items-center gap-1.5"
+                        >
+                          <Eye size={14} />
+                          {language === 'zh' ? '渲染预览' : 'Rendered Preview'}
+                        </button>
+                        <button
+                          onClick={handleValidateTemplateWorkspace}
+                          className="px-3 py-2 bg-black text-white rounded-xl text-xs font-medium hover:bg-black/80 transition-all flex items-center gap-1.5"
+                        >
+                          <ShieldCheck size={14} />
+                          {language === 'zh' ? '发布前检查' : 'Preflight Check'}
+                        </button>
+                        <button
                           onClick={handleSaveTemplate}
-                          className="px-4 py-1.5 bg-black text-white rounded-lg text-xs font-medium hover:bg-black/80 transition-all"
+                          className="px-4 py-2 bg-[#0f172a] text-white rounded-xl text-xs font-medium hover:bg-[#020617] transition-all"
                         >
                           {t('saveChanges')}
                         </button>
-                        <button 
-                          onClick={() => setShowDeployTemplateModal(true)}
-                          className="px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 transition-all shadow-sm"
+                        <button
+                          onClick={handleCreateScenarioDraftFromTemplate}
+                          className="px-4 py-2 bg-[#005b75] text-white rounded-xl text-xs font-medium hover:bg-[#00465a] transition-all"
                         >
-                          {t('deploy')}
+                          {language === 'zh' ? '转成场景草稿' : 'Convert to Scenario Draft'}
+                        </button>
+                        <button
+                          onClick={handleOpenTemplateDeploy}
+                          className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-medium hover:bg-emerald-700 transition-all shadow-sm"
+                        >
+                          {language === 'zh' ? '提交到 Automation' : 'Send to Automation'}
                         </button>
                       </div>
                     </div>
-                    <div className="flex-1 flex bg-[#1E1E1E] overflow-hidden">
-                      <div className="w-12 py-6 bg-black/20 text-white/20 select-none text-right pr-3 font-mono text-sm leading-6">
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {[
+                        { key: 'source', label: language === 'zh' ? '源模板' : 'Source' },
+                        { key: 'rendered', label: language === 'zh' ? '渲染结果' : 'Rendered' },
+                        { key: 'checks', label: language === 'zh' ? '发布检查' : 'Checks' },
+                      ].map((tab) => (
+                        <button
+                          key={tab.key}
+                          onClick={() => setConfigWorkspaceView(tab.key as 'source' | 'rendered' | 'checks')}
+                          className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${configWorkspaceView === tab.key
+                            ? 'bg-black text-white'
+                            : 'bg-black/[0.04] text-black/55 hover:bg-black/[0.08]'}`}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="px-5 py-3 border-b border-black/5 bg-amber-50/70 text-[11px] text-amber-900/80">
+                    {configMissingVariables.length > 0
+                      ? (language === 'zh'
+                        ? `当前仍有未赋值变量: ${configMissingVariables.join('、')}。渲染预览会保留占位符。`
+                        : `Variables still missing: ${configMissingVariables.join(', ')}. Rendered preview will keep placeholders.`)
+                      : (language === 'zh'
+                        ? '渲染预览仅基于全局变量替换，不会连接设备拉取运行态配置。'
+                        : 'Rendered preview uses global variables only and does not connect to devices for runtime config.')}
+                  </div>
+
+                  {configWorkspaceView === 'source' && (
+                    <div className="flex-1 flex bg-[#1E1E1E] overflow-hidden min-h-0">
+                      <div className="w-12 py-6 bg-black/20 text-white/20 select-none text-right pr-3 font-mono text-sm leading-6 overflow-hidden">
                         {editorContent.split('\n').map((_, i) => <div key={i}>{i + 1}</div>)}
                       </div>
                       <textarea
@@ -7936,7 +8447,249 @@ const App: React.FC = () => {
                         spellCheck={false}
                       />
                     </div>
+                  )}
+
+                  {configWorkspaceView === 'rendered' && (
+                    <div className="flex-1 min-h-0 overflow-auto bg-[#101820] text-[#d6e2ea] font-mono text-sm leading-6 p-6">
+                      <div className="mb-4 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.22em] text-white/35">
+                            {language === 'zh' ? '渲染结果' : 'Rendered Result'}
+                          </p>
+                          <p className="mt-1 text-[11px] text-white/45">
+                            {language === 'zh' ? '用于人工预览、Review 和发布前核对。' : 'Use this for operator preview, review, and pre-release verification.'}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(configRenderedPreview);
+                            showToast(t('copied'), 'success');
+                          }}
+                          className="px-3 py-1.5 rounded-xl border border-white/10 text-xs text-white/70 hover:text-white hover:border-white/20 flex items-center gap-1.5"
+                        >
+                          <Copy size={13} />
+                          {language === 'zh' ? '复制渲染结果' : 'Copy rendered output'}
+                        </button>
+                      </div>
+                      <pre className="whitespace-pre-wrap break-words">{configRenderedPreview || (language === 'zh' ? '暂无内容' : 'No content')}</pre>
+                    </div>
+                  )}
+
+                  {configWorkspaceView === 'checks' && (
+                    <div className="flex-1 min-h-0 overflow-auto p-5 bg-[#fafafa]">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="bg-white rounded-2xl border border-black/5 p-5 shadow-sm">
+                          <div className="flex items-center gap-2">
+                            <ShieldCheck size={16} className="text-emerald-600" />
+                            <h3 className="text-sm font-semibold text-black">
+                              {language === 'zh' ? '阻断项' : 'Blocking Checks'}
+                            </h3>
+                          </div>
+                          <div className="mt-4 space-y-2">
+                            {configValidationIssues.length === 0 ? (
+                              <div className="flex items-start gap-2 text-sm text-emerald-700">
+                                <CheckCircle2 size={16} className="mt-0.5 flex-shrink-0" />
+                                <span>{language === 'zh' ? '基础检查全部通过，可以执行发布。' : 'All base checks passed. Release can proceed.'}</span>
+                              </div>
+                            ) : configValidationIssues.map((issue) => (
+                              <div key={issue} className="flex items-start gap-2 text-sm text-red-600">
+                                <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
+                                <span>{issue}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="bg-white rounded-2xl border border-black/5 p-5 shadow-sm">
+                          <div className="flex items-center gap-2">
+                            <AlertCircle size={16} className="text-amber-600" />
+                            <h3 className="text-sm font-semibold text-black">
+                              {language === 'zh' ? '发布提醒' : 'Release Advisories'}
+                            </h3>
+                          </div>
+                          <div className="mt-4 space-y-2">
+                            {configValidationWarnings.length === 0 ? (
+                              <div className="flex items-start gap-2 text-sm text-slate-600">
+                                <CheckCircle2 size={16} className="mt-0.5 flex-shrink-0 text-emerald-600" />
+                                <span>{language === 'zh' ? '没有额外风险提醒。' : 'No additional advisories.'}</span>
+                              </div>
+                            ) : configValidationWarnings.map((warning) => (
+                              <div key={warning} className="flex items-start gap-2 text-sm text-amber-700">
+                                <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
+                                <span>{warning}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="bg-white rounded-2xl border border-black/5 p-5 shadow-sm md:col-span-2">
+                          <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <div>
+                              <h3 className="text-sm font-semibold text-black">
+                                {language === 'zh' ? '推荐的内网发布顺序' : 'Recommended Internal Release Flow'}
+                              </h3>
+                              <p className="mt-1 text-xs text-black/45">
+                                {language === 'zh'
+                                  ? '适合当前内网使用场景，不强依赖审批系统或外部工单平台。'
+                                  : 'Optimized for internal-only use without depending on approval portals or external ticketing systems.'}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+                            {[
+                              language === 'zh' ? '1. 锁定模板与变量版本' : '1. Freeze template and variables',
+                              language === 'zh' ? '2. 按平台/角色/站点筛目标' : '2. Narrow targets by platform/role/site',
+                              language === 'zh' ? '3. 先挑在线设备做小范围验证' : '3. Start with a small online canary set',
+                              language === 'zh' ? '4. 再执行批量下发和回溯核查' : '4. Then deploy broadly and review outcomes',
+                            ].map((item) => (
+                              <div key={item} className="rounded-xl border border-black/5 bg-black/[0.02] px-3 py-3 text-black/70">{item}</div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="xl:col-span-3 flex flex-col gap-4 min-h-0 overflow-auto pl-1">
+                  <div className="bg-white rounded-2xl border border-black/5 p-5 shadow-sm">
+                    <div className="flex items-center gap-2 mb-4">
+                      <Filter size={15} className="text-black/40" />
+                      <h3 className="text-xs font-semibold uppercase tracking-wider text-black/40">
+                        {language === 'zh' ? '发布范围' : 'Release Scope'}
+                      </h3>
+                    </div>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-black/30 block mb-1.5">
+                          {language === 'zh' ? '平台' : 'Platform'}
+                        </label>
+                        <select
+                          value={configScopePlatform}
+                          onChange={(e) => setConfigScopePlatform(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl border border-black/10 bg-white text-sm outline-none"
+                        >
+                          <option value="all">{language === 'zh' ? '全部平台' : 'All platforms'}</option>
+                          {configPlatformOptions.map((platform) => (
+                            <option key={platform} value={platform}>{getPlatformLabel(platform)}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-black/30 block mb-1.5">
+                          {language === 'zh' ? '设备角色' : 'Device Role'}
+                        </label>
+                        <select
+                          value={configScopeRole}
+                          onChange={(e) => setConfigScopeRole(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl border border-black/10 bg-white text-sm outline-none"
+                        >
+                          <option value="all">{language === 'zh' ? '全部角色' : 'All roles'}</option>
+                          {configRoleOptions.map((role) => (
+                            <option key={role} value={role}>{role}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-black/30 block mb-1.5">
+                          {language === 'zh' ? '站点' : 'Site'}
+                        </label>
+                        <select
+                          value={configScopeSite}
+                          onChange={(e) => setConfigScopeSite(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl border border-black/10 bg-white text-sm outline-none"
+                        >
+                          <option value="all">{language === 'zh' ? '全部站点' : 'All sites'}</option>
+                          {configSiteOptions.map((site) => (
+                            <option key={site} value={site}>{site}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="mt-4 rounded-xl bg-black/[0.03] px-3 py-3 text-xs text-black/55">
+                      {language === 'zh'
+                        ? `当前模板厂商范围：${selectedConfigTemplate?.vendor || 'Custom'}。发布范围内共 ${configScopedDevices.length} 台设备。`
+                        : `Current template vendor scope: ${selectedConfigTemplate?.vendor || 'Custom'}. ${configScopedDevices.length} devices are in release scope.`}
+                    </div>
                   </div>
+
+                  <div className="bg-white rounded-2xl border border-black/5 p-5 shadow-sm min-h-0 flex flex-col">
+                    <div className="flex items-center justify-between gap-2 mb-4">
+                      <div>
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-black/40">
+                          {language === 'zh' ? '目标设备预览' : 'Target Preview'}
+                        </h3>
+                        <p className="mt-1 text-[11px] text-black/35">
+                          {language === 'zh' ? '按当前过滤条件匹配到的设备' : 'Devices matched by the current release filters'}
+                        </p>
+                      </div>
+                      <span className="text-[10px] px-2 py-1 rounded-full bg-black/[0.05] text-black/50">
+                        {configScopedOnlineCount}/{configScopedDevices.length} {language === 'zh' ? '在线' : 'online'}
+                      </span>
+                    </div>
+                    <div className="space-y-2 overflow-auto pr-1">
+                      {configScopedDevices.slice(0, 8).map((device) => (
+                        <div key={device.id} className="rounded-xl border border-black/5 px-3 py-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-black truncate">{device.hostname}</p>
+                              <p className="mt-1 text-[11px] text-black/40 font-mono truncate">{device.ip_address}</p>
+                            </div>
+                            <span className={`text-[10px] px-2 py-1 rounded-full ${device.status === 'online' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                              {device.status}
+                            </span>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-black/45">
+                            <span className="px-2 py-1 rounded-full bg-black/[0.04]">{getPlatformLabel(device.platform)}</span>
+                            {device.role && <span className="px-2 py-1 rounded-full bg-black/[0.04]">{device.role}</span>}
+                            {device.site && <span className="px-2 py-1 rounded-full bg-black/[0.04]">{device.site}</span>}
+                          </div>
+                        </div>
+                      ))}
+                      {configScopedDevices.length === 0 && (
+                        <div className="rounded-xl border border-dashed border-black/10 px-4 py-8 text-center text-sm text-black/35">
+                          {language === 'zh' ? '当前没有匹配设备，请调整发布范围。' : 'No devices match the current filters. Adjust the release scope.'}
+                        </div>
+                      )}
+                      {configScopedDevices.length > 8 && (
+                        <p className="text-[11px] text-black/35 px-1">
+                          {language === 'zh' ? `另有 ${configScopedDevices.length - 8} 台设备未展开显示` : `${configScopedDevices.length - 8} more devices not expanded here`}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-2xl border border-black/5 p-5 shadow-sm">
+                    <div className="flex items-center gap-2 mb-4">
+                      <Globe size={15} className="text-black/40" />
+                      <h3 className="text-xs font-semibold uppercase tracking-wider text-black/40">
+                        {language === 'zh' ? '治理提示' : 'Governance Notes'}
+                      </h3>
+                    </div>
+                    <div className="space-y-3 text-sm text-black/65">
+                      <div className="rounded-xl bg-black/[0.03] px-3 py-3">
+                        <p className="font-medium text-black">
+                          {language === 'zh' ? '建议动作' : 'Recommended Action'}
+                        </p>
+                        <p className="mt-1 text-xs text-black/50">
+                          {configReadinessScore >= 85
+                            ? (language === 'zh' ? '先挑一台在线设备验证，再逐步扩大范围。' : 'Validate on one online device first, then expand gradually.')
+                            : (language === 'zh' ? '先补全变量或缩小发布范围，再执行下发。' : 'Complete variables or narrow the scope before deployment.')}
+                        </p>
+                      </div>
+                      <div className="rounded-xl bg-black/[0.03] px-3 py-3">
+                        <p className="font-medium text-black">
+                          {language === 'zh' ? '当前能力边界' : 'Current Capability Boundary'}
+                        </p>
+                        <p className="mt-1 text-xs text-black/50">
+                          {language === 'zh'
+                            ? '当前页面提供模板渲染预览、范围筛选和单设备下发入口；如要做审批、版本签发和回滚编排，建议后续单独补后台流程。'
+                            : 'This workspace currently provides rendered preview, release scoping, and single-device deployment. Approval, signed releases, and rollback orchestration should be added as separate backend workflows later.'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -8360,11 +9113,35 @@ const App: React.FC = () => {
                 <h3 className={`text-lg font-bold ${resolvedTheme === 'dark' ? 'text-white/90' : 'text-[#0b2a3c]'}`}>Create Custom Scenario</h3>
                 <p className={`text-xs mt-1 ${resolvedTheme === 'dark' ? 'text-white/45' : 'text-black/45'}`}>Define a reusable playbook scenario (single platform).</p>
               </div>
-              <button onClick={() => setShowAddScenarioModal(false)} className={resolvedTheme === 'dark' ? 'text-white/50 hover:text-white' : 'text-black/40 hover:text-black'} title="Close">
+              <button onClick={resetScenarioDraft} className={resolvedTheme === 'dark' ? 'text-white/50 hover:text-white' : 'text-black/40 hover:text-black'} title="Close">
                 <X size={18} />
               </button>
             </div>
             <div className="p-6 grid grid-cols-2 gap-4 max-h-[70vh] overflow-auto">
+              {scenarioDraftOrigin.kind === 'template' && (
+                <div className="col-span-2 rounded-2xl border border-[#00bceb]/20 bg-[#00bceb]/6 px-4 py-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#007d9d]">
+                        {language === 'zh' ? 'Template Imported Draft' : 'Template Imported Draft'}
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-black/80">
+                        {language === 'zh'
+                          ? `草稿来源：${scenarioDraftOrigin.templateName || '配置模板'}`
+                          : `Draft source: ${scenarioDraftOrigin.templateName || 'Configuration Template'}`}
+                      </p>
+                      <p className="mt-1 text-xs text-black/50">
+                        {language === 'zh'
+                          ? '已自动把模板正文带入 Execute 阶段，并把占位符转换成场景变量。你可以继续补充 pre-check、post-check 和 rollback。'
+                          : 'The template body has been imported into the Execute phase and placeholders were converted into scenario variables. You can continue editing pre-check, post-check, and rollback.'}
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[10px] font-semibold text-[#007d9d] border border-[#00bceb]/20">
+                      {scenarioDraftOrigin.variableKeys.length} {language === 'zh' ? '变量' : 'vars'}
+                    </span>
+                  </div>
+                </div>
+              )}
               <div>
                 <label className="text-[10px] font-bold uppercase tracking-widest text-black/45">Name</label>
                 <input value={newScenarioForm.name} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, name: e.target.value }))} className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none" />
@@ -8413,6 +9190,36 @@ const App: React.FC = () => {
                 <label className="text-[10px] font-bold uppercase tracking-widest text-black/45">Execute Commands (one per line)</label>
                 <textarea value={newScenarioForm.execute} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, execute: e.target.value }))} className="mt-1 w-full h-24 px-3 py-2 border border-black/10 rounded-xl text-xs font-mono outline-none" />
               </div>
+              {newScenarioVariables.length > 0 && (
+                <div className="col-span-2 rounded-2xl border border-black/10 bg-black/[0.02] p-4">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-black/45">Variables</label>
+                      <p className="mt-1 text-xs text-black/40">
+                        {language === 'zh' ? '以下变量会随场景一起保存，后续在 Automation 执行时填写。' : 'These variables will be saved with the scenario and filled in later during Automation execution.'}
+                      </p>
+                    </div>
+                    <span className="text-[10px] text-black/35">{newScenarioVariables.length}</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {newScenarioVariables.map((variable) => (
+                      <div key={variable.key} className="rounded-xl border border-black/8 bg-white px-3 py-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold text-black/75">{variable.label}</span>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-600 font-bold">
+                            {variable.required ? (language === 'zh' ? '必填' : 'REQ') : (language === 'zh' ? '选填' : 'OPT')}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[11px] font-mono text-black/45">{variable.key}</p>
+                        <p className="mt-2 text-[11px] text-black/40">
+                          {language === 'zh' ? `类型：${variable.type}` : `Type: ${variable.type}`}
+                          {variable.placeholder ? ` · ${language === 'zh' ? '默认提示' : 'Hint'}: ${variable.placeholder}` : ''}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="col-span-2 grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-widest text-black/45">Post-Check Commands</label>
@@ -8425,7 +9232,7 @@ const App: React.FC = () => {
               </div>
             </div>
             <div className={`px-6 py-4 border-t flex gap-3 ${resolvedTheme === 'dark' ? 'border-white/10' : 'border-black/10'}`}>
-              <button onClick={() => setShowAddScenarioModal(false)} className={`flex-1 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${resolvedTheme === 'dark' ? 'bg-white/10 text-white/80 hover:bg-white/15' : 'bg-black/[0.04] text-black/70 hover:bg-black/[0.08]'}`}>
+              <button onClick={resetScenarioDraft} className={`flex-1 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${resolvedTheme === 'dark' ? 'bg-white/10 text-white/80 hover:bg-white/15' : 'bg-black/[0.04] text-black/70 hover:bg-black/[0.08]'}`}>
                 Cancel
               </button>
               <button onClick={createScenario} disabled={isSavingScenario} className="flex-1 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-[#008bb0] hover:bg-[#00769a] transition-all shadow-lg shadow-[#00bceb]/20 disabled:opacity-60">
@@ -8785,11 +9592,20 @@ const App: React.FC = () => {
                       </p>
                     </div>
                   )}
+
+                  {testResult?.errorCode === SSH_AUTH_ERROR_CODE && (
+                    <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-rose-700">SSH Authentication</p>
+                      <p className="mt-2 text-sm text-rose-900">
+                        当前不是算法协商失败，而是设备拒绝了登录认证。优先核对用户名、密码，以及设备上的 AAA、line vty、login local 配置是否允许这个账号通过 SSH 登录。
+                      </p>
+                    </div>
+                  )}
                   
                   {testResult?.output && (
                     <div className="space-y-2">
                       <label className="text-[10px] font-bold uppercase tracking-widest text-black/30 ml-1">
-                        {testResult?.errorCode === LEGACY_SSH_ERROR_CODE ? 'Raw SSH Error' : 'Device Output'}
+                        {testResult?.errorCode === LEGACY_SSH_ERROR_CODE || testResult?.errorCode === SSH_AUTH_ERROR_CODE ? 'Raw SSH Error' : 'Device Output'}
                       </label>
                       <div className="bg-[#00172D] p-4 rounded-xl overflow-auto max-h-[200px]">
                         <pre className="text-xs font-mono text-emerald-400/90 whitespace-pre-wrap">
@@ -8929,65 +9745,6 @@ const App: React.FC = () => {
                 className="px-8 py-2 bg-black text-white rounded-xl text-sm font-medium hover:bg-black/80 transition-all shadow-lg shadow-black/20"
               >
                 {t('commitDeploy')}
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
-
-      {/* Deploy Template Modal */}
-      {showDeployTemplateModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <motion.div 
-            initial={{ scale: 0.95, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden"
-          >
-            <div className="p-6 border-b border-black/5 flex justify-between items-center bg-black/5">
-              <div>
-                <h3 className="text-lg font-medium">{t('deploy')}</h3>
-                <p className="text-xs text-black/40">Select a device to deploy this template</p>
-              </div>
-              <button onClick={() => setShowDeployTemplateModal(false)} className="text-black/40 hover:text-black">
-                <XCircle size={24} />
-              </button>
-            </div>
-            
-            <div className="p-6 space-y-4">
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-black/60 uppercase tracking-wider">{t('selectTarget')}</label>
-                <select 
-                  value={deployTargetDevice}
-                  onChange={(e) => setDeployTargetDevice(e.target.value)}
-                  className="w-full px-3 py-2 bg-black/5 border border-black/10 rounded-xl text-sm focus:border-black/20 outline-none transition-all"
-                >
-                  <option value="">-- {t('selectTarget')} --</option>
-                  {devices.filter(d => d.status === 'online').map(device => (
-                    <option key={device.id} value={device.id}>{device.hostname} ({device.ip_address})</option>
-                  ))}
-                </select>
-              </div>
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex gap-3">
-                <AlertTriangle className="text-amber-500 shrink-0" size={18} />
-                <p className="text-xs text-amber-800 leading-relaxed">
-                  This will immediately execute the configuration template on the selected device. Ensure all variables are correctly formatted.
-                </p>
-              </div>
-            </div>
-            
-            <div className="p-4 border-t border-black/5 bg-black/5 flex justify-end gap-3">
-              <button 
-                onClick={() => setShowDeployTemplateModal(false)}
-                className="px-6 py-2 text-sm font-medium text-black/60 hover:text-black"
-              >
-                {t('cancel')}
-              </button>
-              <button 
-                onClick={handleDeployTemplate}
-                disabled={!deployTargetDevice}
-                className="px-8 py-2 bg-emerald-600 text-white rounded-xl text-sm font-medium hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {t('deploy')}
               </button>
             </div>
           </motion.div>

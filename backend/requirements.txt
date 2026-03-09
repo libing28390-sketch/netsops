@@ -20,3 +20,4 @@ puresnmp>=2.0
 bcrypt
 cryptography
 slowapi
+psutil

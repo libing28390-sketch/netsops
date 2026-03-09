@@ -404,6 +404,29 @@ def init_db():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_alert_events_resolved_at ON alert_events(resolved_at)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_alert_events_dedupe_key ON alert_events(dedupe_key)')
 
+        # Host resource telemetry for the platform server itself
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS host_resource_samples (
+            ts TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            cpu_percent REAL,
+            memory_percent REAL,
+            disk_percent REAL,
+            load_1m REAL,
+            process_memory_mb REAL,
+            process_cpu_percent REAL,
+            memory_used_gb REAL,
+            memory_total_gb REAL,
+            disk_used_gb REAL,
+            disk_total_gb REAL,
+            disk_free_gb REAL,
+            uptime_hours REAL,
+            database_ok INTEGER DEFAULT 0,
+            database_status TEXT DEFAULT ''
+        )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_host_resource_samples_ts ON host_resource_samples(ts)')
+
         # Migration: add columns to playbook_executions if missing
         cursor.execute("PRAGMA table_info(playbook_executions)")
         pb_cols = [c[1] for c in cursor.fetchall()]

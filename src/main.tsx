@@ -11,6 +11,7 @@ interface RootErrorBoundaryState {
 }
 
 class RootErrorBoundary extends React.Component<{ children: React.ReactNode }, RootErrorBoundaryState> {
+  declare props: Readonly<{ children: React.ReactNode }>;
   state: RootErrorBoundaryState = { hasError: false, errorMessage: '' };
 
   static getDerivedStateFromError(error: Error): RootErrorBoundaryState {

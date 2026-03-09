@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from core.config import settings
 from core.logging import setup_logging
-from api.health import router as health_router
+from api.health import router as health_router, record_host_resource_snapshot
 from api.devices import router as devices_router
 from api.jobs import router as jobs_router
 from api.templates import router as templates_router
@@ -50,8 +50,17 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting up {settings.PROJECT_NAME} in {settings.ENVIRONMENT} mode...")
     seed_data()
     asyncio.create_task(status_monitor())
+    record_host_resource_snapshot(sync_alerts=True)
     schedule_cfg = _get_schedule_from_db()
     scheduler.start()
+    scheduler.add_job(
+        record_host_resource_snapshot,
+        'interval',
+        minutes=1,
+        id='host_resource_sampler',
+        name='Host Resource Sampler',
+        replace_existing=True,
+    )
     reschedule_backup(schedule_cfg)
     # Schedule daily DB maintenance: clean expired sessions, VACUUM
     scheduler.add_job(

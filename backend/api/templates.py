@@ -57,10 +57,11 @@ def update_template(template_id: str, template: dict = Body(...)):
     conn = get_db_connection()
     try:
         conn.execute('''
-            UPDATE templates SET name = ?, type = ?, content = ?, last_used = ? WHERE id = ?
+            UPDATE templates SET name = ?, type = ?, vendor = ?, content = ?, last_used = ? WHERE id = ?
         ''', (
             template.get('name'),
             template.get('type'),
+            template.get('vendor', ''),
             template.get('content'),
             template.get('lastUsed'),
             template_id
@@ -77,7 +78,7 @@ def update_template(template_id: str, template: dict = Body(...)):
             target_type='template',
             target_id=template_id,
             target_name=template.get('name'),
-            details={'type': template.get('type')},
+            details={'type': template.get('type'), 'vendor': template.get('vendor')},
         )
         return {"success": True}
     except Exception as e:

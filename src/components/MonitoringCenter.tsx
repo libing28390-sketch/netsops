@@ -1,6 +1,7 @@
 import React from 'react';
 import { Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Brush, ReferenceArea } from 'recharts';
+import type { HostResourceSnapshot, HostResourceHistoryPayload } from '../types';
 
 type MonitorDevice = {
   id?: string;
@@ -56,9 +57,11 @@ interface MonitoringCenterProps {
   setMonitorDashboardSiteFilter: (value: string) => void;
   monitorDashboardAlertFilter: 'all' | 'critical' | 'major';
   setMonitorDashboardAlertFilter: (value: 'all' | 'critical' | 'major') => void;
+  hostResources: HostResourceSnapshot | null;
   fetchMonitoringOverview: () => void | Promise<void>;
   fetchMonitoringAlerts: () => void | Promise<void>;
   fetchMonitoringRealtime: (deviceId: string) => Promise<any>;
+  fetchHostResources: () => void | Promise<void>;
   setMonitorRealtime: (value: any) => void;
   showToast: (message: string, type?: string) => void;
 }
@@ -170,6 +173,9 @@ const MonitoringPagination: React.FC<{
 
 const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
   const [refreshing, setRefreshing] = React.useState(false);
+  const [hostResourceRange, setHostResourceRange] = React.useState<1 | 24 | 168>(24);
+  const [hostResourceHistory, setHostResourceHistory] = React.useState<HostResourceHistoryPayload | null>(null);
+  const [hostResourceHistoryLoading, setHostResourceHistoryLoading] = React.useState(false);
   const {
     language,
     monitorSearch,
@@ -214,12 +220,28 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
     setMonitorDashboardSiteFilter,
     monitorDashboardAlertFilter,
     setMonitorDashboardAlertFilter,
+    hostResources,
     fetchMonitoringOverview,
     fetchMonitoringAlerts,
     fetchMonitoringRealtime,
+    fetchHostResources,
     setMonitorRealtime,
     showToast,
   } = props;
+
+  const fetchHostResourceHistory = React.useCallback(async (rangeHours = hostResourceRange) => {
+    setHostResourceHistoryLoading(true);
+    try {
+      const resp = await fetch(`/api/health/resources/history?range_hours=${rangeHours}`);
+      if (!resp.ok) throw new Error('Failed to fetch host resource history');
+      const payload = await resp.json() as HostResourceHistoryPayload;
+      setHostResourceHistory(payload);
+    } catch {
+      showToast(language === 'zh' ? '无法加载宿主机资源趋势' : 'Unable to load host resource trend', 'error');
+    } finally {
+      setHostResourceHistoryLoading(false);
+    }
+  }, [hostResourceRange, language, showToast]);
 
   const fmtRate = (bps?: number) => {
     if (bps == null || !Number.isFinite(bps) || bps < 0) return '-';
@@ -277,6 +299,11 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
   const fmtThroughputProm = (bps?: number) => {
     const parts = formatPromThroughputParts(bps);
     return parts.unit ? `${parts.value} ${parts.unit}` : parts.value;
+  };
+
+  const fmtPercent = (value?: number | null) => {
+    if (value == null || !Number.isFinite(value)) return '--';
+    return `${Math.round(value)}%`;
   };
 
   const fmtThroughputAxis = (bps?: number) => {
@@ -529,6 +556,35 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
   const promExpressionLabel = monitorTrendInterface
     ? `rate(interface_bytes_total{if="${monitorTrendInterface}"}[5m])`
     : 'sum(rate(interface_bytes_total[5m]))';
+  const hostResourceTone = hostResources?.status === 'critical'
+    ? 'bg-red-50 text-red-700 border-red-200'
+    : hostResources?.status === 'degraded'
+      ? 'bg-amber-50 text-amber-700 border-amber-200'
+      : 'bg-emerald-50 text-emerald-700 border-emerald-200';
+  const hostStatusLabel = hostResources?.status === 'critical'
+    ? (language === 'zh' ? '严重' : 'Critical')
+    : hostResources?.status === 'degraded'
+      ? (language === 'zh' ? '告警' : 'Degraded')
+      : (language === 'zh' ? '健康' : 'Healthy');
+  const hostTrendData = (hostResourceHistory?.series || []).map((point) => ({
+    ts: point.ts,
+    time: formatTs(point.ts, hostResourceRange === 1),
+    cpu_percent: point.cpu_percent,
+    memory_percent: point.memory_percent,
+    disk_percent: point.disk_percent,
+  }));
+
+  React.useEffect(() => {
+    fetchHostResourceHistory(hostResourceRange);
+  }, [fetchHostResourceHistory, hostResourceRange]);
+
+  React.useEffect(() => {
+    if (!monitorPageVisible) return;
+    const timer = window.setInterval(() => {
+      fetchHostResourceHistory(hostResourceRange);
+    }, 60000);
+    return () => window.clearInterval(timer);
+  }, [fetchHostResourceHistory, hostResourceRange, monitorPageVisible]);
 
   return (
     <div className="monitoring-center space-y-6">
@@ -549,6 +605,8 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
               setRefreshing(true);
               fetchMonitoringOverview();
               fetchMonitoringAlerts();
+              fetchHostResources();
+              fetchHostResourceHistory(hostResourceRange);
               if (monitorSelectedDevice?.id) {
                 fetchMonitoringRealtime(monitorSelectedDevice.id).then(setMonitorRealtime).catch(() => undefined);
               }
@@ -581,6 +639,141 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
             <p className="mt-1 text-2xl font-semibold text-[#00172D]">{c.value}</p>
           </div>
         ))}
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_1fr] gap-4">
+        <div className="rounded-2xl border border-black/5 bg-white shadow-sm p-5 space-y-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#0089ac]">{language === 'zh' ? '平台宿主机' : 'Platform Host'}</p>
+              <h3 className="monitoring-heading mt-1 text-lg font-semibold text-[#0b2340]">{language === 'zh' ? '服务器资源概览' : 'Server Resource Overview'}</h3>
+              <p className="text-xs text-black/45">{language === 'zh' ? '面向部署此运维平台的宿主机，便于快速判断是否为平台资源瓶颈。' : 'Telemetry for the host running this platform, so you can quickly spot platform-side bottlenecks.'}</p>
+            </div>
+            <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-[0.14em] ${hostResourceTone}`}>{hostStatusLabel}</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-lg border border-black/10 bg-white overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setHostResourceRange(1)}
+                className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] transition-all ${hostResourceRange === 1 ? 'bg-black text-white' : 'text-black/55 hover:bg-black/[0.03]'}`}
+              >
+                {language === 'zh' ? '最近 1 小时' : 'Last 1h'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setHostResourceRange(24)}
+                className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] transition-all ${hostResourceRange === 24 ? 'bg-black text-white' : 'text-black/55 hover:bg-black/[0.03]'}`}
+              >
+                {language === 'zh' ? '最近 24 小时' : 'Last 24h'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setHostResourceRange(168)}
+                className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] transition-all ${hostResourceRange === 168 ? 'bg-black text-white' : 'text-black/55 hover:bg-black/[0.03]'}`}
+              >
+                {language === 'zh' ? '最近 7 天' : 'Last 7d'}
+              </button>
+            </div>
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+              {language === 'zh'
+                ? `当前告警 ${hostResources?.active_alert_count || 0}`
+                : `Active alerts ${hostResources?.active_alert_count || 0}`}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: language === 'zh' ? 'CPU' : 'CPU', value: fmtPercent(hostResources?.cpu_percent), sub: language === 'zh' ? '主机使用率' : 'Host usage' },
+              { label: language === 'zh' ? '内存' : 'Memory', value: fmtPercent(hostResources?.memory_percent), sub: hostResources?.memory_total_gb != null && hostResources?.memory_used_gb != null ? `${hostResources.memory_used_gb.toFixed(1)} / ${hostResources.memory_total_gb.toFixed(1)} GB` : '--' },
+              { label: language === 'zh' ? '磁盘' : 'Disk', value: fmtPercent(hostResources?.disk_percent), sub: hostResources ? `${hostResources.disk_free_gb.toFixed(1)} GB ${language === 'zh' ? '可用' : 'free'}` : '--' },
+              { label: language === 'zh' ? '进程内存' : 'Process RSS', value: hostResources?.process_memory_mb != null ? `${Math.round(hostResources.process_memory_mb)} MB` : '--', sub: hostResources?.process_cpu_percent != null ? `${language === 'zh' ? '进程 CPU' : 'Process CPU'} ${fmtPercent(hostResources.process_cpu_percent)}` : '--' },
+            ].map((item) => (
+              <div key={item.label} className="rounded-xl border border-black/8 bg-[linear-gradient(180deg,rgba(0,0,0,0.01),rgba(0,0,0,0.03))] p-4">
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-black/35">{item.label}</p>
+                <p className="mt-2 text-2xl font-semibold text-[#00172D]">{item.value}</p>
+                <p className="mt-1 text-[11px] text-black/45">{item.sub}</p>
+              </div>
+            ))}
+          </div>
+            <div className="rounded-xl border border-black/8 bg-[linear-gradient(180deg,rgba(2,6,23,0.01),rgba(2,6,23,0.04))] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-black/35">{language === 'zh' ? '资源趋势' : 'Resource Trend'}</p>
+                  <p className="mt-1 text-xs text-black/45">{language === 'zh' ? '展示宿主机 CPU、内存、磁盘占用曲线，长时间范围自动降采样。' : 'CPU, memory and disk usage for the platform host with automatic downsampling on longer ranges.'}</p>
+                </div>
+                <span className="text-[11px] text-black/40">{hostResourceHistoryLoading ? (language === 'zh' ? '加载中...' : 'Loading...') : `${hostResourceHistory?.sample_count || hostTrendData.length} ${language === 'zh' ? '个点' : 'points'} · ${hostResourceHistory?.resolution_hint || '1m'}`}</span>
+              </div>
+              <div className="mt-4 h-[220px]">
+                {hostTrendData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={hostTrendData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="2 4" vertical={false} stroke="#dbe4ee" />
+                      <XAxis dataKey="ts" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#60748a' }} tickFormatter={(value) => hostResourceRange === 168 ? formatPromAxisTimestamp(String(value), 8 * 24 * 60 * 60 * 1000) : formatTs(String(value), hostResourceRange === 1)} minTickGap={28} />
+                      <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#60748a' }} domain={[0, 100]} tickFormatter={(value) => `${value}%`} width={42} />
+                      <Tooltip
+                        contentStyle={{ borderRadius: 14, borderColor: '#d9e3ef', boxShadow: '0 18px 38px rgba(15,23,42,0.12)', padding: '14px 16px', background: 'rgba(255,255,255,0.96)' }}
+                        labelFormatter={(value) => formatPromTimestamp(String(value))}
+                        formatter={(value: any, name: any) => [`${Math.round(Number(value || 0))}%`, String(name)]}
+                      />
+                      <Area type="monotone" dataKey="cpu_percent" name={language === 'zh' ? 'CPU' : 'CPU'} stroke="#2563eb" fill="#2563eb1f" strokeWidth={2.1} isAnimationActive={false} connectNulls />
+                      <Area type="monotone" dataKey="memory_percent" name={language === 'zh' ? '内存' : 'Memory'} stroke="#ea580c" fill="#ea580c18" strokeWidth={2.1} isAnimationActive={false} connectNulls />
+                      <Area type="monotone" dataKey="disk_percent" name={language === 'zh' ? '磁盘' : 'Disk'} stroke="#16a34a" fill="#16a34a18" strokeWidth={2.1} isAnimationActive={false} connectNulls />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full flex items-center justify-center text-sm text-black/35">{language === 'zh' ? '暂无宿主机资源趋势数据。' : 'No host resource trend data yet.'}</div>
+                )}
+              </div>
+            </div>
+        </div>
+
+        <div className="rounded-2xl border border-black/5 bg-white shadow-sm p-5 space-y-3">
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#0089ac]">{language === 'zh' ? '服务状态' : 'Service Status'}</p>
+          <div className="space-y-2 text-sm text-black/60">
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-black/8 px-3 py-2">
+              <span>{language === 'zh' ? '数据库' : 'Database'}</span>
+              <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${hostResources?.database_ok ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{hostResources?.database_ok ? (language === 'zh' ? '已连接' : 'Connected') : (language === 'zh' ? '异常' : 'Error')}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-black/8 px-3 py-2">
+              <span>{language === 'zh' ? '系统负载' : 'Load Avg'}</span>
+              <span className="font-semibold text-[#00172D]">{hostResources?.load_1m != null ? hostResources.load_1m.toFixed(2) : '--'}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-black/8 px-3 py-2">
+              <span>{language === 'zh' ? '运行时长' : 'Uptime'}</span>
+              <span className="font-semibold text-[#00172D]">{hostResources?.uptime_hours != null ? `${hostResources.uptime_hours.toFixed(1)}h` : '--'}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-black/8 px-3 py-2">
+              <span>{language === 'zh' ? '宿主机' : 'Hostname'}</span>
+              <span className="font-semibold text-[#00172D] truncate max-w-[180px] text-right">{hostResources?.hostname || '--'}</span>
+            </div>
+          </div>
+          <div className="rounded-xl border border-dashed border-black/10 bg-black/[0.01] p-4 text-xs text-black/45">
+            {hostResources?.metrics_available
+              ? `${language === 'zh' ? '最近刷新' : 'Last refresh'}: ${formatTs(hostResources.updated_at, true)}`
+              : (language === 'zh' ? '当前未安装资源采集依赖，接口可访问但指标不可用。' : 'Resource collector dependency is missing, so the endpoint is reachable but metrics are unavailable.')}
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-red-600">{language === 'zh' ? '资源告警' : 'Resource Alerts'}</p>
+              <span className="text-[11px] text-black/40">{language === 'zh' ? '按阈值自动生成' : 'Threshold-driven'}</span>
+            </div>
+            {(hostResourceHistory?.alerts || []).length > 0 ? (hostResourceHistory?.alerts || []).slice(0, 6).map((alert, index) => {
+              const severityTone = alert.severity === 'critical' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700';
+              return (
+                <div key={alert.id || `${alert.metric_key}-${index}`} className="rounded-xl border border-black/8 px-3 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${severityTone}`}>{alert.severity === 'critical' ? (language === 'zh' ? '严重' : 'Critical') : (language === 'zh' ? '告警' : 'Major')}</span>
+                    <span className="text-[11px] text-black/40">{alert.created_at ? formatTs(alert.created_at, true) : '--'}</span>
+                  </div>
+                  <p className="mt-2 text-sm font-semibold text-[#0b2340]">{alert.title}</p>
+                  <p className="mt-1 text-[11px] text-black/55">{alert.message}</p>
+                </div>
+              );
+            }) : (
+              <div className="rounded-xl border border-dashed border-black/10 bg-black/[0.01] p-4 text-sm text-black/35">{language === 'zh' ? '当前没有宿主机资源告警。' : 'No active host resource alerts right now.'}</div>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="bg-white rounded-2xl border border-black/5 shadow-sm p-5 space-y-4">
@@ -828,7 +1021,7 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
             <span>{isCompactTrend ? (language === 'zh' ? `${displayedChartData.length} 点` : `${displayedChartData.length} pts`) : (language === 'zh' ? `共 ${displayedChartData.length} 个点，可直接在图面按住拖拽缩放。` : `${displayedChartData.length} points in view. Drag directly inside the chart to zoom.`)}</span>
           </div>}
           <div className={`${isCompactTrend ? 'h-[250px]' : 'h-[300px]'} rounded-xl border border-slate-200 bg-gradient-to-b from-slate-50 to-white p-2 monitoring-chart-frame`}>
-            {showChart ? <ResponsiveContainer width="100%" height="100%"><AreaChart data={displayedChartData} margin={{ top: 12, right: 16, left: 8, bottom: !zoomActive && chartData.length > 12 ? 18 : 0 }} onMouseDown={(state: any) => { const localIndex = Number(state?.activeTooltipIndex); if (!Number.isInteger(localIndex)) return; const globalIndex = dragBaseIndex + localIndex; setMonitorTrendDragStart(globalIndex); setMonitorTrendDragEnd(globalIndex); }} onMouseMove={(state: any) => { if (monitorTrendDragStart == null) return; const localIndex = Number(state?.activeTooltipIndex); if (!Number.isInteger(localIndex)) return; const globalIndex = dragBaseIndex + localIndex; setMonitorTrendDragEnd(globalIndex); }} onMouseUp={() => { if (monitorTrendDragStart == null || monitorTrendDragEnd == null) return; const startIndex = Math.max(0, Math.min(monitorTrendDragStart, monitorTrendDragEnd)); const endIndex = Math.min(fullEndIndex, Math.max(monitorTrendDragStart, monitorTrendDragEnd)); if (endIndex - startIndex >= 2) { setMonitorTrendZoom({ startIndex, endIndex }); } setMonitorTrendDragStart(null); setMonitorTrendDragEnd(null); }} onMouseLeave={() => { if (monitorTrendDragStart == null || monitorTrendDragEnd == null) return; setMonitorTrendDragStart(null); setMonitorTrendDragEnd(null); }}><CartesianGrid strokeDasharray="2 4" vertical={false} stroke="#dbe4ee" /><XAxis dataKey="ts" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#60748a' }} minTickGap={isCompactTrend ? 44 : 30} tickCount={axisTickCount} interval="preserveStartEnd" tickFormatter={(v) => formatPromAxisTimestamp(String(v), displayedRangeMs)} /><YAxis hide={!hasThroughputMetric} yAxisId="throughput" width={84} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#60748a' }} tickFormatter={(v) => fmtThroughputAxis(Number(v))} /><YAxis hide={!hasCountMetric} yAxisId="count" width={72} orientation="right" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#60748a' }} tickFormatter={(v) => Number(v || 0).toLocaleString()} /><Tooltip contentStyle={{ borderRadius: 14, borderColor: '#d9e3ef', boxShadow: '0 18px 38px rgba(15,23,42,0.12)', padding: '14px 16px', background: 'rgba(255,255,255,0.96)' }} labelStyle={{ color: '#10233a', fontWeight: 700, fontSize: 13, letterSpacing: '-0.01em' }} itemStyle={{ fontSize: 12, fontWeight: 600, paddingTop: 2, paddingBottom: 2 }} labelFormatter={(_, payload: any) => { const row = payload?.[0]?.payload; if (row?.ts) return formatPromTimestamp(row.ts); return _; }} formatter={(v: any, _n: any, entry: any) => { const metricKey = String(entry?.dataKey || ''); const def = trendMetricMap[metricKey as keyof typeof trendMetricMap]; if (v == null || !Number.isFinite(Number(v))) return [language === 'zh' ? '无样本' : 'No sample', def?.short || metricKey || String(_n)]; if (def?.unit === 'throughput') return [fmtThroughputProm(Number(v)), def.short]; return [Number(v).toLocaleString(), def?.short || metricKey || String(_n)]; }} />{selectedMetricDefs.map((m) => <Area key={m.key} type="monotone" dataKey={m.key} yAxisId={m.unit === 'throughput' ? 'throughput' : 'count'} stroke={m.color} fill={`${m.color}1f`} strokeWidth={2.2} name={m.short} isAnimationActive={false} connectNulls={false} />)}{dragPreviewActive && dragStartIndex != null && dragEndIndex != null && chartData[dragStartIndex] && chartData[dragEndIndex] && <ReferenceArea x1={chartData[dragStartIndex].ts} x2={chartData[dragEndIndex].ts} strokeOpacity={0} fill="#0f172a" fillOpacity={0.10} />} {!zoomActive && chartData.length > 12 && <Brush dataKey="ts" height={26} travellerWidth={10} startIndex={0} endIndex={fullEndIndex} stroke="#94a3b8" fill="#eef2f6" tickFormatter={(v: any) => formatPromAxisTimestamp(String(v), displayedRangeMs)} onChange={(next: any) => { const startIndex = Number(next?.startIndex); const endIndex = Number(next?.endIndex); if (!Number.isInteger(startIndex) || !Number.isInteger(endIndex)) return; if (startIndex <= 0 && endIndex >= fullEndIndex) { setMonitorTrendZoom(null); return; } setMonitorTrendZoom({ startIndex, endIndex }); }} />}</AreaChart></ResponsiveContainer> : monitorSelectedDevice && selectedMetricDefs.length === 0 ? <div className="h-full" /> : monitorSelectedDevice && hasTrendResponse && chartData.length === 0 ? <div className="h-full flex items-center justify-center text-sm text-black/35">{language === 'zh' ? '该时间范围暂无趋势数据。' : 'No trend data in the selected time range.'}</div> : <div className="h-full flex items-center justify-center text-sm text-black/35">{language === 'zh' ? '选择设备后查看趋势。' : 'Select a device to view trend.'}</div>}
+            {showChart ? <ResponsiveContainer width="100%" height="100%"><AreaChart data={displayedChartData} margin={{ top: 12, right: 16, left: 8, bottom: !zoomActive && chartData.length > 12 ? 18 : 0 }} onMouseDown={(state: any) => { const localIndex = Number(state?.activeTooltipIndex); if (!Number.isInteger(localIndex)) return; const globalIndex = dragBaseIndex + localIndex; setMonitorTrendDragStart(globalIndex); setMonitorTrendDragEnd(globalIndex); }} onMouseMove={(state: any) => { if (monitorTrendDragStart == null) return; const localIndex = Number(state?.activeTooltipIndex); if (!Number.isInteger(localIndex)) return; const globalIndex = dragBaseIndex + localIndex; setMonitorTrendDragEnd(globalIndex); }} onMouseUp={() => { if (monitorTrendDragStart == null || monitorTrendDragEnd == null) return; const startIndex = Math.max(0, Math.min(monitorTrendDragStart, monitorTrendDragEnd)); const endIndex = Math.min(fullEndIndex, Math.max(monitorTrendDragStart, monitorTrendDragEnd)); if (endIndex - startIndex >= 2) { setMonitorTrendZoom({ startIndex, endIndex }); } setMonitorTrendDragStart(null); setMonitorTrendDragEnd(null); }} onMouseLeave={() => { if (monitorTrendDragStart == null || monitorTrendDragEnd == null) return; setMonitorTrendDragStart(null); setMonitorTrendDragEnd(null); }}><CartesianGrid strokeDasharray="2 4" vertical={false} stroke="#dbe4ee" /><XAxis dataKey="ts" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#60748a' }} minTickGap={isCompactTrend ? 44 : 30} tickCount={axisTickCount} interval="preserveStartEnd" tickFormatter={(v) => formatPromAxisTimestamp(String(v), displayedRangeMs)} /><YAxis hide={!hasThroughputMetric} yAxisId="throughput" width={84} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#60748a' }} tickFormatter={(v) => fmtThroughputAxis(Number(v))} /><YAxis hide={!hasCountMetric} yAxisId="count" width={72} orientation="right" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#60748a' }} tickFormatter={(v) => Number(v || 0).toLocaleString()} /><Tooltip contentStyle={{ borderRadius: 14, borderColor: '#d9e3ef', boxShadow: '0 18px 38px rgba(15,23,42,0.12)', padding: '14px 16px', background: 'rgba(255,255,255,0.96)' }} labelStyle={{ color: '#10233a', fontWeight: 700, fontSize: 13, letterSpacing: '-0.01em' }} itemStyle={{ fontSize: 12, fontWeight: 600, paddingTop: 2, paddingBottom: 2 }} labelFormatter={(_, payload: any) => { const row = payload?.[0]?.payload; if (row?.ts) return formatPromTimestamp(row.ts); return _; }} formatter={(v: any, _n: any, entry: any) => { const metricKey = String(entry?.dataKey || ''); const def = trendMetricMap[metricKey as keyof typeof trendMetricMap]; if (v == null || !Number.isFinite(Number(v))) return [language === 'zh' ? '无样本' : 'No sample', def?.short || metricKey || String(_n)]; if (def?.unit === 'throughput') return [fmtThroughputProm(Number(v)), def.short]; return [Number(v).toLocaleString(), def?.short || metricKey || String(_n)]; }} />{selectedMetricDefs.map((m) => <Area key={m.key} type="monotone" dataKey={m.key} yAxisId={m.unit === 'throughput' ? 'throughput' : 'count'} stroke={m.color} fill={`${m.color}1f`} strokeWidth={2.2} name={m.short} isAnimationActive={false} connectNulls={false} />)} {!zoomActive && chartData.length > 12 && <Brush dataKey="ts" height={26} travellerWidth={10} startIndex={0} endIndex={fullEndIndex} stroke="#94a3b8" fill="#eef2f6" tickFormatter={(v: any) => formatPromAxisTimestamp(String(v), displayedRangeMs)} onChange={(next: any) => { const startIndex = Number(next?.startIndex); const endIndex = Number(next?.endIndex); if (!Number.isInteger(startIndex) || !Number.isInteger(endIndex)) return; if (startIndex <= 0 && endIndex >= fullEndIndex) { setMonitorTrendZoom(null); return; } setMonitorTrendZoom({ startIndex, endIndex }); }} />}</AreaChart></ResponsiveContainer> : monitorSelectedDevice && selectedMetricDefs.length === 0 ? <div className="h-full" /> : monitorSelectedDevice && hasTrendResponse && chartData.length === 0 ? <div className="h-full flex items-center justify-center text-sm text-black/35">{language === 'zh' ? '该时间范围暂无趋势数据。' : 'No trend data in the selected time range.'}</div> : <div className="h-full flex items-center justify-center text-sm text-black/35">{language === 'zh' ? '选择设备后查看趋势。' : 'Select a device to view trend.'}</div>}
           </div>
         </div>
       </div>

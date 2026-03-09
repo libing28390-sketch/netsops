@@ -153,6 +153,7 @@ export interface ConfigTemplate {
   type: string;
   lastUsed: string;
   category: string;
+  vendor?: string;
   content: string;
 }
 
@@ -162,7 +163,7 @@ export interface ConfigSnapshot {
   hostname: string;
   ip_address?: string;
   vendor: string;
-  trigger: 'manual' | 'auto' | 'change';
+  trigger: 'manual' | 'auto' | 'change' | 'scheduled';
   author: string;
   content?: string;
   created_at: string;
@@ -212,8 +213,72 @@ export interface NotificationItem {
   message: string;
   time: string;
   source?: string;
-  severity?: 'low' | 'medium' | 'high';
+  severity?: 'low' | 'medium' | 'high' | 'major' | 'critical';
   read: boolean;
+}
+
+export interface HostResourceSnapshot {
+  status: 'healthy' | 'degraded' | 'critical';
+  metrics_available: boolean;
+  cpu_percent: number | null;
+  memory_percent: number | null;
+  memory_used_gb: number | null;
+  memory_total_gb: number | null;
+  disk_percent: number | null;
+  disk_used_gb: number;
+  disk_total_gb: number;
+  disk_free_gb: number;
+  load_1m: number | null;
+  uptime_hours: number | null;
+  database_status: string;
+  database_ok: boolean;
+  process_memory_mb: number | null;
+  process_cpu_percent: number | null;
+  hostname: string | null;
+  platform: string | null;
+  updated_at: string;
+  active_alert_count?: number;
+  active_alerts?: HostResourceAlert[];
+}
+
+export interface HostResourceAlert {
+  id?: string;
+  dedupe_key?: string;
+  severity: 'major' | 'critical';
+  title: string;
+  message: string;
+  metric_key?: string;
+  created_at?: string;
+  resolved_at?: string | null;
+}
+
+export interface HostResourceTrendPoint {
+  ts: string;
+  status: 'healthy' | 'degraded' | 'critical';
+  cpu_percent: number | null;
+  memory_percent: number | null;
+  disk_percent: number | null;
+  load_1m: number | null;
+  process_memory_mb: number | null;
+  process_cpu_percent: number | null;
+  memory_used_gb: number | null;
+  memory_total_gb: number | null;
+  disk_used_gb: number | null;
+  disk_total_gb: number | null;
+  disk_free_gb: number | null;
+  uptime_hours: number | null;
+  database_ok: number;
+  database_status: string;
+}
+
+export interface HostResourceHistoryPayload {
+  current: HostResourceSnapshot;
+  series: HostResourceTrendPoint[];
+  alerts: HostResourceAlert[];
+  range_hours: number;
+  resolution_hint?: '1m' | '5m' | '30m';
+  sample_count?: number;
+  thresholds: Record<string, { warn: number; critical: number; title: string; title_zh: string }>;
 }
 
 export const PLATFORM_LABELS: Record<string, string> = {
@@ -233,6 +298,7 @@ export const getVendorFromPlatform = (platform: string) => {
   if (p.includes('cisco')) return 'Cisco';
   if (p.includes('juniper')) return 'Juniper';
   if (p.includes('huawei')) return 'Huawei';
+  if (p.includes('h3c') || p.includes('comware')) return 'H3C';
   if (p.includes('arista')) return 'Arista';
   return 'Other';
 };
