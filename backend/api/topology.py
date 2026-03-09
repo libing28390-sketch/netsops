@@ -37,6 +37,12 @@ SCRAPLI_DRIVERS = {
     'h3c_comware': AsyncHPComwareDriver,
 }
 
+# 这类平台在实验环境中经常只支持旧 SHA1 KEX。
+# 为避免后台 LLDP 定时任务不断触发 NO_MATCH，直接走 Netmiko 兼容路径。
+SCRAPLI_LEGACY_SSH_SKIP_PLATFORMS = frozenset({
+    'cisco_ios',
+})
+
 # LLDP commands per platform
 LLDP_COMMANDS = {
     'cisco_ios': 'show lldp neighbors',
@@ -57,8 +63,15 @@ async def discover_lldp_neighbors(device_id: str):
         device_dict = dict(device)
         platform = device_dict.get('platform', 'cisco_ios')
         
-        # Try Scrapli first for speed
+        # Try Scrapli first for speed, unless the platform is known to be legacy-SSH-sensitive.
         driver_class = SCRAPLI_DRIVERS.get(platform)
+        if platform in SCRAPLI_LEGACY_SSH_SKIP_PLATFORMS:
+            logger.info(
+                f"Skipping Scrapli LLDP discovery for {device_dict['hostname']} "
+                f"({platform}) and using Netmiko compatibility path directly"
+            )
+            driver_class = None
+
         if driver_class:
             scrapli_device = {
                 'host': device_dict.get('ip_address'),
