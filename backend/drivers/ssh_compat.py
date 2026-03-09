@@ -30,6 +30,9 @@ LEGACY_MAC_ALGORITHMS: List[str] = [
     "hmac-sha1-96",
 ]
 
+LEGACY_SSH_ERROR_CODE = "legacy_ssh_algorithms"
+SSH_AUTH_ERROR_CODE = "ssh_authentication_failed"
+
 
 def build_netmiko_compatibility_kwargs() -> Dict[str, Any]:
     """
@@ -86,3 +89,47 @@ def build_legacy_ssh_guidance(error_text: str) -> str:
         " 如果仍然失败，通常说明该设备镜像过旧，或底层 SSH 库与设备支持集合仍无交集。"
         " 建议优先核对设备 SSH 配置、升级镜像，或临时放宽客户端算法策略后再重试。"
     )
+
+
+def is_ssh_authentication_error(error_text: str) -> bool:
+    """判断是否为 SSH 认证失败。"""
+    normalized = (error_text or "").lower()
+    indicators = [
+        "authentication to device failed",
+        "authentication failed",
+        "all authentication methods failed",
+        "auth_password",
+        "permission denied",
+    ]
+    return any(indicator in normalized for indicator in indicators)
+
+
+def build_ssh_authentication_guidance(error_text: str) -> str:
+    """为 SSH 认证失败生成可读提示。"""
+    if not is_ssh_authentication_error(error_text):
+        return error_text
+
+    return (
+        "设备已可达，SSH 协商也已经开始，但认证被设备拒绝。"
+        " 这通常不是算法兼容问题，而是用户名或密码错误，或者设备 AAA、VTY、login local 配置不接受当前账号。"
+        " 建议先用同一组账号在终端手工 SSH 登录验证，再检查设备本地用户、AAA 策略和 VTY 配置。"
+    )
+
+
+def get_ssh_error_code(error_text: str) -> str | None:
+    """返回已识别的 SSH 错误分类。"""
+    if is_legacy_ssh_negotiation_error(error_text):
+        return LEGACY_SSH_ERROR_CODE
+    if is_ssh_authentication_error(error_text):
+        return SSH_AUTH_ERROR_CODE
+    return None
+
+
+def build_ssh_error_guidance(error_text: str) -> str:
+    """根据 SSH 错误类型生成统一用户提示。"""
+    error_code = get_ssh_error_code(error_text)
+    if error_code == LEGACY_SSH_ERROR_CODE:
+        return build_legacy_ssh_guidance(error_text)
+    if error_code == SSH_AUTH_ERROR_CODE:
+        return build_ssh_authentication_guidance(error_text)
+    return error_text

@@ -1,7 +1,7 @@
 from typing import List, Dict, Any
 from drivers.factory import DriverFactory
 from drivers.base import CommandResult
-from drivers.ssh_compat import build_legacy_ssh_guidance, is_legacy_ssh_negotiation_error
+from drivers.ssh_compat import build_ssh_error_guidance, is_legacy_ssh_negotiation_error, is_ssh_authentication_error
 
 class AutomationService:
     """业务逻辑层"""
@@ -45,4 +45,6 @@ class AutomationService:
             logger.debug(f"Connectivity check failed: {error_msg}")
             if is_legacy_ssh_negotiation_error(error_msg):
                 logger.warning("Legacy SSH negotiation failure detected during connectivity check")
-            return False, build_legacy_ssh_guidance(error_msg)
+            if is_ssh_authentication_error(error_msg):
+                logger.warning("SSH authentication failure detected during connectivity check")
+            return False, build_ssh_error_guidance(error_msg)

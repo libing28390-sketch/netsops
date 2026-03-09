@@ -7,7 +7,7 @@ from typing import Optional
 from database import get_db_connection
 from services.audit_service import log_audit_event
 from core.crypto import encrypt_credential, decrypt_credential
-from drivers.ssh_compat import build_legacy_ssh_guidance, is_legacy_ssh_negotiation_error
+from drivers.ssh_compat import build_ssh_error_guidance, get_ssh_error_code
 
 router = APIRouter()
 
@@ -317,13 +317,14 @@ def test_device_connection(payload: dict = Body(...)):
             return {"status": "success", "message": f"Successfully connected to {hostname or ip_address}"}
         else:
             logger.warning(f"Failed to connect to {hostname or ip_address}: {error_msg}")
-            if is_legacy_ssh_negotiation_error(error_msg):
+            error_code = get_ssh_error_code(error_msg)
+            if error_code:
                 return JSONResponse(
                     status_code=400,
                     content={
-                        "detail": build_legacy_ssh_guidance(error_msg),
+                        "detail": build_ssh_error_guidance(error_msg),
                         "output": error_msg,
-                        "error_code": "legacy_ssh_algorithms",
+                        "error_code": error_code,
                     },
                 )
             raise HTTPException(status_code=400, detail=f"Failed to connect to {hostname or ip_address}: {error_msg}")
@@ -332,13 +333,14 @@ def test_device_connection(payload: dict = Body(...)):
     except Exception as e:
         logger.error(f"Connection error for {hostname or ip_address}: {str(e)}", exc_info=True)
         raw_error = str(e)
-        if is_legacy_ssh_negotiation_error(raw_error):
+        error_code = get_ssh_error_code(raw_error)
+        if error_code:
             return JSONResponse(
                 status_code=500,
                 content={
-                    "detail": build_legacy_ssh_guidance(raw_error),
+                    "detail": build_ssh_error_guidance(raw_error),
                     "output": raw_error,
-                    "error_code": "legacy_ssh_algorithms",
+                    "error_code": error_code,
                 },
             )
         raise HTTPException(status_code=500, detail=f"Connection error: {raw_error}")
