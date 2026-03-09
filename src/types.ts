@@ -1,4 +1,4 @@
-// Shared type definitions for NetAxis
+// Shared type definitions for NetPilot
 // Extracted from App.tsx for reuse across components
 
 export interface ConfigVersion {

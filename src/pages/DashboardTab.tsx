@@ -57,7 +57,7 @@ const DashboardTab: React.FC<DashboardTabProps> = ({
           <button onClick={() => setDashBannerCollapsed(true)} className="absolute top-3 right-3 p-1 rounded-lg hover:bg-black/5 text-black/30 hover:text-black/60 transition-all"><X size={14} /></button>
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#00a5cd]">NetAxis Command Center</p>
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#00a5cd]">NetPilot Command Center</p>
               <h3 className="mt-1 text-xl font-bold text-[#0d2c40]">{t('todaySnapshot')}</h3>
               <p className="mt-1 text-xs text-[#21546d]/80">{t('todaySnapshotDesc')}</p>
             </div>

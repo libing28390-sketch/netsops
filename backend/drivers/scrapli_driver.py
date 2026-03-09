@@ -6,6 +6,7 @@ try:
 except ImportError:
     HAS_SCRAPLI = False
 from .base import BaseDriver, CommandResult
+from .ssh_compat import build_system_ssh_open_cmd
 
 class ScrapliDriver(BaseDriver):
     """基于 Scrapli (同步) 的驱动实现"""
@@ -29,8 +30,6 @@ class ScrapliDriver(BaseDriver):
     def connect(self):
         import logging
         import platform as platform_module
-        import paramiko
-        
         logger = logging.getLogger(__name__)
         
         # 基础设备参数
@@ -60,11 +59,7 @@ class ScrapliDriver(BaseDriver):
         else:
             # Linux/Mac 上使用 system transport，并支持较老的 SSH 算法
             device_params['transport_options'] = {
-                'open_cmd': [
-                    '-o', 'KexAlgorithms=+diffie-hellman-group1-sha1,diffie-hellman-group-exchange-sha1',
-                    '-o', 'HostKeyAlgorithms=+ssh-rsa',
-                    '-o', 'PubkeyAcceptedAlgorithms=+ssh-rsa'
-                ]
+                'open_cmd': build_system_ssh_open_cmd()
             }
         
         try:

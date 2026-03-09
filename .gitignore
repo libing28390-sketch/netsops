@@ -11,6 +11,8 @@ __pycache__/
 *.pyc
 .venv/
 data/netops.db
+data/netops.db-shm
+data/netops.db-wal
 backend/data/*.db
 backup/
 data/logs/

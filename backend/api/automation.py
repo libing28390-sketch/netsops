@@ -232,8 +232,8 @@ async def execute_task(request: Request, payload: dict = Body(...)):
     finally:
         conn.close()
 
-@router.post("/devices/connect")
-async def test_connection(payload: dict = Body(...)):
+@router.post("/devices/ping")
+async def ping_device(payload: dict = Body(...)):
     ip = payload.get('ip_address')
     if not ip:
         raise HTTPException(status_code=400, detail="IP address is required")

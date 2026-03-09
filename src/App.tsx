@@ -78,6 +78,20 @@ class AppRuntimeBoundary extends React.Component<AppRuntimeBoundaryProps, AppRun
   }
 }
 
+const LEGACY_SSH_ERROR_CODE = 'legacy_ssh_algorithms';
+
+const buildConnectionTestMessage = (detail: any, errorCode?: string): string => {
+  const normalizedDetail = typeof detail === 'string'
+    ? detail
+    : (detail && typeof detail === 'object' && 'message' in detail ? String(detail.message) : 'Connection failed');
+
+  if (errorCode === LEGACY_SSH_ERROR_CODE) {
+    return normalizedDetail || '设备 SSH 算法较旧，平台已尝试兼容，但当前协商仍然失败。';
+  }
+
+  return normalizedDetail || 'Connection failed';
+};
+
 // Sparkline imported from ./components/Sparkline
 
 const App: React.FC = () => {
@@ -2903,7 +2917,7 @@ const App: React.FC = () => {
   };
 
   const [showTestResult, setShowTestResult] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string; output?: string } | null>(null);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string; output?: string; errorCode?: string } | null>(null);
 
   const handleTestConnection = async (deviceToTest: Device | null = selectedDevice) => {
     if (!deviceToTest) return;
@@ -2927,7 +2941,12 @@ const App: React.FC = () => {
       if (response.ok) {
         setTestResult({ success: true, message: data.message, output: data.output });
       } else {
-        setTestResult({ success: false, message: data.detail || data.error || 'Connection failed' });
+        setTestResult({
+          success: false,
+          message: buildConnectionTestMessage(data.detail || data.error, data.error_code),
+          output: data.output,
+          errorCode: data.error_code,
+        });
       }
     } catch (error: any) {
       setTestResult({ success: false, message: error.message || 'Network error' });
@@ -3155,8 +3174,8 @@ const App: React.FC = () => {
             <div className="inline-flex items-center justify-center w-[72px] h-[72px] rounded-2xl mb-5" style={{background:'linear-gradient(135deg,#003d57 0%,#00bceb 100%)',boxShadow:'0 0 48px rgba(0,188,235,0.35),0 0 0 1px rgba(0,188,235,0.2)'}}>
               <Activity size={36} className="text-white" />
             </div>
-            <h1 className={`text-[28px] font-black tracking-tight leading-none ${isDark ? 'text-white' : 'text-[#0B2A3C]'}`}>NetAxis</h1>
-            <p className="text-[#00bceb] text-[10px] font-bold uppercase tracking-[0.28em] mt-2 opacity-80">Network Intelligence Platform</p>
+            <h1 className={`text-[28px] font-black tracking-tight leading-none ${isDark ? 'text-white' : 'text-[#0B2A3C]'}`}>NetPilot</h1>
+            <p className="text-[#00bceb] text-[10px] font-bold uppercase tracking-[0.28em] mt-2 opacity-80">Network Operations Command Center</p>
           </div>
 
           {/* Glass card */}
@@ -3861,7 +3880,7 @@ const App: React.FC = () => {
             <div className="w-8 h-8 bg-[#00bceb] rounded-lg flex items-center justify-center text-white shadow-lg shadow-[#00bceb]/20">
               <Activity size={18} />
             </div>
-            <h1 className="font-bold tracking-tight text-white whitespace-nowrap">NetAxis</h1>
+            <h1 className="font-bold tracking-tight text-white whitespace-nowrap">NetPilot</h1>
           </div>
           <button
             onClick={() => setSidebarCollapsed(true)}
@@ -4195,7 +4214,7 @@ const App: React.FC = () => {
                 {pageTitle}
               </h2>
               <p className={`text-[11px] hidden sm:block ${resolvedTheme === 'dark' ? 'text-white/45' : 'text-black/40'}`}>
-                {new Date().toLocaleDateString()} · NetAxis Control Plane
+                {new Date().toLocaleDateString()} · NetPilot Control Plane
               </p>
             </div>
           </div>
@@ -7969,7 +7988,7 @@ const App: React.FC = () => {
           )}
         </main>
         <footer className={`h-10 px-8 border-t flex items-center justify-between text-[11px] ${resolvedTheme === 'dark' ? 'border-white/10 text-white/45 bg-[#0b1320]' : 'border-black/8 text-black/45 bg-white/70'}`}>
-          <span>Copyright (c) {new Date().getFullYear()} NetAxis. All rights reserved.</span>
+          <span>Copyright (c) {new Date().getFullYear()} NetPilot. All rights reserved.</span>
           <span className="font-mono">NOC v2.0</span>
         </footer>
       </div>
@@ -8556,7 +8575,7 @@ const App: React.FC = () => {
                     hasSecret: true,
                     docsUrl: 'https://open.dingtalk.com/document/robots/custom-robot-access',
                     docsLabel: '配置教程 →',
-                    tip: '在钉钉群 ➜ 群设置 ➜ 智能群助手 ➜ 添加机器人 ➜ 自定义。安全设置选「加签」时把密钥填入下方 Secret 栏；选「自定义关键词」时关键词填 NetAxis 即可。',
+                    tip: '在钉钉群 ➜ 群设置 ➜ 智能群助手 ➜ 添加机器人 ➜ 自定义。安全设置选「加签」时把密钥填入下方 Secret 栏；选「自定义关键词」时关键词填 NetPilot 即可。',
                   },
                   {
                     key: 'wechat',
@@ -8757,10 +8776,21 @@ const App: React.FC = () => {
                       {testResult?.message}
                     </p>
                   </div>
+
+                  {testResult?.errorCode === LEGACY_SSH_ERROR_CODE && (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-amber-700">Legacy SSH Compatibility</p>
+                      <p className="mt-2 text-sm text-amber-900">
+                        这通常不是账号密码错误，而是设备只支持较老的 SSH KEX、ssh-rsa、cipher 或 MAC 组合。平台已经按兼容模式重试过；如果还失败，优先检查设备镜像和 SSH 配置。
+                      </p>
+                    </div>
+                  )}
                   
                   {testResult?.output && (
                     <div className="space-y-2">
-                      <label className="text-[10px] font-bold uppercase tracking-widest text-black/30 ml-1">Device Output</label>
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-black/30 ml-1">
+                        {testResult?.errorCode === LEGACY_SSH_ERROR_CODE ? 'Raw SSH Error' : 'Device Output'}
+                      </label>
                       <div className="bg-[#00172D] p-4 rounded-xl overflow-auto max-h-[200px]">
                         <pre className="text-xs font-mono text-emerald-400/90 whitespace-pre-wrap">
                           {testResult.output}

@@ -7,6 +7,7 @@ try:
 except ImportError:
     HAS_NETMIKO = False
 from .base import BaseDriver, CommandResult
+from .ssh_compat import build_netmiko_compatibility_kwargs
 
 # ── CLI 错误特征（通用），用于在 success=True 时二次检测配置失败 ──────────────
 # 注意：
@@ -124,6 +125,7 @@ class NetmikoDriver(BaseDriver):
             'global_delay_factor':1.5 if is_slow else 0.5,
             'blocking_timeout':   30,
         }
+        device_params.update(build_netmiko_compatibility_kwargs())
         # 若设备有 enable secret，传入以支持 privilege exec 提升
         secret = self.device_info.get('enable_password') or self.device_info.get('secret') or ''
         if secret:

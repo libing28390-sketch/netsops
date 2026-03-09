@@ -10,6 +10,7 @@ from scrapli_community.huawei.vrp.async_driver import AsyncHuaweiVRPDriver
 from scrapli_community.hp.comware.async_driver import AsyncHPComwareDriver
 import asyncio
 from database import get_db_connection
+from drivers.ssh_compat import build_netmiko_compatibility_kwargs
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -96,6 +97,7 @@ async def discover_lldp_neighbors(device_id: str):
             'port': 22,
             'fast_cli': True,
         }
+        netmiko_device.update(build_netmiko_compatibility_kwargs())
 
         try:
             def _run_discovery():

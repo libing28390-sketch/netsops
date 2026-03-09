@@ -63,7 +63,7 @@ export const translations: Translations = {
   lastSyncShort: { en: 'Last Sync', zh: '最后同步' },
   noSyncData: { en: 'Waiting for sync', zh: '等待同步数据' },
   copyright: { en: 'Copyright (c)', zh: 'Copyright (c)' },
-  allRightsReserved: { en: 'NetAxis. All rights reserved.', zh: 'NetAxis. 保留所有权利。' },
+  allRightsReserved: { en: 'NetPilot. All rights reserved.', zh: 'NetPilot. 保留所有权利。' },
 
   // Inventory
   deviceList: { en: 'Device List', zh: '设备列表' },

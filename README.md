@@ -1,16 +1,16 @@
-# NetAxis / NetOps Automation Platform
+# NetPilot / NetOps Automation Platform
 
 English | 中文
 
-NetAxis is a full-stack network operations platform for device inventory, monitoring, automation, configuration backup, compliance auditing, and operational traceability.
+NetPilot is a full-stack network operations platform for device inventory, monitoring, automation, configuration backup, compliance auditing, and operational traceability.
 
-NetAxis 是一个面向网络运维场景的全栈平台，覆盖设备资产管理、运行监控、自动化执行、配置备份、合规审计与操作追踪。
+NetPilot 是一个面向网络运维场景的全栈平台，覆盖设备资产管理、运行监控、自动化执行、配置备份、合规审计与操作追踪。
 
 ## English
 
 ### Overview
 
-NetAxis is built for network engineers who need a unified console to manage multi-vendor infrastructure. It combines operational visibility with automation workflows so common daily tasks can be completed in one place instead of switching between multiple tools.
+NetPilot is built for network engineers who need a unified console to manage multi-vendor infrastructure. It combines operational visibility with automation workflows so common daily tasks can be completed in one place instead of switching between multiple tools.
 
 ### Core Capabilities
 
@@ -125,7 +125,7 @@ See [DEPLOY.md](DEPLOY.md) for Windows and Ubuntu deployment instructions.
 
 ### 项目简介
 
-NetAxis 是一个面向网络工程师和运维团队的统一运维平台，目标是把常见的网管工作流集中到一个控制台中完成，包括设备台账、运行监控、自动化执行、配置备份、合规检查和审计追踪。
+NetPilot 是一个面向网络工程师和运维团队的统一运维平台，目标是把常见的网管工作流集中到一个控制台中完成，包括设备台账、运行监控、自动化执行、配置备份、合规检查和审计追踪。
 
 ### 主要功能
 
