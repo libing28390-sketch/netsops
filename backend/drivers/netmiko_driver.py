@@ -145,6 +145,7 @@ class NetmikoDriver(BaseDriver):
             logger.error(f"Unexpected error connecting to {self.host}: {e}", exc_info=True)
             raise Exception(f"Connection failed: {e}")
 
+
     def disconnect(self):
         import logging
         logger = logging.getLogger(__name__)

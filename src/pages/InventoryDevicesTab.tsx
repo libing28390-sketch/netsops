@@ -363,7 +363,7 @@ const InventoryDevicesTab: React.FC<InventoryDevicesTabProps> = ({
                     <button onClick={() => handleShowDetails(device)}
                       title={language === 'zh' ? '查看设备详情' : 'View device details'}
                       className="text-[10px] font-bold uppercase text-black/40 hover:text-black">DETAILS</button>
-                    <button onClick={() => { setEditingDevice(device); setEditForm(device); setShowEditModal(true); }}
+                    <button onClick={() => { setEditingDevice(device); setEditForm({ ...device, password: '' } as Device); setShowEditModal(true); }}
                       title={language === 'zh' ? '编辑设备' : 'Edit device'}
                       className="text-[10px] font-bold uppercase text-blue-600 hover:text-blue-700">EDIT</button>
                     <button onClick={() => handleDeleteDevice(device.id)}

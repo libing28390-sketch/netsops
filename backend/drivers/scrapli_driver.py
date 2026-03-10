@@ -49,7 +49,7 @@ class ScrapliDriver(BaseDriver):
         if platform_module.system() == 'Windows':
             logger.debug(f"Windows detected, using paramiko transport")
             device_params['transport'] = 'paramiko'
-            # 配置 paramiko SSH 选项
+            # Paramiko transport 通过 monkey-patch 自动支持 legacy SSH 算法
             device_params['transport_options'] = {
                 'paramiko_open_options': {
                     'look_for_keys': False,
