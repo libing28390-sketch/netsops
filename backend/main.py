@@ -196,6 +196,12 @@ def _db_many(sql, rows):
     finally:
         conn.close()
 
+
+def _as_dict(row):
+    if isinstance(row, dict):
+        return row
+    return dict(row)
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -523,6 +529,7 @@ async def status_monitor():
 
     async def process_device(device, collect_intf: bool, collect_info: bool):
         async with sem:
+            device = _as_dict(device)
             ip = device['ip_address']
             dev_id = device['id']
 
@@ -847,27 +854,28 @@ async def status_monitor():
                 current_alert_rules = alert_rule_service.get_runtime_rules()
                 reopened_alerts = alert_maintenance_service.reopen_expired_suppressed_alerts()
                 for reopened in reopened_alerts:
-                    open_alerts[reopened['dedupe_key']] = reopened.get('created_at') or _local_now_str()
-                    metric_type = metric_type_from_dedupe_key(reopened['dedupe_key'])
+                    reopened_item = _as_dict(reopened)
+                    open_alerts[reopened_item['dedupe_key']] = reopened_item.get('created_at') or _local_now_str()
+                    metric_type = metric_type_from_dedupe_key(reopened_item['dedupe_key'])
                     reopened_rule = alert_rule_service.select_rule(
                         current_alert_rules,
                         metric_type,
                         {
-                            'device_id': reopened.get('device_id') or '',
-                            'hostname': reopened.get('hostname') or '',
-                            'ip_address': reopened.get('ip_address') or '',
-                            'site': reopened.get('site') or '',
-                            'interface_name': reopened.get('interface_name') or '',
+                            'device_id': reopened_item.get('device_id') or '',
+                            'hostname': reopened_item.get('hostname') or '',
+                            'ip_address': reopened_item.get('ip_address') or '',
+                            'site': reopened_item.get('site') or '',
+                            'interface_name': reopened_item.get('interface_name') or '',
                         },
                     ) if metric_type else None
                     maybe_notify_webhook(
-                        reopened['dedupe_key'],
-                        reopened['severity'],
-                        reopened['title'],
-                        reopened['message'],
-                        created_at=reopened.get('created_at') or _local_now_str(),
-                        ip_address=reopened.get('ip_address') or '',
-                        object_name=reopened.get('interface_name') or reopened.get('hostname') or reopened['dedupe_key'],
+                        reopened_item['dedupe_key'],
+                        reopened_item['severity'],
+                        reopened_item['title'],
+                        reopened_item['message'],
+                        created_at=reopened_item.get('created_at') or _local_now_str(),
+                        ip_address=reopened_item.get('ip_address') or '',
+                        object_name=reopened_item.get('interface_name') or reopened_item.get('hostname') or reopened_item['dedupe_key'],
                         status='active',
                         last_occurrence=_local_now_str(),
                         reopened_after_maintenance=True,
