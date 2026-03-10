@@ -217,6 +217,161 @@ export interface NotificationItem {
   read: boolean;
 }
 
+export type AlertWorkflowStatus = 'open' | 'acknowledged' | 'investigating' | 'suppressed' | 'resolved';
+
+export interface AlertRecord {
+  id: string;
+  dedupe_key: string;
+  source: string;
+  severity: 'low' | 'medium' | 'high' | 'major' | 'critical';
+  title: string;
+  message: string;
+  device_id?: string | null;
+  interface_name?: string | null;
+  hostname?: string | null;
+  ip_address?: string | null;
+  site?: string | null;
+  created_at: string;
+  resolved_at?: string | null;
+  workflow_status: AlertWorkflowStatus;
+  assignee?: string | null;
+  ack_by?: string | null;
+  ack_at?: string | null;
+  note?: string;
+  updated_at?: string | null;
+  occurrence_count?: number;
+  duration_seconds?: number | null;
+  is_open?: boolean;
+}
+
+export interface AlertSummary {
+  open_count: number;
+  critical_open: number;
+  major_open: number;
+  acknowledged_open: number;
+  suppressed_open?: number;
+  assigned_open: number;
+  alerts_24h: number;
+  resolved_24h: number;
+  avg_mttr_minutes?: number | null;
+  avg_mtta_minutes?: number | null;
+}
+
+export interface AlertListResponse {
+  items: AlertRecord[];
+  total: number;
+  page: number;
+  page_size: number;
+  filters?: {
+    sites?: string[];
+    assignees?: string[];
+  };
+}
+
+export interface AlertDetailResponse {
+  item: AlertRecord;
+  timeline: AlertRecord[];
+}
+
+export interface AlertMaintenanceWindow {
+  id: string;
+  name: string;
+  target_ip: string;
+  title_pattern?: string;
+  message_pattern?: string;
+  starts_at: string;
+  ends_at: string;
+  notify_user_ids: string[];
+  reason?: string;
+  status: string;
+  runtime_status: 'scheduled' | 'active' | 'expired' | 'cancelled';
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  last_match_count?: number;
+}
+
+export interface AlertMaintenanceListResponse {
+  items: AlertMaintenanceWindow[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface AlertMaintenancePreview {
+  count: number;
+  items: Array<{
+    id: string;
+    title: string;
+    message: string;
+    interface_name?: string | null;
+    created_at: string;
+    hostname?: string | null;
+    ip_address?: string | null;
+    site?: string | null;
+  }>;
+}
+
+export type AlertRuleMetricType = 'cpu' | 'memory' | 'interface_util' | 'interface_down';
+
+export type AlertRuleScopeType = 'global' | 'site' | 'device' | 'interface';
+
+export type AlertRuleScopeMatchMode = 'exact' | 'contains' | 'prefix' | 'glob';
+
+export interface AlertRuleSettings {
+  id?: string;
+  name: string;
+  metric_type: AlertRuleMetricType;
+  scope_type: AlertRuleScopeType;
+  scope_match_mode: AlertRuleScopeMatchMode;
+  scope_value: string;
+  severity: 'critical' | 'major' | 'warning' | 'high' | 'medium' | 'low' | 'info';
+  threshold?: number | null;
+  enabled: boolean;
+  aggregation_mode: 'dedupe_key';
+  notification_repeat_window_seconds: number;
+  notify_on_active: boolean;
+  notify_on_recovery: boolean;
+  notify_on_reopen_after_maintenance: boolean;
+  created_by?: string;
+  created_at?: string;
+  updated_by?: string;
+  updated_at?: string;
+}
+
+export interface AlertRuleListResponse {
+  items: AlertRuleSettings[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface AlertRulePreview {
+  alerts_24h: number;
+  resolved_24h: number;
+  repeated_key_count: number;
+  top_repeated_alerts: Array<{
+    dedupe_key: string;
+    title: string;
+    severity: string;
+    event_count: number;
+    last_seen: string;
+  }>;
+  open_alert_groups: Array<{
+    title: string;
+    severity: string;
+    open_count: number;
+  }>;
+}
+
+export interface AlertRuleHistoryItem {
+  id: string;
+  rule_id: string;
+  changed_by: string;
+  created_at: string;
+  snapshot: AlertRuleSettings;
+}
+
 export interface HostResourceSnapshot {
   status: 'healthy' | 'degraded' | 'critical';
   metrics_available: boolean;

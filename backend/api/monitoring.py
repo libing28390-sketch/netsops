@@ -208,7 +208,7 @@ def monitoring_overview(force_refresh: bool = Query(default=False)):
 
         last_24h = (now_utc - timedelta(hours=24)).isoformat()
         open_alerts = conn.execute(
-            "SELECT COUNT(*) AS c FROM alert_events WHERE resolved_at IS NULL"
+            "SELECT COUNT(*) AS c FROM alert_events WHERE resolved_at IS NULL AND COALESCE(workflow_status, 'open') != 'suppressed'"
         ).fetchone()['c']
         alerts_24h = conn.execute(
             "SELECT COUNT(*) AS c FROM alert_events WHERE created_at >= ?",
@@ -231,7 +231,7 @@ def monitoring_overview(force_refresh: bool = Query(default=False)):
                 d.site
             FROM alert_events a
             LEFT JOIN devices d ON d.id = a.device_id
-            WHERE a.resolved_at IS NULL
+            WHERE a.resolved_at IS NULL AND COALESCE(a.workflow_status, 'open') != 'suppressed'
             ORDER BY a.created_at DESC
             LIMIT 8
             '''
@@ -602,6 +602,7 @@ def monitoring_alerts(
             params.append(device_id)
 
         sev = (severity or 'all').lower()
+        where.append("COALESCE(workflow_status, 'open') != 'suppressed'")
         if sev != 'all':
             where.append('LOWER(severity) = ?')
             params.append(sev)

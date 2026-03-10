@@ -14,8 +14,11 @@ from api.topology import router as topology_router, discover_lldp_neighbors
 from api.configs import router as configs_router, run_scheduled_backup, _get_schedule_from_db
 from api.playbooks import router as playbooks_router
 from services import notification_service
+from services import alert_maintenance_service
+from services import alert_rule_service
 from api.notifications import router as notifications_router
 from api.monitoring import router as monitoring_router
+from api.alerts import router as alerts_router
 from api.audit import router as audit_router
 from api.compliance import router as compliance_router
 import logging
@@ -118,6 +121,7 @@ app.include_router(configs_router, prefix="/api")
 app.include_router(playbooks_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(monitoring_router, prefix="/api")
+app.include_router(alerts_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
 app.include_router(compliance_router, prefix="/api")
 
@@ -219,23 +223,35 @@ def _send_webhook_notification(payload: dict):
     except urlerror.URLError as exc:
         logger.warning(f"[Alert] Webhook send failed: {exc}")
 
-def _create_alert_event(dedupe_key: str, severity: str, title: str, message: str, device_id: str, interface_name: str | None = None):
+def _create_alert_event(
+    dedupe_key: str,
+    severity: str,
+    title: str,
+    message: str,
+    device_id: str,
+    interface_name: str | None = None,
+    workflow_status: str = 'open',
+    note: str = '',
+):
     alert_id = str(uuid.uuid4())
     now_utc = _utc_now_iso()
     now_local = _local_now_str()
     _db_quick('''
-        INSERT INTO alert_events (id, dedupe_key, source, severity, title, message, device_id, interface_name, created_at, resolved_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
-    ''', (alert_id, dedupe_key, 'network_monitor', severity, title, message, device_id, interface_name, now_utc))
+        INSERT INTO alert_events (
+            id, dedupe_key, source, severity, title, message, device_id, interface_name,
+            created_at, resolved_at, workflow_status, note, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+    ''', (alert_id, dedupe_key, 'network_monitor', severity, title, message, device_id, interface_name, now_utc, workflow_status, note, now_utc))
     return alert_id, now_local
 
 def _resolve_alert_event(dedupe_key: str):
     now = _utc_now_iso()
     _db_quick('''
         UPDATE alert_events
-        SET resolved_at = ?
+        SET resolved_at = ?, workflow_status = 'resolved', updated_at = ?
         WHERE dedupe_key = ? AND resolved_at IS NULL
-    ''', (now, dedupe_key))
+    ''', (now, now, dedupe_key))
 
 def _run_telemetry_maintenance():
     # Roll up raw 5s telemetry to 1-minute table and enforce retention windows.
@@ -333,18 +349,50 @@ async def status_monitor():
         logger.warning(f"[Alert] Failed to restore open alerts: {_exc}")
     # Throttle webhook notifications per alert key.
     webhook_last_sent: dict = {}
+    current_alert_rules = alert_rule_service.get_runtime_rules()
+
+    def resolve_alert_rule(metric_type: str, *, device_row=None, ip_address: str = '', interface_name: str | None = None):
+        context = {
+            'device_id': device_row['id'] if device_row else '',
+            'hostname': device_row['hostname'] if device_row else '',
+            'ip_address': ip_address,
+            'site': device_row['site'] if device_row else '',
+            'interface_name': interface_name or '',
+        }
+        return alert_rule_service.select_rule(current_alert_rules, metric_type, context)
+
+    def metric_type_from_dedupe_key(dedupe_key: str) -> str | None:
+        if dedupe_key.startswith('cpu_high:'):
+            return 'cpu'
+        if dedupe_key.startswith('mem_high:'):
+            return 'memory'
+        if dedupe_key.startswith('if_util:'):
+            return 'interface_util'
+        if dedupe_key.startswith('if_down:'):
+            return 'interface_down'
+        return None
 
     def maybe_notify_webhook(dedupe_key: str, severity: str, title: str, message: str,
                                created_at: str, ip_address: str = '', object_name: str = '',
                                status: str = 'active', last_occurrence: str = '',
-                               duration_seconds=None, impact_window=None, alert_count=None):
+                               duration_seconds=None, impact_window=None, alert_count=None,
+                               reopened_after_maintenance: bool = False,
+                               rule: dict | None = None):
         now_ts = datetime.now(timezone.utc)
+        repeat_window_seconds = max(0, int((rule or {}).get('notification_repeat_window_seconds', 120) or 0))
+        if status == 'active' and not bool((rule or {}).get('notify_on_active', True)):
+            return
+        if status == 'resolved' and not bool((rule or {}).get('notify_on_recovery', True)):
+            webhook_last_sent.pop(dedupe_key, None)
+            return
+        if reopened_after_maintenance and not bool((rule or {}).get('notify_on_reopen_after_maintenance', True)):
+            return
         # 恢复通知不受节流限制，且清除节流记录（为下次触发做准备）
         if status == 'resolved':
             webhook_last_sent.pop(dedupe_key, None)
         else:
             last_ts = webhook_last_sent.get(dedupe_key)
-            if last_ts and (now_ts - last_ts).total_seconds() < 120:
+            if last_ts and repeat_window_seconds > 0 and (now_ts - last_ts).total_seconds() < repeat_window_seconds:
                 return
             webhook_last_sent[dedupe_key] = now_ts
 
@@ -401,11 +449,28 @@ async def status_monitor():
 
     def set_alert_state(dedupe_key: str, is_active: bool, severity: str, title: str, message: str,
                          device_id: str, interface_name: str | None = None,
-                         ip_address: str = '', status: str = ''):
+                         ip_address: str = '', status: str = '', rule: dict | None = None):
         currently_open = open_alerts.get(dedupe_key)
         if is_active and not currently_open:
-            _, created_at = _create_alert_event(dedupe_key, severity, title, message, device_id, interface_name)
+            maintenance_window = alert_maintenance_service.find_active_window_for_alert({
+                'dedupe_key': dedupe_key,
+                'severity': severity,
+                'title': title,
+                'message': message,
+                'device_id': device_id,
+                'interface_name': interface_name,
+                'ip_address': ip_address,
+            })
+            workflow_status = 'suppressed' if maintenance_window else 'open'
+            note = f"Suppressed by maintenance window: {maintenance_window['name']}" if maintenance_window else ''
+            _, created_at = _create_alert_event(
+                dedupe_key, severity, title, message, device_id, interface_name,
+                workflow_status=workflow_status,
+                note=note,
+            )
             open_alerts[dedupe_key] = created_at  # store first-occurrence time
+            if maintenance_window:
+                return
             object_name = interface_name if interface_name else dedupe_key
             maybe_notify_webhook(
                 dedupe_key, severity, title, message,
@@ -414,10 +479,17 @@ async def status_monitor():
                 object_name=object_name,
                 status=status or 'active',
                 last_occurrence=created_at,
+                rule=rule,
             )
         elif (not is_active) and currently_open:
+            alert_row = _db_quick(
+                "SELECT workflow_status FROM alert_events WHERE dedupe_key = ? AND resolved_at IS NULL ORDER BY created_at DESC LIMIT 1",
+                (dedupe_key,), fetch=True,
+            )
             _resolve_alert_event(dedupe_key)
             open_alerts.pop(dedupe_key, None)
+            if alert_row and str(alert_row['workflow_status'] or '').lower() == 'suppressed':
+                return
             now_ts = _local_now_str()
             object_name = interface_name if interface_name else dedupe_key
             # 计算持续时长、影响时间窗、告警次数
@@ -446,6 +518,7 @@ async def status_monitor():
                 duration_seconds=_duration_seconds,
                 impact_window=_impact_window,
                 alert_count=_alert_count,
+                rule=rule,
             )
 
     async def process_device(device, collect_intf: bool, collect_info: bool):
@@ -546,31 +619,35 @@ async def status_monitor():
             # CPU / 内存阈值告警
             if cpu_usage is not None:
                 cpu_key = f"cpu_high:{dev_id}"
-                if float(cpu_usage) >= float(settings.ALERT_CPU_THRESHOLD):
+                cpu_rule = resolve_alert_rule('cpu', device_row=device, ip_address=ip)
+                cpu_threshold = float(cpu_rule['threshold']) if cpu_rule and cpu_rule.get('threshold') is not None else None
+                if cpu_rule and cpu_threshold is not None and float(cpu_usage) >= cpu_threshold:
                     set_alert_state(
-                        cpu_key, True, 'major', 'CPU Usage High',
-                        f"{dev_label} CPU 利用率达到 {cpu_usage:.1f}%，超过阈值 {settings.ALERT_CPU_THRESHOLD}%",
-                        dev_id, ip_address=ip, status='active',
+                        cpu_key, True, cpu_rule.get('severity', 'major'), 'CPU Usage High',
+                        f"{dev_label} CPU 利用率达到 {cpu_usage:.1f}%，超过阈值 {cpu_threshold}%",
+                        dev_id, ip_address=ip, status='active', rule=cpu_rule,
                     )
                 else:
                     set_alert_state(
                         cpu_key, False, 'major', 'CPU Usage High',
                         f"{dev_label} CPU 利用率已恢复（当前 {cpu_usage:.1f}%）",
-                        dev_id, ip_address=ip, status='resolved',
+                        dev_id, ip_address=ip, status='resolved', rule=cpu_rule,
                     )
             if memory_usage is not None:
                 mem_key = f"mem_high:{dev_id}"
-                if float(memory_usage) >= float(settings.ALERT_MEMORY_THRESHOLD):
+                memory_rule = resolve_alert_rule('memory', device_row=device, ip_address=ip)
+                memory_threshold = float(memory_rule['threshold']) if memory_rule and memory_rule.get('threshold') is not None else None
+                if memory_rule and memory_threshold is not None and float(memory_usage) >= memory_threshold:
                     set_alert_state(
-                        mem_key, True, 'major', 'Memory Usage High',
-                        f"{dev_label} 内存利用率达到 {memory_usage:.1f}%，超过阈值 {settings.ALERT_MEMORY_THRESHOLD}%",
-                        dev_id, ip_address=ip, status='active',
+                        mem_key, True, memory_rule.get('severity', 'major'), 'Memory Usage High',
+                        f"{dev_label} 内存利用率达到 {memory_usage:.1f}%，超过阈值 {memory_threshold}%",
+                        dev_id, ip_address=ip, status='active', rule=memory_rule,
                     )
                 else:
                     set_alert_state(
                         mem_key, False, 'major', 'Memory Usage High',
                         f"{dev_label} 内存利用率已恢复（当前 {memory_usage:.1f}%）",
-                        dev_id, ip_address=ip, status='resolved',
+                        dev_id, ip_address=ip, status='resolved', rule=memory_rule,
                     )
 
             # 3. Device info collection (every ~10 minutes)
@@ -699,36 +776,46 @@ async def status_monitor():
 
                             # Basic alert rules: interface down / high utilization.
                             # Requirement: only trigger DOWN alert on state transition UP -> DOWN.
-                            if settings.ALERT_INTERFACE_DOWN_ENABLED and iface.get('speed_mbps', 0) > 0:
+                            down_rule = resolve_alert_rule('interface_down', device_row=device, ip_address=ip, interface_name=iname)
+                            if down_rule and iface.get('speed_mbps', 0) > 0:
                                 prev_status = str(prev.get(iname, {}).get('status', '')).lower()
                                 curr_status = str(iface.get('status', '')).lower()
                                 down_key = f"if_down:{dev_id}:{iname}"
                                 if prev_status == 'up' and curr_status == 'down':
                                     set_alert_state(
-                                        down_key, True, 'major', 'Interface Down',
+                                        down_key, True, down_rule.get('severity', 'major'), 'Interface Down',
                                         f"{iname} 状态变更：UP → DOWN，请检查端口连接和用线",
                                         dev_id, iname,
-                                        ip_address=ip, status='active',
+                                        ip_address=ip, status='active', rule=down_rule,
                                     )
                                 elif prev_status == 'down' and curr_status == 'up':
                                     set_alert_state(
                                         down_key, False, 'major', 'Interface Down',
                                         f"{iname} 状态恢复：DOWN → UP",
                                         dev_id, iname,
-                                        ip_address=ip, status='resolved',
+                                        ip_address=ip, status='resolved', rule=down_rule,
                                     )
+                            else:
+                                set_alert_state(
+                                    f"if_down:{dev_id}:{iname}", False, 'major', 'Interface Down',
+                                    f"{iname} 状态恢复：DOWN → UP",
+                                    dev_id, iname,
+                                    ip_address=ip, status='resolved',
+                                )
 
                             max_util = max(float(iface.get('bw_in_pct') or 0), float(iface.get('bw_out_pct') or 0))
-                            util_active = max_util >= float(settings.ALERT_INTERFACE_UTIL_THRESHOLD)
+                            util_rule = resolve_alert_rule('interface_util', device_row=device, ip_address=ip, interface_name=iname)
+                            util_threshold = float(util_rule['threshold']) if util_rule and util_rule.get('threshold') is not None else None
+                            util_active = bool(util_rule and util_threshold is not None and max_util >= util_threshold)
                             util_key = f"if_util:{dev_id}:{iname}"
                             if util_active:
                                 set_alert_state(
                                     util_key, True,
-                                    'warning' if max_util < 95 else 'critical',
+                                    util_rule.get('severity', 'warning'),
                                     'Interface Utilization High',
-                                    f"{iname} 带宽占用率达到 {max_util:.1f}%，超过阈值 {settings.ALERT_INTERFACE_UTIL_THRESHOLD}%",
+                                    f"{iname} 带宽占用率达到 {max_util:.1f}%，超过阈值 {util_threshold}%",
                                     dev_id, iname,
-                                    ip_address=ip, status='active',
+                                    ip_address=ip, status='active', rule=util_rule,
                                 )
                             else:
                                 set_alert_state(
@@ -737,7 +824,7 @@ async def status_monitor():
                                     'Interface Utilization High',
                                     f"{iname} 带宽占用率已恢复正常（当前 {max_util:.1f}%）",
                                     dev_id, iname,
-                                    ip_address=ip, status='resolved',
+                                    ip_address=ip, status='resolved', rule=util_rule,
                                 )
 
                         prev_intf_octets[dev_id] = cur_snapshot
@@ -757,6 +844,36 @@ async def status_monitor():
     while True:
         try:
             if os.path.exists(DB_PATH):
+                current_alert_rules = alert_rule_service.get_runtime_rules()
+                reopened_alerts = alert_maintenance_service.reopen_expired_suppressed_alerts()
+                for reopened in reopened_alerts:
+                    open_alerts[reopened['dedupe_key']] = reopened.get('created_at') or _local_now_str()
+                    metric_type = metric_type_from_dedupe_key(reopened['dedupe_key'])
+                    reopened_rule = alert_rule_service.select_rule(
+                        current_alert_rules,
+                        metric_type,
+                        {
+                            'device_id': reopened.get('device_id') or '',
+                            'hostname': reopened.get('hostname') or '',
+                            'ip_address': reopened.get('ip_address') or '',
+                            'site': reopened.get('site') or '',
+                            'interface_name': reopened.get('interface_name') or '',
+                        },
+                    ) if metric_type else None
+                    maybe_notify_webhook(
+                        reopened['dedupe_key'],
+                        reopened['severity'],
+                        reopened['title'],
+                        reopened['message'],
+                        created_at=reopened.get('created_at') or _local_now_str(),
+                        ip_address=reopened.get('ip_address') or '',
+                        object_name=reopened.get('interface_name') or reopened.get('hostname') or reopened['dedupe_key'],
+                        status='active',
+                        last_occurrence=_local_now_str(),
+                        reopened_after_maintenance=True,
+                        rule=reopened_rule,
+                    )
+
                 # Read device list with a short-lived connection
                 devices = _db_quick('SELECT * FROM devices', fetchall=True)
 

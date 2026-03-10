@@ -1,6 +1,6 @@
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from database import get_db_connection
@@ -10,7 +10,7 @@ AUDIT_OPEN_STATUSES = {"open", "investigating", "accepted"}
 
 
 def utc_now_iso() -> str:
-    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
 
 
 def _json_dumps(value: Any) -> str:

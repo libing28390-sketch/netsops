@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import APIRouter, Query
 from core.config import settings
 from database import DB_PATH, get_db_connection, init_db
+from services import alert_maintenance_service
 import logging
 import os
 import shutil
@@ -173,10 +174,22 @@ def _sync_host_resource_alerts(snapshot: dict[str, Any]) -> list[dict[str, Any]]
         for dedupe_key, alert in desired_map.items():
             if dedupe_key in open_keys:
                 continue
+            maintenance_window = alert_maintenance_service.find_active_window_for_alert({
+                'dedupe_key': dedupe_key,
+                'severity': alert['severity'],
+                'title': alert['title'],
+                'message': alert['message'],
+                'ip_address': '',
+            }, conn=conn)
+            workflow_status = 'suppressed' if maintenance_window else 'open'
+            note = f"Suppressed by maintenance window: {maintenance_window['name']}" if maintenance_window else ''
             conn.execute(
                 '''
-                INSERT INTO alert_events (id, dedupe_key, source, severity, title, message, device_id, interface_name, created_at, resolved_at)
-                VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)
+                INSERT INTO alert_events (
+                    id, dedupe_key, source, severity, title, message, device_id, interface_name,
+                    created_at, resolved_at, workflow_status, note, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, ?, ?, ?)
                 ''',
                 (
                     str(uuid.uuid4()),
@@ -187,14 +200,17 @@ def _sync_host_resource_alerts(snapshot: dict[str, Any]) -> list[dict[str, Any]]
                     alert["message"],
                     alert["metric_key"],
                     now_utc,
+                    workflow_status,
+                    note,
+                    now_utc,
                 ),
             )
 
         stale_keys = open_keys - set(desired_map)
         if stale_keys:
             conn.executemany(
-                "UPDATE alert_events SET resolved_at = ? WHERE dedupe_key = ? AND source = ? AND resolved_at IS NULL",
-                [(now_utc, dedupe_key, HOST_RESOURCE_ALERT_SOURCE) for dedupe_key in stale_keys],
+                "UPDATE alert_events SET resolved_at = ?, workflow_status = 'resolved', updated_at = ? WHERE dedupe_key = ? AND source = ? AND resolved_at IS NULL",
+                [(now_utc, now_utc, dedupe_key, HOST_RESOURCE_ALERT_SOURCE) for dedupe_key in stale_keys],
             )
         conn.commit()
     finally:

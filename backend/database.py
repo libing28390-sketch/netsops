@@ -1,9 +1,14 @@
 import sqlite3
 import os
+from datetime import datetime, timezone
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
 DB_PATH = os.path.join(PROJECT_ROOT, 'data', 'netops.db')
+
+
+def _utc_now_iso():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 def get_db_connection():
     if not os.path.exists(os.path.dirname(DB_PATH)):
@@ -397,12 +402,95 @@ def init_db():
             device_id TEXT,
             interface_name TEXT,
             created_at TEXT NOT NULL,
-            resolved_at TEXT
+            resolved_at TEXT,
+            workflow_status TEXT NOT NULL DEFAULT 'open',
+            assignee TEXT,
+            ack_by TEXT,
+            ack_at TEXT,
+            note TEXT DEFAULT '',
+            updated_at TEXT
         )
         ''')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_alert_events_created_at ON alert_events(created_at)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_alert_events_resolved_at ON alert_events(resolved_at)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_alert_events_dedupe_key ON alert_events(dedupe_key)')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS alert_maintenance_windows (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            target_ip TEXT NOT NULL,
+            title_pattern TEXT DEFAULT '',
+            message_pattern TEXT DEFAULT '',
+            starts_at TEXT NOT NULL,
+            ends_at TEXT NOT NULL,
+            notify_user_ids TEXT DEFAULT '[]',
+            reason TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'scheduled',
+            created_by TEXT DEFAULT 'system',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_match_count INTEGER DEFAULT 0
+        )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_alert_mw_target_ip ON alert_maintenance_windows(target_ip)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_alert_mw_starts_at ON alert_maintenance_windows(starts_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_alert_mw_ends_at ON alert_maintenance_windows(ends_at)')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS alert_rules (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            metric_type TEXT NOT NULL,
+            scope_type TEXT NOT NULL DEFAULT 'global',
+            scope_match_mode TEXT NOT NULL DEFAULT 'exact',
+            scope_value TEXT DEFAULT '',
+            severity TEXT NOT NULL DEFAULT 'major',
+            threshold REAL,
+            enabled INTEGER DEFAULT 1,
+            aggregation_mode TEXT DEFAULT 'dedupe_key',
+            notification_repeat_window_seconds INTEGER DEFAULT 120,
+            notify_on_active INTEGER DEFAULT 1,
+            notify_on_recovery INTEGER DEFAULT 1,
+            notify_on_reopen_after_maintenance INTEGER DEFAULT 1,
+            created_by TEXT DEFAULT 'system',
+            created_at TEXT NOT NULL,
+            updated_by TEXT DEFAULT 'system',
+            updated_at TEXT NOT NULL
+        )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_alert_rules_metric_type ON alert_rules(metric_type)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled)')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS alert_rule_settings (
+            id TEXT PRIMARY KEY,
+            interface_down_enabled INTEGER DEFAULT 1,
+            interface_util_threshold REAL DEFAULT 85,
+            cpu_threshold REAL DEFAULT 90,
+            memory_threshold REAL DEFAULT 90,
+            aggregation_mode TEXT DEFAULT 'dedupe_key',
+            notification_repeat_window_seconds INTEGER DEFAULT 120,
+            notify_on_active INTEGER DEFAULT 1,
+            notify_on_recovery INTEGER DEFAULT 1,
+            notify_on_reopen_after_maintenance INTEGER DEFAULT 1,
+            updated_by TEXT DEFAULT 'system',
+            updated_at TEXT NOT NULL
+        )
+        ''')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS alert_rule_history (
+            id TEXT PRIMARY KEY,
+            settings_id TEXT NOT NULL DEFAULT 'default',
+            snapshot_json TEXT NOT NULL,
+            changed_by TEXT DEFAULT 'system',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (settings_id) REFERENCES alert_rule_settings(id)
+        )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_alert_rule_history_settings_id ON alert_rule_history(settings_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_alert_rule_history_created_at ON alert_rule_history(created_at)')
 
         # Host resource telemetry for the platform server itself
         cursor.execute('''
@@ -459,6 +547,170 @@ def init_db():
             cursor.execute('ALTER TABLE devices ADD COLUMN cpu_history TEXT DEFAULT "[]"')
         if 'memory_history' not in columns:
             cursor.execute('ALTER TABLE devices ADD COLUMN memory_history TEXT DEFAULT "[]"')
+
+        # Migration: add alert workflow columns if they don't exist
+        cursor.execute("PRAGMA table_info(alert_events)")
+        alert_columns = [column[1] for column in cursor.fetchall()]
+        if 'workflow_status' not in alert_columns:
+            cursor.execute("ALTER TABLE alert_events ADD COLUMN workflow_status TEXT NOT NULL DEFAULT 'open'")
+        if 'assignee' not in alert_columns:
+            cursor.execute('ALTER TABLE alert_events ADD COLUMN assignee TEXT')
+        if 'ack_by' not in alert_columns:
+            cursor.execute('ALTER TABLE alert_events ADD COLUMN ack_by TEXT')
+        if 'ack_at' not in alert_columns:
+            cursor.execute('ALTER TABLE alert_events ADD COLUMN ack_at TEXT')
+        if 'note' not in alert_columns:
+            cursor.execute("ALTER TABLE alert_events ADD COLUMN note TEXT DEFAULT ''")
+        if 'updated_at' not in alert_columns:
+            cursor.execute('ALTER TABLE alert_events ADD COLUMN updated_at TEXT')
+        cursor.execute(
+            "UPDATE alert_events SET workflow_status = CASE WHEN resolved_at IS NULL THEN 'open' ELSE 'resolved' END WHERE workflow_status IS NULL OR workflow_status = ''"
+        )
+        cursor.execute("UPDATE alert_events SET updated_at = COALESCE(updated_at, resolved_at, created_at)")
+
+        cursor.execute("PRAGMA table_info(alert_rule_settings)")
+        rule_columns = [column[1] for column in cursor.fetchall()]
+        if rule_columns:
+            if 'aggregation_mode' not in rule_columns:
+                cursor.execute("ALTER TABLE alert_rule_settings ADD COLUMN aggregation_mode TEXT DEFAULT 'dedupe_key'")
+            if 'notification_repeat_window_seconds' not in rule_columns:
+                cursor.execute('ALTER TABLE alert_rule_settings ADD COLUMN notification_repeat_window_seconds INTEGER DEFAULT 120')
+            if 'notify_on_active' not in rule_columns:
+                cursor.execute('ALTER TABLE alert_rule_settings ADD COLUMN notify_on_active INTEGER DEFAULT 1')
+            if 'notify_on_recovery' not in rule_columns:
+                cursor.execute('ALTER TABLE alert_rule_settings ADD COLUMN notify_on_recovery INTEGER DEFAULT 1')
+            if 'notify_on_reopen_after_maintenance' not in rule_columns:
+                cursor.execute('ALTER TABLE alert_rule_settings ADD COLUMN notify_on_reopen_after_maintenance INTEGER DEFAULT 1')
+            if 'updated_by' not in rule_columns:
+                cursor.execute("ALTER TABLE alert_rule_settings ADD COLUMN updated_by TEXT DEFAULT 'system'")
+            if 'updated_at' not in rule_columns:
+                cursor.execute("ALTER TABLE alert_rule_settings ADD COLUMN updated_at TEXT")
+
+        cursor.execute(
+            '''
+            INSERT OR IGNORE INTO alert_rule_settings (
+                id, interface_down_enabled, interface_util_threshold, cpu_threshold, memory_threshold,
+                aggregation_mode, notification_repeat_window_seconds,
+                notify_on_active, notify_on_recovery, notify_on_reopen_after_maintenance,
+                updated_by, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (
+                'default',
+                1,
+                85,
+                90,
+                90,
+                'dedupe_key',
+                120,
+                1,
+                1,
+                1,
+                'system',
+                _utc_now_iso(),
+            ),
+        )
+        cursor.execute("UPDATE alert_rule_settings SET updated_at = COALESCE(updated_at, ?) WHERE updated_at IS NULL OR updated_at = ''", (_utc_now_iso(),))
+
+        cursor.execute("PRAGMA table_info(alert_rules)")
+        alert_rule_columns = [column[1] for column in cursor.fetchall()]
+        if alert_rule_columns and 'scope_match_mode' not in alert_rule_columns:
+            cursor.execute("ALTER TABLE alert_rules ADD COLUMN scope_match_mode TEXT NOT NULL DEFAULT 'exact'")
+
+        legacy_rules = cursor.execute(
+            '''
+            SELECT interface_down_enabled, interface_util_threshold, cpu_threshold, memory_threshold,
+                   aggregation_mode, notification_repeat_window_seconds,
+                   notify_on_active, notify_on_recovery, notify_on_reopen_after_maintenance,
+                   updated_by, updated_at
+            FROM alert_rule_settings
+            WHERE id = 'default'
+            LIMIT 1
+            '''
+        ).fetchone()
+        alert_rules_count = cursor.execute('SELECT COUNT(*) FROM alert_rules').fetchone()[0]
+        if alert_rules_count == 0:
+            seeded_at = _utc_now_iso()
+            legacy_updated_at = legacy_rules['updated_at'] if legacy_rules and legacy_rules['updated_at'] else seeded_at
+            legacy_updated_by = legacy_rules['updated_by'] if legacy_rules and legacy_rules['updated_by'] else 'system'
+            legacy_aggregation_mode = legacy_rules['aggregation_mode'] if legacy_rules and legacy_rules['aggregation_mode'] else 'dedupe_key'
+            legacy_repeat_window = int(legacy_rules['notification_repeat_window_seconds']) if legacy_rules and legacy_rules['notification_repeat_window_seconds'] is not None else 120
+            legacy_notify_on_active = int(legacy_rules['notify_on_active']) if legacy_rules and legacy_rules['notify_on_active'] is not None else 1
+            legacy_notify_on_recovery = int(legacy_rules['notify_on_recovery']) if legacy_rules and legacy_rules['notify_on_recovery'] is not None else 1
+            legacy_notify_on_reopen = int(legacy_rules['notify_on_reopen_after_maintenance']) if legacy_rules and legacy_rules['notify_on_reopen_after_maintenance'] is not None else 1
+            seed_rules = [
+                (
+                    'builtin-cpu',
+                    'CPU Usage High',
+                    'cpu',
+                    'global',
+                    '',
+                    'major',
+                    float(legacy_rules['cpu_threshold']) if legacy_rules and legacy_rules['cpu_threshold'] is not None else 90.0,
+                    1,
+                ),
+                (
+                    'builtin-memory',
+                    'Memory Usage High',
+                    'memory',
+                    'global',
+                    '',
+                    'major',
+                    float(legacy_rules['memory_threshold']) if legacy_rules and legacy_rules['memory_threshold'] is not None else 90.0,
+                    1,
+                ),
+                (
+                    'builtin-if-util',
+                    'Interface Utilization High',
+                    'interface_util',
+                    'global',
+                    '',
+                    'warning',
+                    float(legacy_rules['interface_util_threshold']) if legacy_rules and legacy_rules['interface_util_threshold'] is not None else 85.0,
+                    1,
+                ),
+                (
+                    'builtin-if-down',
+                    'Interface Down',
+                    'interface_down',
+                    'global',
+                    '',
+                    'major',
+                    None,
+                    int(legacy_rules['interface_down_enabled']) if legacy_rules and legacy_rules['interface_down_enabled'] is not None else 1,
+                ),
+            ]
+            for rule in seed_rules:
+                cursor.execute(
+                    '''
+                    INSERT INTO alert_rules (
+                        id, name, metric_type, scope_type, scope_match_mode, scope_value, severity, threshold, enabled,
+                        aggregation_mode, notification_repeat_window_seconds,
+                        notify_on_active, notify_on_recovery, notify_on_reopen_after_maintenance,
+                        created_by, created_at, updated_by, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        rule[0],
+                        rule[1],
+                        rule[2],
+                        rule[3],
+                        'exact',
+                        rule[4],
+                        rule[5],
+                        rule[6],
+                        rule[7],
+                        legacy_aggregation_mode,
+                        legacy_repeat_window,
+                        legacy_notify_on_active,
+                        legacy_notify_on_recovery,
+                        legacy_notify_on_reopen,
+                        legacy_updated_by,
+                        legacy_updated_at,
+                        legacy_updated_by,
+                        legacy_updated_at,
+                    ),
+                )
         if 'temp' not in columns:
             cursor.execute('ALTER TABLE devices ADD COLUMN temp INTEGER DEFAULT 35')
         if 'fan_status' not in columns:

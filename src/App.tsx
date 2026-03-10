@@ -2,7 +2,7 @@
 import { motion } from 'motion/react';
 import { Routes, Route, useLocation, useNavigate, Navigate } from 'react-router-dom';
 import * as htmlToImage from 'html-to-image';
-import { Plus, Server, CheckCircle, CheckCircle2, XCircle, RotateCcw, Play, Activity, LayoutDashboard, Database, Zap, ShieldCheck, History, LogOut, Search, Bell, Settings, Download, Upload, FileText, ChevronLeft, ChevronRight, Filter, Globe, TrendingUp, PieChart as PieChartIcon, Clock, AlertTriangle, X, Edit2, AlertCircle, FolderOpen, Eye, EyeOff, Sun, Moon, User, ChevronDown, Copy, Menu, PanelLeftClose, Monitor, ExternalLink, Trash2 } from 'lucide-react';
+import { Plus, Server, CheckCircle, CheckCircle2, XCircle, RotateCcw, Play, Activity, LayoutDashboard, Database, Zap, ShieldCheck, History, LogOut, Search, Bell, Settings, Download, Upload, FileText, ChevronLeft, ChevronRight, Filter, Globe, TrendingUp, PieChart as PieChartIcon, Clock, AlertTriangle, X, Edit2, AlertCircle, FolderOpen, Eye, EyeOff, Sun, Moon, User, ChevronDown, Copy, Menu, PanelLeftClose, Monitor, ExternalLink, Trash2, Wrench } from 'lucide-react';
 import { useI18n } from './i18n.tsx';
 import * as XLSX from 'xlsx';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from 'recharts';
@@ -17,6 +17,9 @@ import ComplianceTab from './pages/ComplianceTab';
 import HistoryTab from './pages/HistoryTab';
 import UsersTab from './pages/UsersTab';
 import InventoryDevicesTab from './pages/InventoryDevicesTab';
+import AlertDeskTab from './pages/AlertDeskTab';
+import AlertRulesTab from './pages/AlertRulesTab';
+import AlertMaintenanceTab from './pages/AlertMaintenanceTab';
 
 // Types imported from ./types — re-export User as UserType to avoid clash with lucide-react User icon
 
@@ -585,6 +588,7 @@ const App: React.FC = () => {
   const [configGroupOpen, setConfigGroupOpen] = useState(() => location.pathname.startsWith('/config'));
   const [automationGroupOpen, setAutomationGroupOpen] = useState(() => location.pathname.startsWith('/automation'));
   const [inventoryGroupOpen, setInventoryGroupOpen] = useState(() => location.pathname.startsWith('/inventory'));
+  const [alertGroupOpen, setAlertGroupOpen] = useState(() => ['alerts', 'alert-rules', 'maintenance'].includes(location.pathname.split('/')[1] || 'dashboard'));
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.innerWidth < 768);
   const [sidebarPulseHidden, setSidebarPulseHidden] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
@@ -699,6 +703,9 @@ const App: React.FC = () => {
       return map[inventorySubPage] || inventorySubPage;
     }
     if (activeTab === 'users') return t('userManagement');
+    if (activeTab === 'alerts') return language === 'zh' ? '告警信息' : 'Alert Desk';
+    if (activeTab === 'alert-rules') return language === 'zh' ? '告警规则' : 'Alert Rules';
+    if (activeTab === 'maintenance') return language === 'zh' ? '维护期' : 'Maintenance';
     if (activeTab === 'history') return t('auditLogs');
     if (activeTab === 'configuration') return t('configuration');
     if (activeTab === 'compliance') return t('compliance');
@@ -752,6 +759,12 @@ const App: React.FC = () => {
       navigate('/dashboard', { replace: true });
     }
   }, [isAuthenticated, location.pathname, navigate]);
+
+  useEffect(() => {
+    if (['alerts', 'alert-rules', 'maintenance'].includes(activeTab)) {
+      setAlertGroupOpen(true);
+    }
+  }, [activeTab]);
 
   // Load config snapshots from backend when entering Config Center tab
   const loadConfigSnapshots = async (
@@ -4228,6 +4241,61 @@ const App: React.FC = () => {
             </button>
           ))}
 
+          <div className="pt-2">
+            <button
+              onClick={() => {
+                const next = !alertGroupOpen;
+                setAlertGroupOpen(next);
+                if (next && !['alerts', 'alert-rules', 'maintenance'].includes(activeTab)) {
+                  setActiveTab('alerts');
+                }
+              }}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
+                ['alerts', 'alert-rules', 'maintenance'].includes(activeTab)
+                  ? 'text-white'
+                  : 'text-white/60 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <AlertTriangle size={17} className={['alerts', 'alert-rules', 'maintenance'].includes(activeTab) ? 'text-[#00bceb]' : ''} />
+              <span className="flex-1 text-left">{language === 'zh' ? '告警中心' : 'Alert Center'}</span>
+              <ChevronRight
+                size={14}
+                className={`text-white/30 transition-transform duration-200 ${
+                  alertGroupOpen ? 'rotate-90' : ''
+                }`}
+              />
+            </button>
+            <div className={`overflow-hidden transition-all duration-200 ease-in-out ${
+              alertGroupOpen ? 'max-h-48 opacity-100' : 'max-h-0 opacity-0'
+            }`}>
+              <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5">
+                {([
+                  { id: 'alerts', icon: AlertTriangle, label: language === 'zh' ? '告警信息' : 'Alert Desk' },
+                  { id: 'alert-rules', icon: Settings, label: language === 'zh' ? '告警规则' : 'Alert Rules' },
+                  { id: 'maintenance', icon: Wrench, label: language === 'zh' ? '维护期' : 'Maintenance' },
+                ] as const).map(item => {
+                  const isActive = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setActiveTab(item.id)}
+                      className={`w-full flex items-center gap-2.5 pl-5 pr-3 py-2 rounded-lg text-sm transition-all ${
+                        isActive
+                          ? 'bg-[#00bceb]/15 text-[#00bceb] font-semibold'
+                          : 'text-white/40 hover:bg-white/5 hover:text-white/80 font-medium'
+                      }`}
+                    >
+                      {isActive && <span className="w-1 h-1 rounded-full bg-[#00bceb] flex-shrink-0" />}
+                      {!isActive && <span className="w-1 h-1 flex-shrink-0" />}
+                      <item.icon size={14} />
+                      <span className="text-[13px]">{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
           {/* ── Inventory collapsible group ── */}
           <div>
             <button
@@ -4860,6 +4928,46 @@ const App: React.FC = () => {
             />
           )}
 
+          {activeTab === 'alerts' && (
+            <AlertDeskTab
+              language={language}
+              currentUsername={currentUser.username}
+              showToast={showToast}
+              activeAlertSection="alerts"
+              onNavigateAlertSection={(section) => setActiveTab(section)}
+              onOpenMaintenanceForAlert={(alert) => {
+                const params = new URLSearchParams({
+                  open: '1',
+                  name: alert ? `${alert.hostname || alert.ip_address || 'Alert'} Maintenance` : '',
+                  target_ip: alert?.ip_address || '',
+                  title_pattern: alert?.title || '',
+                  message_pattern: alert?.interface_name || '',
+                });
+                navigate(`/maintenance?${params.toString()}`);
+              }}
+            />
+          )}
+
+          {activeTab === 'alert-rules' && (
+            <AlertRulesTab
+              language={language}
+              currentUsername={currentUser.username}
+              showToast={showToast}
+              activeAlertSection="alert-rules"
+              onNavigateAlertSection={(section) => setActiveTab(section)}
+            />
+          )}
+
+          {activeTab === 'maintenance' && (
+            <AlertMaintenanceTab
+              language={language}
+              currentUsername={currentUser.username}
+              showToast={showToast}
+              activeAlertSection="maintenance"
+              onNavigateAlertSection={(section) => setActiveTab(section)}
+            />
+          )}
+
           {activeTab === 'inventory' && inventorySubPage === 'devices' && (
             <InventoryDevicesTab
               inventoryRows={inventoryRows}
@@ -5076,7 +5184,7 @@ const App: React.FC = () => {
                       className="px-3 py-2 bg-black/[0.02] border border-black/5 rounded-xl text-xs outline-none cursor-pointer"
                     >
                       <option value="name">{language === 'zh' ? '按主机名排序' : 'Sort by Name'}</option>
-                      <option value="downCount">{language === 'zh' ? '按DOWN口数↓' : 'Sort by DOWN Count'}</option>
+                                    onClick={() => setActiveTab('alerts')}
                       <option value="errors">{language === 'zh' ? '按错误数↓' : 'Sort by Errors'}</option>
                       <option value="bw">{language === 'zh' ? '按带宽利用率↓' : 'Sort by BW%'}</option>
                     </select>
