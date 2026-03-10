@@ -1,14 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { CheckCircle2, Eye, Search, Wrench, X } from 'lucide-react';
+import { CheckCircle2, Eye, RefreshCw, Search, Wrench, X } from 'lucide-react';
 import type { AlertDetailResponse, AlertListResponse, AlertRecord } from '../types';
 import Pagination from '../components/Pagination';
 import { alertWorkflowBadgeClass, severityBadgeClass } from '../components/shared';
 import {
+  alertAccentButtonClass,
   alertInputClass,
   alertPanelClass,
   alertPrimaryButtonClass,
   alertSecondaryButtonClass,
+  alertTableActionButtonClass,
   AlertPageCommonProps,
   formatDuration,
   formatTs,
@@ -184,6 +186,7 @@ const AlertDeskTab: React.FC<AlertDeskTabProps> = ({ language, currentUsername, 
             </p>
           </div>
           <button onClick={() => void loadAlerts()} className={alertSecondaryButtonClass}>
+            <RefreshCw size={14} />
             {language === 'zh' ? '刷新列表' : 'Refresh'}
           </button>
         </div>
@@ -292,7 +295,7 @@ const AlertDeskTab: React.FC<AlertDeskTabProps> = ({ language, currentUsername, 
                     <td className="px-5 py-4 align-top">
                       <button
                         onClick={() => setSelectedAlertId(row.id)}
-                        className={alertSecondaryButtonClass}
+                        className={alertTableActionButtonClass}
                         title={language === 'zh' ? `查看告警 ${row.title}` : `View alert ${row.title}`}
                       >
                         <Eye size={14} />
@@ -405,7 +408,7 @@ const AlertDeskTab: React.FC<AlertDeskTabProps> = ({ language, currentUsername, 
                           placeholder={language === 'zh' ? '输入责任人用户名' : 'Enter assignee username'}
                           className={`${alertInputClass} rounded-xl px-3 py-2`}
                         />
-                        <button disabled={actionLoading === 'assign' || !assignValue.trim()} onClick={() => void handleAssign()} className={alertSecondaryButtonClass}>
+                        <button disabled={actionLoading === 'assign' || !assignValue.trim()} onClick={() => void handleAssign()} className={alertAccentButtonClass}>
                           {language === 'zh' ? '分派' : 'Assign'}
                         </button>
                       </div>
@@ -437,7 +440,7 @@ const AlertDeskTab: React.FC<AlertDeskTabProps> = ({ language, currentUsername, 
                       placeholder={language === 'zh' ? '记录处理动作和结论。' : 'Capture actions and conclusion.'}
                     />
                     <div className="mt-3 flex justify-end">
-                      <button disabled={actionLoading === 'note'} onClick={() => void handleSaveNote()} className={alertSecondaryButtonClass}>
+                      <button disabled={actionLoading === 'note'} onClick={() => void handleSaveNote()} className={alertAccentButtonClass}>
                         {language === 'zh' ? '保存备注' : 'Save Note'}
                       </button>
                     </div>

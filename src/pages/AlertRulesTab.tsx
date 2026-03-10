@@ -5,10 +5,12 @@ import type { AlertRuleListResponse, AlertRuleSettings } from '../types';
 import Pagination from '../components/Pagination';
 import { severityBadgeClass } from '../components/shared';
 import {
+  alertDangerButtonClass,
   alertInputClass,
   alertPanelClass,
   alertPrimaryButtonClass,
   alertSecondaryButtonClass,
+  alertTableActionButtonClass,
   AlertPageCommonProps,
   buildEmptyRule,
   formatTs,
@@ -269,7 +271,7 @@ const AlertRulesTab: React.FC<AlertPageCommonProps> = ({ language, currentUserna
                       <button
                         title={language === 'zh' ? `编辑规则 ${rule.name}` : `Edit rule ${rule.name}`}
                         onClick={() => openEdit(rule)}
-                        className={alertSecondaryButtonClass}
+                        className={alertTableActionButtonClass}
                       >
                         <Edit3 size={14} />
                         {language === 'zh' ? '编辑' : 'Edit'}
@@ -418,7 +420,7 @@ const AlertRulesTab: React.FC<AlertPageCommonProps> = ({ language, currentUserna
                     {language === 'zh' ? '重置' : 'Reset'}
                   </button>
                   {editingRuleId ? (
-                    <button onClick={() => void handleDelete()} className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100">
+                    <button onClick={() => void handleDelete()} className={alertDangerButtonClass}>
                       <Trash2 size={14} />
                       {language === 'zh' ? '删除' : 'Delete'}
                     </button>

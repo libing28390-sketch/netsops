@@ -1,14 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Copy, Plus, Search, Trash2, X } from 'lucide-react';
+import { Copy, Eye, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
-import type { AlertMaintenanceListResponse, AlertMaintenanceWindow, User } from '../types';
+import type { AlertMaintenanceListResponse, AlertMaintenanceWindow, Device, User } from '../types';
 import Pagination from '../components/Pagination';
 import {
+  alertAccentButtonClass,
+  alertDangerButtonClass,
   alertInputClass,
   alertPanelClass,
   alertPrimaryButtonClass,
   alertSecondaryButtonClass,
+  alertTableActionAccentButtonClass,
+  alertTableActionBarClass,
+  alertTableActionButtonClass,
+  alertTableActionDangerButtonClass,
   AlertPageCommonProps,
   buildDefaultMaintenanceForm,
   formatTs,
@@ -22,6 +28,7 @@ type RuntimeFilter = 'all' | AlertMaintenanceWindow['runtime_status'];
 
 const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, currentUsername, showToast }) => {
   const location = useLocation();
+  const [devices, setDevices] = useState<Device[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [windows, setWindows] = useState<AlertMaintenanceWindow[]>([]);
   const [total, setTotal] = useState(0);
@@ -41,6 +48,20 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
     [selectedWindowId, windows],
   );
 
+  const deviceOptions = useMemo(
+    () => devices.filter((device) => Boolean(device.ip_address)).sort((left, right) => left.hostname.localeCompare(right.hostname)),
+    [devices],
+  );
+
+  const assetByIp = useMemo(
+    () => new Map(deviceOptions.map((device) => [device.ip_address, device])),
+    [deviceOptions],
+  );
+
+  const selectedAsset = maintenanceForm.target_ip ? assetByIp.get(maintenanceForm.target_ip) || null : null;
+
+  const selectedWindowAsset = selectedWindow?.target_ip ? assetByIp.get(selectedWindow.target_ip) || null : null;
+
   const loadUsers = async () => {
     try {
       const resp = await fetch('/api/users');
@@ -48,6 +69,25 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
       setUsers(await resp.json());
     } catch (error) {
       console.error(error);
+    }
+  };
+
+  const loadDevices = async () => {
+    try {
+      const params = new URLSearchParams({
+        mode: 'light',
+        page: '1',
+        page_size: '200',
+        sort_key: 'hostname',
+        sort_direction: 'asc',
+      });
+      const resp = await fetch(`/api/devices?${params.toString()}`);
+      if (!resp.ok) throw new Error('Failed to load devices');
+      const data = await resp.json();
+      setDevices(Array.isArray(data) ? data : (Array.isArray(data.items) ? data.items : []));
+    } catch (error) {
+      console.error(error);
+      showToast(language === 'zh' ? '加载资产列表失败' : 'Failed to load devices', 'error');
     }
   };
 
@@ -77,6 +117,7 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
   };
 
   useEffect(() => {
+    void loadDevices();
     void loadUsers();
   }, []);
 
@@ -179,26 +220,18 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
     }
   };
 
-  const handleCopyWindow = async (window: AlertMaintenanceWindow) => {
-    const detailText = [
-      `${language === 'zh' ? '维护窗名称' : 'Window Name'}: ${window.name}`,
-      `${language === 'zh' ? '维护对象 IP' : 'Target IP'}: ${window.target_ip}`,
-      `${language === 'zh' ? '开始时间' : 'Start Time'}: ${window.starts_at}`,
-      `${language === 'zh' ? '结束时间' : 'End Time'}: ${window.ends_at}`,
-      `${language === 'zh' ? '标题匹配' : 'Title Match'}: ${window.title_pattern || '--'}`,
-      `${language === 'zh' ? '消息匹配' : 'Message Match'}: ${window.message_pattern || '--'}`,
-      `${language === 'zh' ? '原因' : 'Reason'}: ${window.reason || '--'}`,
-    ].join('\n');
+  const handleCopyWindow = (window: AlertMaintenanceWindow) => {
+    const next = buildDefaultMaintenanceForm(null);
+    next.name = language === 'zh' ? `${window.name} 副本` : `${window.name} Copy`;
+    next.target_ip = window.target_ip || '';
+    next.title_pattern = window.title_pattern || '';
+    next.message_pattern = window.message_pattern || '';
+    next.reason = window.reason || '';
 
-    try {
-      if (navigator?.clipboard?.writeText) {
-        await navigator.clipboard.writeText(detailText);
-      }
-      showToast(language === 'zh' ? '维护窗信息已复制' : 'Maintenance window copied', 'success');
-    } catch (error) {
-      console.error(error);
-      showToast(language === 'zh' ? '复制维护窗信息失败' : 'Failed to copy maintenance window', 'error');
-    }
+    setMaintenanceForm(next);
+    setSelectedWindowId(null);
+    setShowMaintenanceModal(true);
+    showToast(language === 'zh' ? '已打开复制维护期窗口' : 'Opened duplicated maintenance window', 'success');
   };
 
   const openCreate = () => {
@@ -223,6 +256,7 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => void loadMaintenanceWindows()} className={alertSecondaryButtonClass}>
+              <RefreshCw size={14} />
               {language === 'zh' ? '刷新' : 'Refresh'}
             </button>
             <button onClick={openCreate} className={alertPrimaryButtonClass}>
@@ -291,7 +325,10 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
                         <p className="mt-1 line-clamp-1 text-xs text-black/45">{window.reason || (language === 'zh' ? '未填写原因' : 'No reason')}</p>
                       </button>
                     </td>
-                    <td className="px-5 py-4 align-top text-sm font-mono text-black/60">{window.target_ip}</td>
+                    <td className="px-5 py-4 align-top text-sm text-black/60">
+                      <div className="font-mono">{window.target_ip}</div>
+                      <div className="mt-1 text-xs text-black/40">{assetByIp.get(window.target_ip)?.hostname || '--'}</div>
+                    </td>
                     <td className="px-5 py-4 align-top text-sm text-black/60">{formatTs(window.starts_at)}</td>
                     <td className="px-5 py-4 align-top text-sm text-black/60">{formatTs(window.ends_at)}</td>
                     <td className="px-5 py-4 align-top">
@@ -301,11 +338,12 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
                     </td>
                     <td className="px-5 py-4 align-top text-sm text-black/60">{window.created_by}</td>
                     <td className="px-5 py-4 align-top">
-                      <div className="flex flex-wrap gap-2">
-                        <button title={language === 'zh' ? `查看维护窗 ${window.name}` : `View maintenance window ${window.name}`} onClick={() => setSelectedWindowId(window.id)} className={alertSecondaryButtonClass}>
+                      <div className={alertTableActionBarClass}>
+                        <button title={language === 'zh' ? `查看维护窗 ${window.name}` : `View maintenance window ${window.name}`} onClick={() => setSelectedWindowId(window.id)} className={alertTableActionButtonClass}>
+                          <Eye size={14} />
                           {language === 'zh' ? '查看' : 'View'}
                         </button>
-                        <button title={language === 'zh' ? `复制维护窗 ${window.name}` : `Copy maintenance window ${window.name}`} onClick={() => void handleCopyWindow(window)} className={alertSecondaryButtonClass}>
+                        <button title={language === 'zh' ? `复制维护窗 ${window.name}` : `Copy maintenance window ${window.name}`} onClick={() => void handleCopyWindow(window)} className={alertTableActionAccentButtonClass}>
                           <Copy size={14} />
                           {language === 'zh' ? '复制' : 'Copy'}
                         </button>
@@ -313,7 +351,7 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
                           title={language === 'zh' ? `删除维护窗 ${window.name}` : `Delete maintenance window ${window.name}`}
                           onClick={() => void handleDeleteWindow(window.id)}
                           disabled={maintenanceCancelingId === window.id}
-                          className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+                          className={alertTableActionDangerButtonClass}
                         >
                           <Trash2 size={14} />
                           {language === 'zh' ? '删除' : 'Delete'}
@@ -384,8 +422,29 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
                     <input value={maintenanceForm.name} onChange={(e) => updateMaintenanceField('name', e.target.value)} className={`${alertInputClass} mt-2 rounded-xl px-3 py-2`} />
                   </label>
                   <label className="text-sm text-black/65">
-                    <span>{language === 'zh' ? '维护对象 IP' : 'Target IP'}</span>
-                    <input value={maintenanceForm.target_ip} onChange={(e) => updateMaintenanceField('target_ip', e.target.value)} className={`${alertInputClass} mt-2 rounded-xl px-3 py-2 font-mono`} />
+                    <span>{language === 'zh' ? '资产对象' : 'Asset Target'}</span>
+                    <select
+                      value={maintenanceForm.target_ip}
+                      onChange={(e) => updateMaintenanceField('target_ip', e.target.value)}
+                      className="mt-2 w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-[#0b2340] outline-none"
+                    >
+                      <option value="">{language === 'zh' ? '请选择资产 IP' : 'Select asset IP'}</option>
+                      {maintenanceForm.target_ip && !selectedAsset ? (
+                        <option value={maintenanceForm.target_ip}>{maintenanceForm.target_ip}</option>
+                      ) : null}
+                      {deviceOptions.map((device) => (
+                        <option key={device.id} value={device.ip_address}>
+                          {`${device.hostname} / ${device.ip_address}`}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-2 text-xs text-black/40">
+                      {selectedAsset
+                        ? (language === 'zh'
+                          ? `来自资产信息：${selectedAsset.hostname} / ${selectedAsset.site || '未分组'}`
+                          : `From inventory: ${selectedAsset.hostname} / ${selectedAsset.site || 'Unassigned'}`)
+                        : (language === 'zh' ? '维护对象 IP 从资产信息中选择。' : 'Target IP is selected from inventory.')}
+                    </p>
                   </label>
                 </div>
 
@@ -496,6 +555,7 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
                     <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-black/35">{language === 'zh' ? '时间信息' : 'Schedule'}</p>
                     <div className="mt-3 space-y-2">
                       <p><span className="text-black/35">IP:</span> {selectedWindow.target_ip}</p>
+                      {selectedWindowAsset ? <p><span className="text-black/35">{language === 'zh' ? '资产' : 'Asset'}:</span> {selectedWindowAsset.hostname}</p> : null}
                       <p><span className="text-black/35">{language === 'zh' ? '开始' : 'Start'}:</span> {formatTs(selectedWindow.starts_at)}</p>
                       <p><span className="text-black/35">{language === 'zh' ? '结束' : 'End'}:</span> {formatTs(selectedWindow.ends_at)}</p>
                       <p><span className="text-black/35">{language === 'zh' ? '创建人' : 'Created By'}:</span> {selectedWindow.created_by}</p>
@@ -521,7 +581,7 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
               </div>
 
               <div className="flex flex-wrap items-center justify-end gap-2 border-t border-black/5 px-6 py-4">
-                <button onClick={() => void handleCopyWindow(selectedWindow)} className={alertSecondaryButtonClass}>
+                <button onClick={() => void handleCopyWindow(selectedWindow)} className={alertAccentButtonClass}>
                   <Copy size={14} />
                   {language === 'zh' ? '复制信息' : 'Copy'}
                 </button>
@@ -530,7 +590,7 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
                     {language === 'zh' ? '取消维护期' : 'Cancel'}
                   </button>
                 ) : null}
-                <button onClick={() => void handleDeleteWindow(selectedWindow.id)} disabled={maintenanceCancelingId === selectedWindow.id} className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100">
+                <button onClick={() => void handleDeleteWindow(selectedWindow.id)} disabled={maintenanceCancelingId === selectedWindow.id} className={alertDangerButtonClass}>
                   <Trash2 size={14} />
                   {language === 'zh' ? '删除' : 'Delete'}
                 </button>
