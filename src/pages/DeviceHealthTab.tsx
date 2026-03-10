@@ -75,12 +75,12 @@ const DeviceHealthTab: React.FC<DeviceHealthTabProps> = ({
     })
     .slice(0, 8));
 
-  const siteOptions = React.useMemo(
-    () => [...new Set(devices.map((item) => String(item.site || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+  const siteOptions = React.useMemo<string[]>(
+    () => Array.from(new Set<string>(devices.map((item) => String(item.site || '').trim()).filter((value): value is string => Boolean(value)))).sort((a, b) => a.localeCompare(b)),
     [devices],
   );
-  const roleOptions = React.useMemo(
-    () => [...new Set(devices.map((item) => String(item.role || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+  const roleOptions = React.useMemo<string[]>(
+    () => Array.from(new Set<string>(devices.map((item) => String(item.role || '').trim()).filter((value): value is string => Boolean(value)))).sort((a, b) => a.localeCompare(b)),
     [devices],
   );
   const filteredDevices = React.useMemo(() => {
