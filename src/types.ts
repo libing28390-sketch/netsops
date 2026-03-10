@@ -39,6 +39,18 @@ export interface Device {
   sys_name?: string;
   sys_location?: string;
   sys_contact?: string;
+  health_status?: 'healthy' | 'warning' | 'critical' | 'unknown';
+  health_score?: number;
+  health_summary?: string;
+  health_reasons?: string[];
+  open_alert_count?: number;
+  critical_open_alerts?: number;
+  major_open_alerts?: number;
+  warning_open_alerts?: number;
+  interface_down_count?: number;
+  interface_flap_count?: number;
+  high_util_interface_count?: number;
+  interface_error_count?: number;
   interface_data?: {
     name: string; status: string; speed_mbps: number;
     in_octets: number; out_octets: number; description: string;
@@ -49,6 +61,13 @@ export interface Device {
     bw_in_pct?: number; bw_out_pct?: number;
     last_change_secs?: number; flapping?: boolean;
   }[];
+}
+
+export interface DeviceConnectionCheckSummary {
+  status: 'ok' | 'tcp_fail' | 'ssh_auth_fail' | 'ssh_timeout' | 'ssh_transport' | 'ssh_legacy' | 'fail';
+  mode: 'quick' | 'deep';
+  checked_at: string;
+  error_code?: string;
 }
 
 export interface Job {
@@ -248,6 +267,7 @@ export interface AlertSummary {
   open_count: number;
   critical_open: number;
   major_open: number;
+  warning_open: number;
   acknowledged_open: number;
   suppressed_open?: number;
   assigned_open: number;
@@ -277,8 +297,12 @@ export interface AlertMaintenanceWindow {
   id: string;
   name: string;
   target_ip: string;
+  target_ips?: string[];
   title_pattern?: string;
   message_pattern?: string;
+  selection_mode?: 'conditions' | 'resources';
+  condition_logic?: AlertMaintenanceConditionLogic;
+  match_conditions?: AlertMaintenanceCondition[];
   starts_at: string;
   ends_at: string;
   notify_user_ids: string[];
@@ -312,6 +336,18 @@ export interface AlertMaintenancePreview {
   }>;
 }
 
+export type AlertMaintenanceConditionField = 'alert_description' | 'alert_ip' | 'alert_level';
+
+export type AlertMaintenanceConditionOperator = 'contains' | 'equals' | 'not_contains' | 'not_equals' | 'regex';
+
+export type AlertMaintenanceConditionLogic = 'all' | 'any' | 'none';
+
+export interface AlertMaintenanceCondition {
+  field: AlertMaintenanceConditionField;
+  operator: AlertMaintenanceConditionOperator;
+  value: string;
+}
+
 export type AlertRuleMetricType = 'cpu' | 'memory' | 'interface_util' | 'interface_down';
 
 export type AlertRuleScopeType = 'global' | 'site' | 'device' | 'interface';
@@ -325,7 +361,7 @@ export interface AlertRuleSettings {
   scope_type: AlertRuleScopeType;
   scope_match_mode: AlertRuleScopeMatchMode;
   scope_value: string;
-  severity: 'critical' | 'major' | 'warning' | 'high' | 'medium' | 'low' | 'info';
+  severity: 'critical' | 'major' | 'warning';
   threshold?: number | null;
   enabled: boolean;
   aggregation_mode: 'dedupe_key';
@@ -434,6 +470,79 @@ export interface HostResourceHistoryPayload {
   resolution_hint?: '1m' | '5m' | '30m';
   sample_count?: number;
   thresholds: Record<string, { warn: number; critical: number; title: string; title_zh: string }>;
+}
+
+export interface DeviceHealthOverview {
+  total_devices: number;
+  average_score: number;
+  healthy: number;
+  warning: number;
+  critical: number;
+  unknown: number;
+  top_risky_devices: Device[];
+}
+
+export interface DeviceHealthAlertItem {
+  id: string;
+  severity: string;
+  title: string;
+  message: string;
+  interface_name?: string;
+  created_at: string;
+}
+
+export interface DeviceHealthDetailResponse {
+  device: Device;
+  recent_open_alerts: DeviceHealthAlertItem[];
+}
+
+export interface DeviceHealthHistoryPoint {
+  ts: string;
+  average_score: number;
+  total_devices: number;
+  healthy: number;
+  warning: number;
+  critical: number;
+  unknown: number;
+}
+
+export interface DeviceHealthHistoryResponse {
+  range_hours: number;
+  sample_count: number;
+  series: DeviceHealthHistoryPoint[];
+}
+
+export interface DeviceHealthTrendPoint {
+  ts: string;
+  status: string;
+  health_status: string;
+  health_score: number;
+  open_alert_count: number;
+  critical_open_alerts: number;
+  major_open_alerts: number;
+  warning_open_alerts: number;
+  interface_down_count: number;
+  interface_flap_count: number;
+  high_util_interface_count: number;
+  interface_error_count: number;
+  health_summary: string;
+  health_reasons: string[];
+}
+
+export interface DeviceHealthTrendDevice {
+  id: string;
+  hostname: string;
+  ip_address: string;
+  platform: string;
+  role: string;
+  site: string;
+}
+
+export interface DeviceHealthTrendResponse {
+  device: DeviceHealthTrendDevice | null;
+  range_hours: number;
+  sample_count: number;
+  series: DeviceHealthTrendPoint[];
 }
 
 export const PLATFORM_LABELS: Record<string, string> = {

@@ -5,6 +5,7 @@ import type { AlertRuleListResponse, AlertRuleSettings } from '../types';
 import Pagination from '../components/Pagination';
 import { severityBadgeClass } from '../components/shared';
 import {
+  ALERT_SEVERITY_OPTIONS,
   alertDangerButtonClass,
   alertInputClass,
   alertPanelClass,
@@ -386,11 +387,9 @@ const AlertRulesTab: React.FC<AlertPageCommonProps> = ({ language, currentUserna
                   <label className="text-sm text-black/65">
                     <span>{language === 'zh' ? '告警级别' : 'Severity'}</span>
                     <select value={ruleDraft.severity} onChange={(e) => updateRuleField('severity', e.target.value as AlertRuleSettings['severity'])} className="mt-2 w-full rounded-xl border border-black/10 px-3 py-2 text-[#0b2340] outline-none">
-                      <option value="critical">{severityLabel('critical', language)}</option>
-                      <option value="major">{severityLabel('major', language)}</option>
-                      <option value="warning">{severityLabel('warning', language)}</option>
-                      <option value="medium">{severityLabel('medium', language)}</option>
-                      <option value="info">{severityLabel('info', language)}</option>
+                      {ALERT_SEVERITY_OPTIONS.map((severity) => (
+                        <option key={severity} value={severity}>{severityLabel(severity, language)}</option>
+                      ))}
                     </select>
                   </label>
                   <label className="text-sm text-black/65">

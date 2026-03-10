@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo, useCallback } from 'react';
+﻿import React, { Suspense, lazy, useState, useEffect, useMemo, useCallback } from 'react';
 import { motion } from 'motion/react';
 import { Routes, Route, useLocation, useNavigate, Navigate } from 'react-router-dom';
 import * as htmlToImage from 'html-to-image';
@@ -6,20 +6,22 @@ import { Plus, Server, CheckCircle, CheckCircle2, XCircle, RotateCcw, Play, Acti
 import { useI18n } from './i18n.tsx';
 import * as XLSX from 'xlsx';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from 'recharts';
-import TopologyGraph from './components/TopologyGraph.tsx';
-import MonitoringCenter from './components/MonitoringCenter.tsx';
-import type { ConfigVersion, Device, Job, AuditEvent, ComplianceFinding, ComplianceRunPoint, ComplianceOverview, ScheduledTask, Script, ConfigTemplate, ConfigSnapshot, DiffLine, User as UserType, ThemeMode, SessionUser, NotificationItem, HostResourceSnapshot } from './types';
+import type { ConfigVersion, Device, Job, AuditEvent, ComplianceFinding, ComplianceRunPoint, ComplianceOverview, ScheduledTask, Script, ConfigTemplate, ConfigSnapshot, DiffLine, User as UserType, ThemeMode, SessionUser, NotificationItem, HostResourceSnapshot, DeviceHealthAlertItem, DeviceHealthDetailResponse, DeviceHealthTrendResponse, DeviceConnectionCheckSummary } from './types';
 import { PLATFORM_LABELS, getPlatformLabel, getVendorFromPlatform } from './types';
 import { sectionHeaderRowClass, sectionToolbarClass, primaryActionBtnClass, secondaryActionBtnClass, darkActionBtnClass, severityBadgeClass, complianceStatusBadgeClass, auditStatusBadgeClass, parseJsonObject } from './components/shared';
 import Pagination from './components/Pagination';
-import DashboardTab from './pages/DashboardTab';
-import ComplianceTab from './pages/ComplianceTab';
-import HistoryTab from './pages/HistoryTab';
-import UsersTab from './pages/UsersTab';
-import InventoryDevicesTab from './pages/InventoryDevicesTab';
-import AlertDeskTab from './pages/AlertDeskTab';
-import AlertRulesTab from './pages/AlertRulesTab';
-import AlertMaintenanceTab from './pages/AlertMaintenanceTab';
+
+const TopologyGraph = lazy(() => import('./components/TopologyGraph.tsx'));
+const MonitoringCenter = lazy(() => import('./components/MonitoringCenter.tsx'));
+const DeviceHealthTab = lazy(() => import('./pages/DeviceHealthTab'));
+const DashboardTab = lazy(() => import('./pages/DashboardTab'));
+const ComplianceTab = lazy(() => import('./pages/ComplianceTab'));
+const HistoryTab = lazy(() => import('./pages/HistoryTab'));
+const UsersTab = lazy(() => import('./pages/UsersTab'));
+const InventoryDevicesTab = lazy(() => import('./pages/InventoryDevicesTab'));
+const AlertDeskTab = lazy(() => import('./pages/AlertDeskTab'));
+const AlertRulesTab = lazy(() => import('./pages/AlertRulesTab'));
+const AlertMaintenanceTab = lazy(() => import('./pages/AlertMaintenanceTab'));
 
 // Types imported from ./types — re-export User as UserType to avoid clash with lucide-react User icon
 
@@ -84,6 +86,8 @@ class AppRuntimeBoundary extends React.Component<AppRuntimeBoundaryProps, AppRun
 
 const LEGACY_SSH_ERROR_CODE = 'legacy_ssh_algorithms';
 const SSH_AUTH_ERROR_CODE = 'ssh_authentication_failed';
+const SSH_TIMEOUT_ERROR_CODE = 'ssh_transport_timeout';
+const SSH_TRANSPORT_ERROR_CODE = 'ssh_transport_unreachable';
 
 const buildConnectionTestMessage = (detail: any, errorCode?: string): string => {
   const normalizedDetail = typeof detail === 'string'
@@ -98,7 +102,54 @@ const buildConnectionTestMessage = (detail: any, errorCode?: string): string => 
     return normalizedDetail || '设备已可达，但 SSH 认证被拒绝，请检查账号密码或设备 AAA/VTY 配置。';
   }
 
+  if (errorCode === SSH_TIMEOUT_ERROR_CODE) {
+    return normalizedDetail || 'SSH 会话建立超时，请检查设备管理平面负载、VTY 状态或中间安全策略。';
+  }
+
+  if (errorCode === SSH_TRANSPORT_ERROR_CODE) {
+    return normalizedDetail || 'SSH 传输层未建立，请检查 22 端口开放状态、设备 SSH 服务和 ACL/防火墙策略。';
+  }
+
   return normalizedDetail || 'Connection failed';
+};
+
+const buildConnectionCheckStatus = (
+  success: boolean,
+  mode: 'quick' | 'deep',
+  errorCode?: string,
+  stages?: Array<{ stage: string; ok: boolean }>,
+): DeviceConnectionCheckSummary['status'] => {
+  if (success) return 'ok';
+  if (errorCode === LEGACY_SSH_ERROR_CODE) return 'ssh_legacy';
+  if (errorCode === SSH_AUTH_ERROR_CODE) return 'ssh_auth_fail';
+  if (errorCode === SSH_TIMEOUT_ERROR_CODE) return 'ssh_timeout';
+  if (errorCode === SSH_TRANSPORT_ERROR_CODE) return 'ssh_transport';
+  if (mode === 'quick' || stages?.some((stage) => stage.stage === 'tcp' && !stage.ok)) return 'tcp_fail';
+  return 'fail';
+};
+
+const connectionCheckBadgeMeta: Record<DeviceConnectionCheckSummary['status'], { zh: string; en: string; className: string }> = {
+  ok: { zh: 'OK', en: 'OK', className: 'border-emerald-200 bg-emerald-100 text-emerald-700' },
+  tcp_fail: { zh: 'TCP 失败', en: 'TCP Fail', className: 'border-red-200 bg-red-100 text-red-700' },
+  ssh_auth_fail: { zh: 'SSH 认证失败', en: 'SSH Auth Fail', className: 'border-rose-200 bg-rose-100 text-rose-700' },
+  ssh_timeout: { zh: 'SSH 超时', en: 'SSH Timeout', className: 'border-orange-200 bg-orange-100 text-orange-700' },
+  ssh_transport: { zh: 'SSH 传输失败', en: 'SSH Transport', className: 'border-slate-200 bg-slate-100 text-slate-700' },
+  ssh_legacy: { zh: 'SSH 算法旧', en: 'Legacy SSH', className: 'border-amber-200 bg-amber-100 text-amber-700' },
+  fail: { zh: '失败', en: 'Fail', className: 'border-red-200 bg-red-100 text-red-700' },
+};
+
+const formatConnectionCheckTime = (value: string, language: string) => {
+  try {
+    return new Date(value).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  } catch {
+    return value;
+  }
 };
 
 // Sparkline imported from ./components/Sparkline
@@ -123,9 +174,10 @@ const App: React.FC = () => {
   const renderAvatarContent = (avatarValue: string, fallbackIconSize: number) => {
     const preset = resolvePreset(avatarValue);
     if (preset) {
+      const emojiSizeClass = fallbackIconSize <= 15 ? 'text-sm' : fallbackIconSize <= 18 ? 'text-base' : 'text-xl';
       return (
         <div className={`w-full h-full ${preset.bgClass} flex items-center justify-center`}>
-          <span style={{ fontSize: Math.max(12, fallbackIconSize - 1) }}>{preset.emoji}</span>
+          <span className={`${emojiSizeClass} leading-none`}>{preset.emoji}</span>
         </div>
       );
     }
@@ -710,6 +762,7 @@ const App: React.FC = () => {
     if (activeTab === 'configuration') return t('configuration');
     if (activeTab === 'compliance') return t('compliance');
     if (activeTab === 'monitoring') return language === 'zh' ? '监控中心' : 'Monitoring Center';
+    if (activeTab === 'health') return language === 'zh' ? '健康检测' : 'Health Detection';
     if (activeTab === 'topology') return 'Topology';
     return t('dashboard');
   }, [activeTab, automationPage, configPage, inventorySubPage, language, t]);
@@ -2001,9 +2054,21 @@ const App: React.FC = () => {
       uptime: typeof raw?.uptime === 'string' ? raw.uptime : '',
       connection_method: raw?.connection_method === 'netconf' ? 'netconf' : 'ssh',
       config_history: safeJsonArray(raw?.config_history),
-      interface_data: Array.isArray(raw?.interface_data) ? raw.interface_data : [],
-      cpu_history: Array.isArray(raw?.cpu_history) ? raw.cpu_history : [],
-      memory_history: Array.isArray(raw?.memory_history) ? raw.memory_history : [],
+      interface_data: safeJsonArray(raw?.interface_data),
+      cpu_history: safeJsonArray(raw?.cpu_history),
+      memory_history: safeJsonArray(raw?.memory_history),
+      health_status: ['healthy', 'warning', 'critical', 'unknown'].includes(String(raw?.health_status)) ? raw.health_status : 'unknown',
+      health_score: typeof raw?.health_score === 'number' ? raw.health_score : Number(raw?.health_score || 0),
+      health_summary: typeof raw?.health_summary === 'string' ? raw.health_summary : '',
+      health_reasons: Array.isArray(raw?.health_reasons) ? raw.health_reasons : [],
+      open_alert_count: typeof raw?.open_alert_count === 'number' ? raw.open_alert_count : Number(raw?.open_alert_count || 0),
+      critical_open_alerts: typeof raw?.critical_open_alerts === 'number' ? raw.critical_open_alerts : Number(raw?.critical_open_alerts || 0),
+      major_open_alerts: typeof raw?.major_open_alerts === 'number' ? raw.major_open_alerts : Number(raw?.major_open_alerts || 0),
+      warning_open_alerts: typeof raw?.warning_open_alerts === 'number' ? raw.warning_open_alerts : Number(raw?.warning_open_alerts || 0),
+      interface_down_count: typeof raw?.interface_down_count === 'number' ? raw.interface_down_count : Number(raw?.interface_down_count || 0),
+      interface_flap_count: typeof raw?.interface_flap_count === 'number' ? raw.interface_flap_count : Number(raw?.interface_flap_count || 0),
+      high_util_interface_count: typeof raw?.high_util_interface_count === 'number' ? raw.high_util_interface_count : Number(raw?.high_util_interface_count || 0),
+      interface_error_count: typeof raw?.interface_error_count === 'number' ? raw.interface_error_count : Number(raw?.interface_error_count || 0),
     } as Device;
   };
 
@@ -2207,10 +2272,11 @@ const App: React.FC = () => {
   const [monitorAlertsPage, setMonitorAlertsPage] = useState(1);
   const [monitorAlertsPageSize] = useState(10);
   const [monitorAlertsSeverity, setMonitorAlertsSeverity] = useState('all');
+  const [monitorAlertsPhase, setMonitorAlertsPhase] = useState('all');
   const [monitorLoading, setMonitorLoading] = useState(false);
   const [monitorPageVisible, setMonitorPageVisible] = useState(() => typeof document === 'undefined' ? true : document.visibilityState === 'visible');
   const [monitorDashboardSiteFilter, setMonitorDashboardSiteFilter] = useState('all');
-  const [monitorDashboardAlertFilter, setMonitorDashboardAlertFilter] = useState<'all' | 'critical' | 'major'>('all');
+  const [monitorDashboardAlertFilter, setMonitorDashboardAlertFilter] = useState<'all' | 'critical' | 'major' | 'warning'>('all');
   const monitorRequestEpochRef = React.useRef(0);
 
   const isAbortError = (error: unknown) => {
@@ -2264,10 +2330,10 @@ const App: React.FC = () => {
         if (cancelled) return;
 
         if (Array.isArray(data)) {
-          setInventoryRows(data);
+          setInventoryRows(data.map((item: any) => normalizeDeviceRecord(item)));
           setInventoryTotal(data.length);
         } else {
-          setInventoryRows(Array.isArray(data.items) ? data.items : []);
+          setInventoryRows(Array.isArray(data.items) ? data.items.map((item: any) => normalizeDeviceRecord(item)) : []);
           setInventoryTotal(typeof data.total === 'number' ? data.total : 0);
         }
       } catch {
@@ -2341,6 +2407,7 @@ const App: React.FC = () => {
         page: String(monitorAlertsPage),
         page_size: String(monitorAlertsPageSize),
         severity: monitorAlertsSeverity,
+        phase: monitorAlertsPhase,
       });
       if (monitorSelectedDevice?.id) params.set('device_id', monitorSelectedDevice.id);
       const resp = await fetch(`/api/monitoring/alerts?${params.toString()}`, { signal });
@@ -2353,7 +2420,7 @@ const App: React.FC = () => {
       if (isAbortError(error)) return;
       // ignore transient errors
     }
-  }, [monitorAlertsPage, monitorAlertsPageSize, monitorAlertsSeverity, monitorSelectedDevice?.id]);
+  }, [monitorAlertsPage, monitorAlertsPageSize, monitorAlertsSeverity, monitorAlertsPhase, monitorSelectedDevice?.id]);
 
   const fetchMonitoringRealtime = useCallback(async (deviceId: string, signal?: AbortSignal) => {
     const reqEpoch = monitorRequestEpochRef.current;
@@ -2386,7 +2453,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     monitorRequestEpochRef.current += 1;
-    if (activeTab === 'monitoring') return;
+    if (activeTab === 'monitoring' || activeTab === 'health') return;
     setMonitorSearch('');
     setMonitorSearchResults([]);
     setMonitorSearching(false);
@@ -2407,6 +2474,7 @@ const App: React.FC = () => {
     setMonitorAlertTotal(0);
     setMonitorAlertsPage(1);
     setMonitorAlertsSeverity('all');
+    setMonitorAlertsPhase('all');
     setMonitorLoading(false);
     setMonitorDashboardSiteFilter('all');
     setMonitorDashboardAlertFilter('all');
@@ -2441,7 +2509,7 @@ const App: React.FC = () => {
   }, [isAuthenticated, fetchHostResources, monitorPageVisible]);
 
   useEffect(() => {
-    if (!isAuthenticated || activeTab !== 'monitoring') return;
+    if (!isAuthenticated || !['monitoring', 'health'].includes(activeTab)) return;
     let currentController: AbortController | null = null;
     const runOverview = (forceRefresh = false) => {
       if (currentController) currentController.abort();
@@ -2481,6 +2549,11 @@ const App: React.FC = () => {
     return `${Math.round(value)}%`;
   };
 
+  const formatCompactResourcePercent = (value: number | null | undefined) => {
+    if (value == null || !Number.isFinite(value)) return '--';
+    return String(Math.round(value));
+  };
+
   const hostResourceTone = hostResources?.status === 'critical'
     ? 'bg-red-500/15 text-red-200 border-red-400/25'
     : hostResources?.status === 'degraded'
@@ -2493,7 +2566,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     setMonitorAlertsPage(1);
-  }, [monitorAlertsSeverity, monitorSelectedDevice?.id]);
+  }, [monitorAlertsSeverity, monitorAlertsPhase, monitorSelectedDevice?.id]);
 
   useEffect(() => {
     if (!isAuthenticated || activeTab !== 'monitoring') return;
@@ -2853,6 +2926,10 @@ const App: React.FC = () => {
   const [automationSearch, setAutomationSearch] = useState('');
   const [automationPlatformFilter, setAutomationPlatformFilter] = useState('all');
   const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [connectionTestDevice, setConnectionTestDevice] = useState<Device | null>(null);
+  const [connectionTestMode, setConnectionTestMode] = useState<'quick' | 'deep'>('quick');
+  const [connectionTestingDeviceId, setConnectionTestingDeviceId] = useState<string | null>(null);
+  const [deviceConnectionChecks, setDeviceConnectionChecks] = useState<Record<string, DeviceConnectionCheckSummary>>({});
   // Interface monitoring page state
   const [intfSearch, setIntfSearch] = useState('');
   const [intfDevicePage, setIntfDevicePage] = useState(1);
@@ -2881,6 +2958,11 @@ const App: React.FC = () => {
   const [remediatingDevice, setRemediatingDevice] = useState<Device | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [viewingDevice, setViewingDevice] = useState<Device | null>(null);
+  const [viewingDeviceAlerts, setViewingDeviceAlerts] = useState<DeviceHealthAlertItem[]>([]);
+  const [deviceDetailLoading, setDeviceDetailLoading] = useState(false);
+  const [deviceTrendRangeHours, setDeviceTrendRangeHours] = useState(24);
+  const [deviceHealthTrend, setDeviceHealthTrend] = useState<DeviceHealthTrendResponse | null>(null);
+  const [deviceHealthTrendLoading, setDeviceHealthTrendLoading] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
@@ -2937,8 +3019,78 @@ const App: React.FC = () => {
 
   const handleShowDetails = (device: Device) => {
     setViewingDevice(device);
+    setViewingDeviceAlerts([]);
+    setDeviceTrendRangeHours(24);
+    setDeviceHealthTrend(null);
     setShowDetailsModal(true);
+    setDeviceDetailLoading(true);
+
+    fetch(`/api/device-health/device/${device.id}`)
+      .then(async (resp) => {
+        if (!resp.ok) throw new Error('Failed to load device health detail');
+        const data = await resp.json() as DeviceHealthDetailResponse;
+        setViewingDevice(normalizeDeviceRecord(data.device));
+        setViewingDeviceAlerts(Array.isArray(data.recent_open_alerts) ? data.recent_open_alerts : []);
+      })
+      .catch(() => {
+        showToast(language === 'zh' ? '无法加载完整健康详情，已显示当前设备快照。' : 'Unable to load full health details, showing the current device snapshot.', 'info');
+      })
+      .finally(() => setDeviceDetailLoading(false));
   };
+
+  useEffect(() => {
+    if (!showDetailsModal || !viewingDevice?.id) return;
+
+    let cancelled = false;
+    const loadDeviceTrend = async () => {
+      setDeviceHealthTrendLoading(true);
+      try {
+        const resp = await fetch(`/api/device-health/device/${viewingDevice.id}/trend?range_hours=${deviceTrendRangeHours}`);
+        if (!resp.ok) throw new Error('Failed to load device trend');
+        const data = await resp.json() as DeviceHealthTrendResponse;
+        if (!cancelled) setDeviceHealthTrend(data);
+      } catch {
+        if (!cancelled) setDeviceHealthTrend(null);
+      } finally {
+        if (!cancelled) setDeviceHealthTrendLoading(false);
+      }
+    };
+
+    loadDeviceTrend();
+    return () => {
+      cancelled = true;
+    };
+  }, [deviceTrendRangeHours, showDetailsModal, viewingDevice?.id]);
+
+  const deviceTrendInsights = useMemo(() => {
+    const series = deviceHealthTrend?.series || [];
+    if (series.length === 0) {
+      return {
+        latest: null,
+        previous: null,
+        scoreDelta: 0,
+        alertDelta: 0,
+        addedReasons: [] as string[],
+        removedReasons: [] as string[],
+      };
+    }
+
+    const latest = series[series.length - 1];
+    const previous = series.length > 1 ? series[series.length - 2] : null;
+    const latestReasons = Array.isArray(latest.health_reasons) ? latest.health_reasons : [];
+    const previousReasons = previous && Array.isArray(previous.health_reasons) ? previous.health_reasons : [];
+
+    return {
+      latest,
+      previous,
+      scoreDelta: latest && previous ? Number(latest.health_score || 0) - Number(previous.health_score || 0) : 0,
+      alertDelta: latest && previous ? Number(latest.open_alert_count || 0) - Number(previous.open_alert_count || 0) : 0,
+      addedReasons: latestReasons.filter((reason) => !previousReasons.includes(reason)),
+      removedReasons: previousReasons.filter((reason) => !latestReasons.includes(reason)),
+    };
+  }, [deviceHealthTrend]);
+
+  const viewingDeviceConnectionSummary = viewingDevice?.id ? deviceConnectionChecks[viewingDevice.id] : null;
 
   const handleRemediate = (device: Device) => {
     setRemediatingDevice(device);
@@ -3238,12 +3390,15 @@ const App: React.FC = () => {
   };
 
   const [showTestResult, setShowTestResult] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string; output?: string; errorCode?: string } | null>(null);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string; output?: string; errorCode?: string; checkMode?: string; stages?: Array<{ stage: string; ok: boolean; summary: string; detail: string; latency_ms?: number | null }> } | null>(null);
 
-  const handleTestConnection = async (deviceToTest: Device | null = selectedDevice) => {
+  const handleTestConnection = async (deviceToTest: Device | null = selectedDevice, mode: 'quick' | 'deep' = 'quick') => {
     if (!deviceToTest) return;
     setIsTestingConnection(true);
     setTestResult(null);
+    setConnectionTestDevice(deviceToTest);
+    setConnectionTestMode(mode);
+    setConnectionTestingDeviceId(deviceToTest.id);
     setShowTestResult(true);
     try {
       const response = await fetch('/api/devices/connect', {
@@ -3255,24 +3410,51 @@ const App: React.FC = () => {
           username: deviceToTest.username,
           password: deviceToTest.password,
           method: deviceToTest.connection_method,
-          platform: deviceToTest.platform
+          platform: deviceToTest.platform,
+          check_mode: mode,
         })
       });
       const data = await response.json();
       if (response.ok) {
-        setTestResult({ success: true, message: data.message, output: data.output });
+        const stages = Array.isArray(data.stages) ? data.stages : [];
+        const summary: DeviceConnectionCheckSummary = {
+          status: buildConnectionCheckStatus(true, mode, undefined, stages),
+          mode,
+          checked_at: new Date().toISOString(),
+        };
+        setDeviceConnectionChecks((prev) => ({ ...prev, [deviceToTest.id]: summary }));
+        setTestResult({ success: true, message: data.message, output: data.output, checkMode: data.check_mode, stages });
       } else {
+        const stages = Array.isArray(data.stages) ? data.stages : [];
+        const summary: DeviceConnectionCheckSummary = {
+          status: buildConnectionCheckStatus(false, mode, data.error_code, stages),
+          mode,
+          checked_at: new Date().toISOString(),
+          error_code: data.error_code,
+        };
+        setDeviceConnectionChecks((prev) => ({ ...prev, [deviceToTest.id]: summary }));
         setTestResult({
           success: false,
           message: buildConnectionTestMessage(data.detail || data.error, data.error_code),
           output: data.output,
           errorCode: data.error_code,
+          checkMode: data.check_mode,
+          stages,
         });
       }
     } catch (error: any) {
+      setDeviceConnectionChecks((prev) => ({
+        ...prev,
+        [deviceToTest.id]: {
+          status: 'fail',
+          mode,
+          checked_at: new Date().toISOString(),
+        },
+      }));
       setTestResult({ success: false, message: error.message || 'Network error' });
     } finally {
       setIsTestingConnection(false);
+      setConnectionTestingDeviceId(null);
     }
   };
 
@@ -3442,12 +3624,12 @@ const App: React.FC = () => {
     return (
       <div className={`min-h-screen flex items-center justify-center p-4 font-sans relative overflow-hidden ${isDark ? 'bg-[#050D1B]' : 'bg-[#EAF3FA]'}`}>
         {/* Ambient glow orbs */}
-        <div className="absolute top-[-15%] right-[-8%] w-[55vw] h-[55vw] rounded-full pointer-events-none" style={{background:'radial-gradient(circle,rgba(0,188,235,0.13) 0%,transparent 65%)'}} />
-        <div className="absolute bottom-[-20%] left-[-12%] w-[50vw] h-[50vw] rounded-full pointer-events-none" style={{background:'radial-gradient(circle,rgba(0,80,115,0.22) 0%,transparent 65%)'}} />
-        <div className="absolute top-[40%] left-[20%] w-[30vw] h-[30vw] rounded-full pointer-events-none" style={{background:'radial-gradient(circle,rgba(0,40,90,0.18) 0%,transparent 70%)'}} />
+        <div className="absolute top-[-15%] right-[-8%] h-[55vw] w-[55vw] rounded-full bg-[radial-gradient(circle,rgba(0,188,235,0.13)_0%,transparent_65%)] pointer-events-none" />
+        <div className="absolute bottom-[-20%] left-[-12%] h-[50vw] w-[50vw] rounded-full bg-[radial-gradient(circle,rgba(0,80,115,0.22)_0%,transparent_65%)] pointer-events-none" />
+        <div className="absolute top-[40%] left-[20%] h-[30vw] w-[30vw] rounded-full bg-[radial-gradient(circle,rgba(0,40,90,0.18)_0%,transparent_70%)] pointer-events-none" />
 
         {/* Dot-grid background */}
-        <div className="absolute inset-0 opacity-[0.055] pointer-events-none" style={{backgroundImage:'radial-gradient(rgba(0,188,235,0.9) 1px,transparent 1px)',backgroundSize:'36px 36px'}} />
+        <div className="absolute inset-0 bg-[radial-gradient(rgba(0,188,235,0.9)_1px,transparent_1px)] bg-[length:36px_36px] opacity-[0.055] pointer-events-none" />
 
         {/* Animated network topology decoration */}
         <svg className="absolute inset-0 w-full h-full opacity-[0.07] pointer-events-none" xmlns="http://www.w3.org/2000/svg">
@@ -3458,6 +3640,15 @@ const App: React.FC = () => {
             .node-pulse { animation: nodePulse 3s ease-in-out infinite; }
             .ring-pulse { animation: ringPulse 4s ease-in-out infinite; }
             .line-flow { stroke-dasharray: 8 12; animation: dashFlow 2s linear infinite; }
+            .delay-0 { animation-delay: 0s; }
+            .delay-05 { animation-delay: 0.5s; }
+            .delay-08 { animation-delay: 0.8s; }
+            .delay-1 { animation-delay: 1s; }
+            .delay-12 { animation-delay: 1.2s; }
+            .delay-15 { animation-delay: 1.5s; }
+            .delay-18 { animation-delay: 1.8s; }
+            .delay-2 { animation-delay: 2s; }
+            .delay-25 { animation-delay: 2.5s; }
           `}</style>
           <line x1="10%" y1="20%" x2="35%" y2="45%" stroke="#00bceb" strokeWidth="0.8" className="line-flow" />
           <line x1="35%" y1="45%" x2="65%" y2="30%" stroke="#00bceb" strokeWidth="0.8" className="line-flow" />
@@ -3469,19 +3660,19 @@ const App: React.FC = () => {
           <line x1="20%" y1="85%" x2="35%" y2="45%" stroke="#005073" strokeWidth="0.4" className="line-flow" />
           <line x1="88%" y1="15%" x2="65%" y2="30%" stroke="#00bceb" strokeWidth="0.5" className="line-flow" />
           <line x1="75%" y1="80%" x2="92%" y2="68%" stroke="#005073" strokeWidth="0.4" className="line-flow" />
-          <circle cx="10%" cy="20%" r="4" fill="#00bceb" className="node-pulse" style={{animationDelay:'0s'}} />
-          <circle cx="35%" cy="45%" r="5" fill="#00bceb" className="node-pulse" style={{animationDelay:'0.5s'}} />
-          <circle cx="65%" cy="30%" r="4" fill="#00bceb" className="node-pulse" style={{animationDelay:'1s'}} />
-          <circle cx="88%" cy="55%" r="3" fill="#005073" className="node-pulse" style={{animationDelay:'1.5s'}} />
-          <circle cx="50%" cy="70%" r="4" fill="#005073" className="node-pulse" style={{animationDelay:'2s'}} />
-          <circle cx="75%" cy="80%" r="3" fill="#00bceb" className="node-pulse" style={{animationDelay:'0.8s'}} />
-          <circle cx="20%" cy="85%" r="3" fill="#005073" className="node-pulse" style={{animationDelay:'1.2s'}} />
-          <circle cx="88%" cy="15%" r="3" fill="#00bceb" className="node-pulse" style={{animationDelay:'2.5s'}} />
-          <circle cx="92%" cy="68%" r="2.5" fill="#005073" className="node-pulse" style={{animationDelay:'1.8s'}} />
-          <circle cx="10%" cy="20%" r="10" fill="none" stroke="#00bceb" strokeWidth="0.5" className="ring-pulse" style={{animationDelay:'0s'}} />
-          <circle cx="35%" cy="45%" r="12" fill="none" stroke="#00bceb" strokeWidth="0.5" className="ring-pulse" style={{animationDelay:'1s'}} />
-          <circle cx="65%" cy="30%" r="9" fill="none" stroke="#00bceb" strokeWidth="0.5" className="ring-pulse" style={{animationDelay:'2s'}} />
-          <circle cx="50%" cy="70%" r="11" fill="none" stroke="#005073" strokeWidth="0.5" className="ring-pulse" style={{animationDelay:'1.5s'}} />
+          <circle cx="10%" cy="20%" r="4" fill="#00bceb" className="node-pulse delay-0" />
+          <circle cx="35%" cy="45%" r="5" fill="#00bceb" className="node-pulse delay-05" />
+          <circle cx="65%" cy="30%" r="4" fill="#00bceb" className="node-pulse delay-1" />
+          <circle cx="88%" cy="55%" r="3" fill="#005073" className="node-pulse delay-15" />
+          <circle cx="50%" cy="70%" r="4" fill="#005073" className="node-pulse delay-2" />
+          <circle cx="75%" cy="80%" r="3" fill="#00bceb" className="node-pulse delay-08" />
+          <circle cx="20%" cy="85%" r="3" fill="#005073" className="node-pulse delay-12" />
+          <circle cx="88%" cy="15%" r="3" fill="#00bceb" className="node-pulse delay-25" />
+          <circle cx="92%" cy="68%" r="2.5" fill="#005073" className="node-pulse delay-18" />
+          <circle cx="10%" cy="20%" r="10" fill="none" stroke="#00bceb" strokeWidth="0.5" className="ring-pulse delay-0" />
+          <circle cx="35%" cy="45%" r="12" fill="none" stroke="#00bceb" strokeWidth="0.5" className="ring-pulse delay-1" />
+          <circle cx="65%" cy="30%" r="9" fill="none" stroke="#00bceb" strokeWidth="0.5" className="ring-pulse delay-2" />
+          <circle cx="50%" cy="70%" r="11" fill="none" stroke="#005073" strokeWidth="0.5" className="ring-pulse delay-15" />
         </svg>
 
         <motion.div
@@ -3492,7 +3683,7 @@ const App: React.FC = () => {
         >
           {/* Brand header — above the card */}
           <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-[72px] h-[72px] rounded-2xl mb-5" style={{background:'linear-gradient(135deg,#003d57 0%,#00bceb 100%)',boxShadow:'0 0 48px rgba(0,188,235,0.35),0 0 0 1px rgba(0,188,235,0.2)'}}>
+            <div className="mb-5 inline-flex h-[72px] w-[72px] items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#003d57_0%,#00bceb_100%)] shadow-[0_0_48px_rgba(0,188,235,0.35),0_0_0_1px_rgba(0,188,235,0.2)]">
               <Activity size={36} className="text-white" />
             </div>
             <h1 className={`text-[28px] font-black tracking-tight leading-none ${isDark ? 'text-white' : 'text-[#0B2A3C]'}`}>NetPilot</h1>
@@ -3500,16 +3691,12 @@ const App: React.FC = () => {
           </div>
 
           {/* Glass card */}
-          <div className="rounded-3xl overflow-hidden" style={{
-            background: isDark ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.82)',
-            backdropFilter:'blur(24px)',
-            border: isDark ? '1px solid rgba(0,188,235,0.18)' : '1px solid rgba(0,80,115,0.18)',
-            boxShadow: isDark
-              ? '0 0 80px rgba(0,188,235,0.07),0 24px 48px rgba(0,0,0,0.5)'
-              : '0 26px 48px rgba(0,45,85,0.22), 0 0 0 1px rgba(255,255,255,0.45)'
-          }}>
+          <div className={`overflow-hidden rounded-3xl backdrop-blur-2xl ${isDark
+            ? 'border border-[rgba(0,188,235,0.18)] bg-white/[0.035] shadow-[0_0_80px_rgba(0,188,235,0.07),0_24px_48px_rgba(0,0,0,0.5)]'
+            : 'border border-[rgba(0,80,115,0.18)] bg-white/[0.82] shadow-[0_26px_48px_rgba(0,45,85,0.22),0_0_0_1px_rgba(255,255,255,0.45)]'
+          }`}>
             {/* Top glow line */}
-            <div className="h-px" style={{background:'linear-gradient(90deg,transparent 0%,rgba(0,188,235,0.7) 50%,transparent 100%)'}} />
+            <div className="h-px bg-[linear-gradient(90deg,transparent_0%,rgba(0,188,235,0.7)_50%,transparent_100%)]" />
 
             <div className="p-10">
               <div className="text-center mb-8">
@@ -3525,7 +3712,7 @@ const App: React.FC = () => {
               >
                 {/* Username */}
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold uppercase tracking-[0.18em] ml-0.5" style={{color: isDark ? 'rgba(0,188,235,0.72)' : 'rgba(0,114,152,0.88)'}}>{t('username')}</label>
+                  <label className={`ml-0.5 text-[10px] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-[#00bceb]/72' : 'text-[rgba(0,114,152,0.88)]'}`}>{t('username')}</label>
                   <div className="relative">
                     <div className={`absolute left-4 top-1/2 -translate-y-1/2 ${isDark ? 'text-white/20' : 'text-[#0A4E70]/45'}`}>
                       <User size={16} />
@@ -3536,26 +3723,14 @@ const App: React.FC = () => {
                       autoFocus
                       value={loginForm.username}
                       onChange={(e) => { setLoginForm({ ...loginForm, username: e.target.value }); setLoginError(null); }}
-                      className={`w-full pl-11 pr-4 py-3.5 rounded-xl text-sm outline-none transition-all ${isDark ? 'text-white placeholder-white/20' : 'text-[#0B2A3C] placeholder-[#49728A]/45'}`}
-                      style={{
-                        background: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.74)',
-                        border: loginError ? '1.5px solid rgba(239,68,68,0.7)' : (isDark ? '1.5px solid rgba(255,255,255,0.08)' : '1.5px solid rgba(0,80,115,0.22)')
-                      }}
-                      onFocus={e => {
-                        e.currentTarget.style.border = isDark ? '1.5px solid rgba(0,188,235,0.6)' : '1.5px solid rgba(0,166,212,0.88)';
-                        e.currentTarget.style.background = isDark ? 'rgba(0,188,235,0.06)' : 'rgba(255,255,255,0.92)';
-                      }}
-                      onBlur={e => {
-                        e.currentTarget.style.border = loginError ? '1.5px solid rgba(239,68,68,0.7)' : (isDark ? '1.5px solid rgba(255,255,255,0.08)' : '1.5px solid rgba(0,80,115,0.22)');
-                        e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.74)';
-                      }}
+                      className={`w-full rounded-xl border-[1.5px] py-3.5 pl-11 pr-4 text-sm outline-none transition-all ${isDark ? 'text-white placeholder-white/20' : 'text-[#0B2A3C] placeholder-[#49728A]/45'} ${loginError ? 'border-red-500/70' : isDark ? 'border-white/8 bg-white/5 focus:border-[#00bceb]/60 focus:bg-[#00bceb]/6' : 'border-[rgba(0,80,115,0.22)] bg-white/[0.74] focus:border-[rgba(0,166,212,0.88)] focus:bg-white/[0.92]'}`}
                     />
                   </div>
                 </div>
 
                 {/* Password */}
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold uppercase tracking-[0.18em] ml-0.5" style={{color: isDark ? 'rgba(0,188,235,0.72)' : 'rgba(0,114,152,0.88)'}}>{t('password')}</label>
+                  <label className={`ml-0.5 text-[10px] font-bold uppercase tracking-[0.18em] ${isDark ? 'text-[#00bceb]/72' : 'text-[rgba(0,114,152,0.88)]'}`}>{t('password')}</label>
                   <div className="relative">
                     <div className={`absolute left-4 top-1/2 -translate-y-1/2 ${isDark ? 'text-white/20' : 'text-[#0A4E70]/45'}`}>
                       <ShieldCheck size={16} />
@@ -3565,19 +3740,7 @@ const App: React.FC = () => {
                       placeholder="••••••••"
                       value={loginForm.password}
                       onChange={(e) => { setLoginForm({ ...loginForm, password: e.target.value }); setLoginError(null); }}
-                      className={`w-full pl-11 pr-12 py-3.5 rounded-xl text-sm outline-none transition-all ${isDark ? 'text-white placeholder-white/20' : 'text-[#0B2A3C] placeholder-[#49728A]/45'}`}
-                      style={{
-                        background: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.74)',
-                        border: loginError ? '1.5px solid rgba(239,68,68,0.7)' : (isDark ? '1.5px solid rgba(255,255,255,0.08)' : '1.5px solid rgba(0,80,115,0.22)')
-                      }}
-                      onFocus={e => {
-                        e.currentTarget.style.border = isDark ? '1.5px solid rgba(0,188,235,0.6)' : '1.5px solid rgba(0,166,212,0.88)';
-                        e.currentTarget.style.background = isDark ? 'rgba(0,188,235,0.06)' : 'rgba(255,255,255,0.92)';
-                      }}
-                      onBlur={e => {
-                        e.currentTarget.style.border = loginError ? '1.5px solid rgba(239,68,68,0.7)' : (isDark ? '1.5px solid rgba(255,255,255,0.08)' : '1.5px solid rgba(0,80,115,0.22)');
-                        e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.74)';
-                      }}
+                      className={`w-full rounded-xl border-[1.5px] py-3.5 pl-11 pr-12 text-sm outline-none transition-all ${isDark ? 'text-white placeholder-white/20' : 'text-[#0B2A3C] placeholder-[#49728A]/45'} ${loginError ? 'border-red-500/70' : isDark ? 'border-white/8 bg-white/5 focus:border-[#00bceb]/60 focus:bg-[#00bceb]/6' : 'border-[rgba(0,80,115,0.22)] bg-white/[0.74] focus:border-[rgba(0,166,212,0.88)] focus:bg-white/[0.92]'}`}
                     />
                     <button type="button" onClick={() => setShowLoginPwd(v => !v)} className={`absolute right-4 top-1/2 -translate-y-1/2 transition-colors ${isDark ? 'text-white/25 hover:text-white/60' : 'text-[#0A4E70]/45 hover:text-[#0A4E70]'}`}>
                       {showLoginPwd ? <EyeOff size={15} /> : <Eye size={15} />}
@@ -3611,8 +3774,7 @@ const App: React.FC = () => {
                   <button
                     onClick={handleLogin}
                     disabled={isAuthenticating}
-                    className="w-full py-3.5 rounded-xl font-bold text-xs uppercase tracking-[0.18em] text-white transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                    style={{background: loginError ? 'rgba(239,68,68,0.8)' : 'linear-gradient(135deg,#00527a 0%,#00bceb 100%)',boxShadow: loginError ? '0 0 24px rgba(239,68,68,0.3)' : '0 0 32px rgba(0,188,235,0.25),0 4px 16px rgba(0,0,0,0.4)'}}
+                    className={`flex w-full items-center justify-center gap-2 rounded-xl py-3.5 text-xs font-bold uppercase tracking-[0.18em] text-white transition-all disabled:opacity-50 ${loginError ? 'bg-red-500/80 shadow-[0_0_24px_rgba(239,68,68,0.3)]' : 'bg-[linear-gradient(135deg,#00527a_0%,#00bceb_100%)] shadow-[0_0_32px_rgba(0,188,235,0.25),0_4px_16px_rgba(0,0,0,0.4)]'}`}
                   >
                     {isAuthenticating ? (
                       <><RotateCcw className="animate-spin" size={15} />{t('authenticating')}</>
@@ -3624,22 +3786,22 @@ const App: React.FC = () => {
               </motion.div>
 
               {/* Footer status bar */}
-              <div className="mt-8 pt-6" style={{borderTop: isDark ? '1px solid rgba(255,255,255,0.06)' : '1px solid rgba(0,80,115,0.14)'}}>
+              <div className={`mt-8 pt-6 ${isDark ? 'border-t border-white/6' : 'border-t border-[rgba(0,80,115,0.14)]'}`}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" style={{boxShadow:'0 0 6px rgba(52,211,153,0.8)'}} />
-                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{color: isDark ? 'rgba(255,255,255,0.25)' : 'rgba(9,47,69,0.52)'}}>{t('systemOnline')}</span>
+                    <div className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]" />
+                    <span className={`text-[10px] font-semibold uppercase tracking-wider ${isDark ? 'text-white/25' : 'text-[rgba(9,47,69,0.52)]'}`}>{t('systemOnline')}</span>
                   </div>
-                  <span className="text-[10px] font-mono" style={{color: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(9,47,69,0.4)'}}>NOC v2.0</span>
+                  <span className={`text-[10px] font-mono ${isDark ? 'text-white/15' : 'text-[rgba(9,47,69,0.4)]'}`}>NOC v2.0</span>
                 </div>
-                <p className="mt-2 text-[10px] text-center" style={{color: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(9,47,69,0.46)'}}>
+                <p className={`mt-2 text-center text-[10px] ${isDark ? 'text-white/20' : 'text-[rgba(9,47,69,0.46)]'}`}>
                   {t('copyright')} {new Date().getFullYear()} {t('allRightsReserved')}
                 </p>
               </div>
             </div>
 
             {/* Bottom glow line */}
-            <div className="h-px" style={{background:'linear-gradient(90deg,transparent 0%,rgba(0,80,115,0.5) 50%,transparent 100%)'}} />
+            <div className="h-px bg-[linear-gradient(90deg,transparent_0%,rgba(0,80,115,0.5)_50%,transparent_100%)]" />
           </div>
         </motion.div>
       </div>
@@ -4179,16 +4341,18 @@ const App: React.FC = () => {
 
   // CSS constants and badge helpers imported from ./components/shared
 
+  const lazyPanelFallback = (
+    <div className="flex min-h-[240px] items-center justify-center rounded-2xl border border-black/5 bg-white/70 text-sm text-black/40">
+      {language === 'zh' ? '加载中...' : 'Loading...'}
+    </div>
+  );
+
   return (
     <AppRuntimeBoundary language={language}>
       <div className="app-shell flex h-screen text-[#141414] font-sans overflow-hidden">
       {/* Mobile sidebar backdrop */}
       {isMobile && !sidebarCollapsed && (
-        <div
-          className="fixed inset-0 bg-black/50 z-25 md:hidden"
-          style={{ zIndex: 25 }}
-          onClick={() => setSidebarCollapsed(true)}
-        />
+        <div className="fixed inset-0 z-[25] bg-black/50 md:hidden" onClick={() => setSidebarCollapsed(true)} />
       )}
       {/* Sidebar */}
       <aside className={`theme-sidebar flex flex-col shadow-2xl transition-all duration-300 ease-in-out ${
@@ -4212,10 +4376,11 @@ const App: React.FC = () => {
           </button>
         </div>
 
-        <nav className="sidebar-nav-scroll flex-1 p-4 space-y-0.5 mt-2 overflow-y-auto">
+        <nav className="sidebar-nav-scroll flex flex-col flex-1 p-4 space-y-0.5 mt-2 overflow-y-auto">
           {[
             { id: 'dashboard', icon: LayoutDashboard, label: t('dashboard') },
             { id: 'monitoring', icon: TrendingUp, label: language === 'zh' ? '监控中心' : 'Monitoring' },
+            { id: 'health', icon: Activity, label: language === 'zh' ? '健康检测' : 'Health Detection' },
             { id: 'topology', icon: Globe, label: 'Topology' },
           ].map(item => (
             <button
@@ -4225,23 +4390,23 @@ const App: React.FC = () => {
                 activeTab === item.id
                   ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
                   : 'text-white/60 hover:bg-white/5 hover:text-white'
-              }`}
+              } ${item.id === 'dashboard' ? 'order-10' : item.id === 'monitoring' ? 'order-20' : item.id === 'health' ? 'order-25' : 'order-40'}`}
             >
-              <item.icon size={17} />
-              <span className="flex-1 text-left">{item.label}</span>
+              <item.icon size={17} className="shrink-0" />
+              <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{item.label}</span>
               {item.id === 'monitoring' && (
-                <span className={`shrink-0 rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em] ${hostResourceTone}`} title={hostResourceSummary}>
+                <span className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em] ${hostResourceTone}`} title={hostResourceSummary}>
                   {hostResources
                     ? (language === 'zh'
-                      ? `主机 ${formatResourcePercent(hostResources.cpu_percent)} / ${formatResourcePercent(hostResources.memory_percent)}`
-                      : `Host ${formatResourcePercent(hostResources.cpu_percent)} / ${formatResourcePercent(hostResources.memory_percent)}`)
-                    : (language === 'zh' ? '主机 --' : 'Host --')}
+                      ? `主机 ${formatCompactResourcePercent(hostResources.cpu_percent)}/${formatCompactResourcePercent(hostResources.memory_percent)}`
+                      : `H ${formatCompactResourcePercent(hostResources.cpu_percent)}/${formatCompactResourcePercent(hostResources.memory_percent)}`)
+                    : (language === 'zh' ? '主机 --/--' : 'H --/--')}
                 </span>
               )}
             </button>
           ))}
 
-          <div className="pt-2">
+          <div className="pt-2 order-30">
             <button
               onClick={() => {
                 const next = !alertGroupOpen;
@@ -4297,7 +4462,7 @@ const App: React.FC = () => {
           </div>
 
           {/* ── Inventory collapsible group ── */}
-          <div>
+          <div className="order-50">
             <button
               onClick={() => {
                 const next = !inventoryGroupOpen;
@@ -4350,7 +4515,7 @@ const App: React.FC = () => {
           </div>
 
           {/* ── Automation collapsible group ── */}
-          <div className="pt-2">
+          <div className="pt-2 order-70">
             <button
               onClick={() => {
                 const next = !automationGroupOpen;
@@ -4404,7 +4569,7 @@ const App: React.FC = () => {
           </div>
 
           {/* ── Config Center collapsible group ── */}
-          <div className="pt-2">
+          <div className="pt-2 order-60">
             <button
               onClick={() => {
                 const next = !configGroupOpen;
@@ -4473,7 +4638,7 @@ const App: React.FC = () => {
                 activeTab === item.id
                   ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
                   : 'text-white/60 hover:bg-white/5 hover:text-white'
-              }`}
+              } ${item.id === 'compliance' ? 'order-80' : item.id === 'history' ? 'order-90' : item.id === 'configuration' ? 'order-100' : 'order-110'}`}
             >
               <item.icon size={17} />
               {item.label}
@@ -4493,13 +4658,6 @@ const App: React.FC = () => {
                   <span className={`h-1.5 w-1.5 rounded-full ${sidebarHealthDotClass}`} />
                   {sidebarHealthLabel}
                 </span>
-                <button
-                  onClick={() => setSidebarPulseHidden(true)}
-                  title={language === 'zh' ? '隐藏面板' : 'Hide panel'}
-                  className="p-1 rounded-md text-white/25 hover:text-white/70 hover:bg-white/10 transition-all"
-                >
-                  <X size={12} />
-                </button>
               </div>
             </div>
 
@@ -4559,12 +4717,22 @@ const App: React.FC = () => {
               </button>
             </div>
 
-            <div className="px-4 py-3 border-t border-white/8 flex items-center justify-between text-[11px]">
-              <div className="flex items-center gap-2 text-white/45">
-                <Clock size={13} />
-                <span>{t('lastSyncShort')}</span>
+            <div className="px-4 py-3 border-t border-white/8 space-y-2">
+              <div className="flex items-center justify-between text-[11px]">
+                <div className="flex items-center gap-2 text-white/45">
+                  <Clock size={13} />
+                  <span>{t('lastSyncShort')}</span>
+                </div>
+                <span className="font-medium text-white/78">{sidebarLastSyncLabel}</span>
               </div>
-              <span className="font-medium text-white/78">{sidebarLastSyncLabel}</span>
+              <button
+                onClick={() => setSidebarPulseHidden(true)}
+                title={language === 'zh' ? '收起网络状态' : 'Collapse Network Pulse'}
+                className="w-full flex items-center justify-center gap-2 rounded-xl border border-white/8 px-3 py-2 text-[11px] font-medium text-white/45 transition-all hover:bg-white/5 hover:text-white/72"
+              >
+                <ChevronDown size={13} />
+                <span>{language === 'zh' ? '收起网络状态' : 'Collapse Network Pulse'}</span>
+              </button>
             </div>
           </div>
         </div>
@@ -4673,7 +4841,9 @@ const App: React.FC = () => {
                                 {item.severity === 'critical'
                                   ? (language === 'zh' ? '严重' : 'Critical')
                                   : item.severity === 'major'
-                                    ? (language === 'zh' ? '告警' : 'Major')
+                                    ? (language === 'zh' ? '主要' : 'Major')
+                                    : item.severity === 'warning'
+                                      ? (language === 'zh' ? '次要' : 'Minor')
                                     : item.severity === 'high'
                                       ? (language === 'zh' ? '高' : 'High')
                                       : item.severity === 'medium'
@@ -4752,6 +4922,13 @@ const App: React.FC = () => {
                   >
                     <Activity size={16} className="flex-shrink-0 opacity-70" />
                     {language === 'zh' ? '监控中心' : 'Monitoring'}
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab('health'); setShowUserMenu(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-[7px] text-[13px] transition-colors ${resolvedTheme === 'dark' ? 'text-white/80 hover:bg-white/[0.06]' : 'text-black/70 hover:bg-black/[0.03]'}`}
+                  >
+                    <ShieldCheck size={16} className="flex-shrink-0 opacity-70" />
+                    {language === 'zh' ? '健康检测' : 'Health Detection'}
                   </button>
                   <button
                     onClick={() => { setActiveTab('history'); setShowUserMenu(false); }}
@@ -4853,154 +5030,181 @@ const App: React.FC = () => {
 
         <main className="flex-1 overflow-auto p-4 pb-8 md:p-8 md:pb-16">
           {activeTab === 'dashboard' && (
-            <DashboardTab
-              devices={devices}
-              jobs={jobs}
-              scheduledTasks={scheduledTasks}
-              trendDays={trendDays}
-              setTrendDays={setTrendDays}
-              complianceTrend={complianceTrend}
-              platformData={platformData}
-              dashBannerCollapsed={dashBannerCollapsed}
-              setDashBannerCollapsed={setDashBannerCollapsed}
-              dashLastRefresh={dashLastRefresh}
-              hostResources={hostResources}
-              unreadNotificationCount={unreadNotificationCount}
-              language={language}
-              t={t}
-              setActiveTab={setActiveTab}
-              navigate={navigate}
-            />
+            <Suspense fallback={lazyPanelFallback}>
+              <DashboardTab
+                devices={devices}
+                jobs={jobs}
+                scheduledTasks={scheduledTasks}
+                trendDays={trendDays}
+                setTrendDays={setTrendDays}
+                complianceTrend={complianceTrend}
+                platformData={platformData}
+                dashBannerCollapsed={dashBannerCollapsed}
+                setDashBannerCollapsed={setDashBannerCollapsed}
+                dashLastRefresh={dashLastRefresh}
+                hostResources={hostResources}
+                unreadNotificationCount={unreadNotificationCount}
+                language={language}
+                t={t}
+                setActiveTab={setActiveTab}
+                navigate={navigate}
+              />
+            </Suspense>
           )}
 
           {activeTab === 'monitoring' && (
-            <MonitoringCenter
-              language={language}
-              monitorSearch={monitorSearch}
-              setMonitorSearch={setMonitorSearch}
-              monitorSearchResults={monitorSearchResults}
-              monitorSearching={monitorSearching}
-              monitorSelectedDevice={monitorSelectedDevice}
-              setMonitorSelectedDevice={setMonitorSelectedDevice}
-              monitorOverview={monitorOverview}
-              monitorRealtime={monitorRealtime}
-              monitorTrend={monitorTrend}
-              monitorTrendInterface={monitorTrendInterface}
-              setMonitorTrendInterface={setMonitorTrendInterface}
-              monitorTrendResolution={monitorTrendResolution}
-              setMonitorTrendResolution={setMonitorTrendResolution}
-              monitorTrendStartInput={monitorTrendStartInput}
-              setMonitorTrendStartInput={setMonitorTrendStartInput}
-              monitorTrendEndInput={monitorTrendEndInput}
-              setMonitorTrendEndInput={setMonitorTrendEndInput}
-              monitorTrendRange={monitorTrendRange}
-              setMonitorTrendRange={setMonitorTrendRange}
-              monitorTrendZoom={monitorTrendZoom}
-              setMonitorTrendZoom={setMonitorTrendZoom}
-              monitorTrendDragStart={monitorTrendDragStart}
-              setMonitorTrendDragStart={setMonitorTrendDragStart}
-              monitorTrendDragEnd={monitorTrendDragEnd}
-              setMonitorTrendDragEnd={setMonitorTrendDragEnd}
-              monitorTrendMetrics={monitorTrendMetrics}
-              setMonitorTrendMetrics={setMonitorTrendMetrics}
-              monitorTrendUiMode={monitorTrendUiMode}
-              setMonitorTrendUiMode={setMonitorTrendUiMode}
-              monitorAlerts={monitorAlerts}
-              monitorAlertTotal={monitorAlertTotal}
-              monitorAlertsPage={monitorAlertsPage}
-              setMonitorAlertsPage={setMonitorAlertsPage}
-              monitorAlertsPageSize={monitorAlertsPageSize}
-              monitorAlertsSeverity={monitorAlertsSeverity}
-              setMonitorAlertsSeverity={setMonitorAlertsSeverity}
-              monitorLoading={monitorLoading}
-              monitorPageVisible={monitorPageVisible}
-              monitorDashboardSiteFilter={monitorDashboardSiteFilter}
-              setMonitorDashboardSiteFilter={setMonitorDashboardSiteFilter}
-              monitorDashboardAlertFilter={monitorDashboardAlertFilter}
-              setMonitorDashboardAlertFilter={setMonitorDashboardAlertFilter}
-              hostResources={hostResources}
-              fetchMonitoringOverview={() => fetchMonitoringOverview(true)}
-              fetchMonitoringAlerts={fetchMonitoringAlerts}
-              fetchMonitoringRealtime={fetchMonitoringRealtime}
-              fetchHostResources={fetchHostResources}
-              setMonitorRealtime={setMonitorRealtime}
-              showToast={showToast}
-            />
+            <Suspense fallback={lazyPanelFallback}>
+              <MonitoringCenter
+                language={language}
+                monitorSearch={monitorSearch}
+                setMonitorSearch={setMonitorSearch}
+                monitorSearchResults={monitorSearchResults}
+                monitorSearching={monitorSearching}
+                monitorSelectedDevice={monitorSelectedDevice}
+                setMonitorSelectedDevice={setMonitorSelectedDevice}
+                monitorOverview={monitorOverview}
+                monitorRealtime={monitorRealtime}
+                monitorTrend={monitorTrend}
+                monitorTrendInterface={monitorTrendInterface}
+                setMonitorTrendInterface={setMonitorTrendInterface}
+                monitorTrendResolution={monitorTrendResolution}
+                setMonitorTrendResolution={setMonitorTrendResolution}
+                monitorTrendStartInput={monitorTrendStartInput}
+                setMonitorTrendStartInput={setMonitorTrendStartInput}
+                monitorTrendEndInput={monitorTrendEndInput}
+                setMonitorTrendEndInput={setMonitorTrendEndInput}
+                monitorTrendRange={monitorTrendRange}
+                setMonitorTrendRange={setMonitorTrendRange}
+                monitorTrendZoom={monitorTrendZoom}
+                setMonitorTrendZoom={setMonitorTrendZoom}
+                monitorTrendDragStart={monitorTrendDragStart}
+                setMonitorTrendDragStart={setMonitorTrendDragStart}
+                monitorTrendDragEnd={monitorTrendDragEnd}
+                setMonitorTrendDragEnd={setMonitorTrendDragEnd}
+                monitorTrendMetrics={monitorTrendMetrics}
+                setMonitorTrendMetrics={setMonitorTrendMetrics}
+                monitorTrendUiMode={monitorTrendUiMode}
+                setMonitorTrendUiMode={setMonitorTrendUiMode}
+                monitorAlerts={monitorAlerts}
+                monitorAlertTotal={monitorAlertTotal}
+                monitorAlertsPage={monitorAlertsPage}
+                setMonitorAlertsPage={setMonitorAlertsPage}
+                monitorAlertsPageSize={monitorAlertsPageSize}
+                monitorAlertsSeverity={monitorAlertsSeverity}
+                setMonitorAlertsSeverity={setMonitorAlertsSeverity}
+                monitorAlertsPhase={monitorAlertsPhase}
+                setMonitorAlertsPhase={setMonitorAlertsPhase}
+                monitorLoading={monitorLoading}
+                monitorPageVisible={monitorPageVisible}
+                monitorDashboardSiteFilter={monitorDashboardSiteFilter}
+                setMonitorDashboardSiteFilter={setMonitorDashboardSiteFilter}
+                monitorDashboardAlertFilter={monitorDashboardAlertFilter}
+                setMonitorDashboardAlertFilter={setMonitorDashboardAlertFilter}
+                hostResources={hostResources}
+                fetchMonitoringOverview={() => fetchMonitoringOverview(true)}
+                fetchMonitoringAlerts={fetchMonitoringAlerts}
+                fetchMonitoringRealtime={fetchMonitoringRealtime}
+                fetchHostResources={fetchHostResources}
+                setMonitorRealtime={setMonitorRealtime}
+                showToast={showToast}
+              />
+            </Suspense>
+          )}
+
+          {activeTab === 'health' && (
+            <Suspense fallback={lazyPanelFallback}>
+              <DeviceHealthTab
+                devices={devices}
+                overview={monitorOverview?.device_health_summary || null}
+                language={language}
+                onShowDetails={handleShowDetails}
+                onOpenMonitoring={() => setActiveTab('monitoring')}
+              />
+            </Suspense>
           )}
 
           {activeTab === 'alerts' && (
-            <AlertDeskTab
-              language={language}
-              currentUsername={currentUser.username}
-              showToast={showToast}
-              activeAlertSection="alerts"
-              onNavigateAlertSection={(section) => setActiveTab(section)}
-              onOpenMaintenanceForAlert={(alert) => {
-                const params = new URLSearchParams({
-                  open: '1',
-                  name: alert ? `${alert.hostname || alert.ip_address || 'Alert'} Maintenance` : '',
-                  target_ip: alert?.ip_address || '',
-                  title_pattern: alert?.title || '',
-                  message_pattern: alert?.interface_name || '',
-                });
-                navigate(`/maintenance?${params.toString()}`);
-              }}
-            />
+            <Suspense fallback={lazyPanelFallback}>
+              <AlertDeskTab
+                language={language}
+                currentUsername={currentUser.username}
+                showToast={showToast}
+                activeAlertSection="alerts"
+                onNavigateAlertSection={(section) => setActiveTab(section)}
+                onOpenMaintenanceForAlert={(alert) => {
+                  const params = new URLSearchParams({
+                    open: '1',
+                    name: alert ? `${alert.hostname || alert.ip_address || 'Alert'} Maintenance` : '',
+                    target_ip: alert?.ip_address || '',
+                  });
+                  navigate(`/maintenance?${params.toString()}`);
+                }}
+              />
+            </Suspense>
           )}
 
           {activeTab === 'alert-rules' && (
-            <AlertRulesTab
-              language={language}
-              currentUsername={currentUser.username}
-              showToast={showToast}
-              activeAlertSection="alert-rules"
-              onNavigateAlertSection={(section) => setActiveTab(section)}
-            />
+            <Suspense fallback={lazyPanelFallback}>
+              <AlertRulesTab
+                language={language}
+                currentUsername={currentUser.username}
+                showToast={showToast}
+                activeAlertSection="alert-rules"
+                onNavigateAlertSection={(section) => setActiveTab(section)}
+              />
+            </Suspense>
           )}
 
           {activeTab === 'maintenance' && (
-            <AlertMaintenanceTab
-              language={language}
-              currentUsername={currentUser.username}
-              showToast={showToast}
-              activeAlertSection="maintenance"
-              onNavigateAlertSection={(section) => setActiveTab(section)}
-            />
+            <Suspense fallback={lazyPanelFallback}>
+              <AlertMaintenanceTab
+                language={language}
+                currentUsername={currentUser.username}
+                showToast={showToast}
+                activeAlertSection="maintenance"
+                onNavigateAlertSection={(section) => setActiveTab(section)}
+              />
+            </Suspense>
           )}
 
           {activeTab === 'inventory' && inventorySubPage === 'devices' && (
-            <InventoryDevicesTab
-              inventoryRows={inventoryRows}
-              inventoryTotal={inventoryTotal}
-              inventoryPage={inventoryPage}
-              setInventoryPage={setInventoryPage}
-              inventoryPageSize={inventoryPageSize}
-              setInventoryPageSize={setInventoryPageSize}
-              inventorySearch={inventorySearch}
-              setInventorySearch={setInventorySearch}
-              inventoryPlatformFilter={inventoryPlatformFilter}
-              setInventoryPlatformFilter={setInventoryPlatformFilter}
-              inventoryStatusFilter={inventoryStatusFilter}
-              setInventoryStatusFilter={setInventoryStatusFilter}
-              inventorySortConfig={inventorySortConfig}
-              inventoryLoading={inventoryLoading}
-              selectedDeviceIds={selectedDeviceIds}
-              setSelectedDeviceIds={setSelectedDeviceIds}
-              handleSort={handleSort}
-              handleImport={handleImport}
-              handleExport={handleExport}
-              handleDeleteDevice={handleDeleteDevice}
-              handleDeleteSelected={handleDeleteSelected}
-              handleShowDetails={handleShowDetails}
-              setShowAddModal={setShowAddModal}
-              setShowEditModal={setShowEditModal}
-              setEditingDevice={setEditingDevice}
-              setEditForm={setEditForm}
-              setSelectedDevice={setSelectedDevice}
-              setActiveTab={setActiveTab}
-              language={language}
-              t={t}
-            />
+            <Suspense fallback={lazyPanelFallback}>
+              <InventoryDevicesTab
+                inventoryRows={inventoryRows}
+                inventoryTotal={inventoryTotal}
+                inventoryPage={inventoryPage}
+                setInventoryPage={setInventoryPage}
+                inventoryPageSize={inventoryPageSize}
+                setInventoryPageSize={setInventoryPageSize}
+                inventorySearch={inventorySearch}
+                setInventorySearch={setInventorySearch}
+                inventoryPlatformFilter={inventoryPlatformFilter}
+                setInventoryPlatformFilter={setInventoryPlatformFilter}
+                inventoryStatusFilter={inventoryStatusFilter}
+                setInventoryStatusFilter={setInventoryStatusFilter}
+                inventorySortConfig={inventorySortConfig}
+                inventoryLoading={inventoryLoading}
+                selectedDeviceIds={selectedDeviceIds}
+                setSelectedDeviceIds={setSelectedDeviceIds}
+                handleSort={handleSort}
+                handleImport={handleImport}
+                handleExport={handleExport}
+                handleDeleteDevice={handleDeleteDevice}
+                handleDeleteSelected={handleDeleteSelected}
+                handleShowDetails={handleShowDetails}
+                handleTestConnection={handleTestConnection}
+                deviceConnectionChecks={deviceConnectionChecks}
+                connectionTestingDeviceId={connectionTestingDeviceId}
+                setShowAddModal={setShowAddModal}
+                setShowEditModal={setShowEditModal}
+                setEditingDevice={setEditingDevice}
+                setEditForm={setEditForm}
+                setSelectedDevice={setSelectedDevice}
+                setActiveTab={setActiveTab}
+                language={language}
+                t={t}
+              />
+            </Suspense>
           )}
 
           {/* ── Interface Monitoring Sub-Page ── */}
@@ -5145,12 +5349,12 @@ const App: React.FC = () => {
                             <div className="flex items-center gap-2 mt-1">
                               <div className="flex items-center gap-1 flex-1">
                                 <span className="text-[9px] text-blue-500 w-5 flex-shrink-0">IN</span>
-                                <div className="flex-1 h-1.5 bg-black/5 rounded-full overflow-hidden"><div className="h-full rounded-full bg-blue-500" style={{width: `${Math.min(item.bwIn, 100)}%`}} /></div>
+                                <progress className="util-progress util-progress-in flex-1" max={100} value={Math.min(item.bwIn, 100)} />
                                 <span className="text-[10px] font-mono text-blue-600 w-12 text-right">{item.bwIn.toFixed(1)}%</span>
                               </div>
                               <div className="flex items-center gap-1 flex-1">
                                 <span className="text-[9px] text-orange-500 w-7 flex-shrink-0">OUT</span>
-                                <div className="flex-1 h-1.5 bg-black/5 rounded-full overflow-hidden"><div className="h-full rounded-full bg-orange-500" style={{width: `${Math.min(item.bwOut, 100)}%`}} /></div>
+                                <progress className="util-progress util-progress-out flex-1" max={100} value={Math.min(item.bwOut, 100)} />
                                 <span className="text-[10px] font-mono text-orange-600 w-12 text-right">{item.bwOut.toFixed(1)}%</span>
                               </div>
                             </div>
@@ -5181,6 +5385,7 @@ const App: React.FC = () => {
                     <select
                       value={intfSortBy}
                       onChange={(e) => { setIntfSortBy(e.target.value as any); setIntfDevicePage(1); }}
+                      title={language === 'zh' ? '接口监控排序方式' : 'Interface monitoring sort order'}
                       className="px-3 py-2 bg-black/[0.02] border border-black/5 rounded-xl text-xs outline-none cursor-pointer"
                     >
                       <option value="name">{language === 'zh' ? '按主机名排序' : 'Sort by Name'}</option>
@@ -5345,12 +5550,12 @@ const App: React.FC = () => {
                                               <div className="space-y-0.5">
                                                 <div className="flex items-center justify-end gap-1">
                                                   <span className="text-[8px] text-blue-500 w-5 text-right">IN</span>
-                                                  <div className="w-10 h-1 bg-black/5 rounded-full overflow-hidden"><div className="h-full rounded-full bg-blue-500" style={{width: `${Math.min(bwIn || 0, 100)}%`}} /></div>
+                                                  <progress className="util-progress util-progress-in w-10" max={100} value={Math.min(bwIn || 0, 100)} />
                                                   <span className={`font-mono text-[9px] w-10 text-right ${(bwIn || 0) > 80 ? 'text-red-600' : 'text-blue-600'}`}>{(bwIn || 0).toFixed(1)}%</span>
                                                 </div>
                                                 <div className="flex items-center justify-end gap-1">
                                                   <span className="text-[8px] text-orange-500 w-5 text-right">OUT</span>
-                                                  <div className="w-10 h-1 bg-black/5 rounded-full overflow-hidden"><div className="h-full rounded-full bg-orange-500" style={{width: `${Math.min(bwOut || 0, 100)}%`}} /></div>
+                                                  <progress className="util-progress util-progress-out w-10" max={100} value={Math.min(bwOut || 0, 100)} />
                                                   <span className={`font-mono text-[9px] w-10 text-right ${(bwOut || 0) > 80 ? 'text-red-600' : 'text-orange-600'}`}>{(bwOut || 0).toFixed(1)}%</span>
                                                 </div>
                                               </div>
@@ -5380,6 +5585,7 @@ const App: React.FC = () => {
                                       <button
                                         disabled={safeInnerPage <= 1}
                                         onClick={() => setIntfPageMap(prev => ({ ...prev, [device.id]: safeInnerPage - 1 }))}
+                                        title={language === 'zh' ? '上一页' : 'Previous page'}
                                         className="px-2 py-1 text-[10px] border border-black/10 rounded-md hover:bg-black/5 disabled:opacity-30 transition-all"
                                       >
                                         <ChevronLeft size={12} />
@@ -5387,6 +5593,7 @@ const App: React.FC = () => {
                                       <button
                                         disabled={safeInnerPage >= innerTotalPages}
                                         onClick={() => setIntfPageMap(prev => ({ ...prev, [device.id]: safeInnerPage + 1 }))}
+                                        title={language === 'zh' ? '下一页' : 'Next page'}
                                         className="px-2 py-1 text-[10px] border border-black/10 rounded-md hover:bg-black/5 disabled:opacity-30 transition-all"
                                       >
                                         <ChevronRight size={12} />
@@ -5410,6 +5617,7 @@ const App: React.FC = () => {
                         <button
                           disabled={safePage <= 1}
                           onClick={() => setIntfDevicePage(safePage - 1)}
+                          title={language === 'zh' ? '上一页' : 'Previous page'}
                           className="p-1.5 rounded-lg border border-black/5 hover:bg-black/5 disabled:opacity-30 transition-all"
                         >
                           <ChevronLeft size={16} />
@@ -5417,6 +5625,7 @@ const App: React.FC = () => {
                         <button
                           disabled={safePage >= totalDevPages}
                           onClick={() => setIntfDevicePage(safePage + 1)}
+                          title={language === 'zh' ? '下一页' : 'Next page'}
                           className="p-1.5 rounded-lg border border-black/5 hover:bg-black/5 disabled:opacity-30 transition-all"
                         >
                           <ChevronRight size={16} />
@@ -5473,8 +5682,8 @@ const App: React.FC = () => {
                 </div>
               </div>
               
-              <div className="flex-1 bg-white rounded-2xl border border-black/5 shadow-sm flex items-center justify-center relative overflow-hidden" ref={topologyRef}>
-                <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: 'radial-gradient(#000 1px, transparent 1px)', backgroundSize: '20px 20px' }}></div>
+              <div className="relative flex flex-1 items-center justify-center overflow-hidden rounded-2xl border border-black/5 bg-white shadow-sm" ref={topologyRef}>
+                <div className="absolute inset-0 bg-[radial-gradient(#000_1px,transparent_1px)] bg-[length:20px_20px] opacity-[0.03]" />
                 
                 {/* Simulated Topology Graph */}
                 <div className="relative w-full h-full flex items-center justify-center">
@@ -5484,11 +5693,13 @@ const App: React.FC = () => {
                       className="relative w-full h-full"
                     >
                       {/* Dynamic Topology Graph */}
-                      <TopologyGraph 
-                        devices={devices} 
-                        links={topologyLinks} 
-                        onNodeClick={handleShowDetails} 
-                      />
+                      <Suspense fallback={lazyPanelFallback}>
+                        <TopologyGraph 
+                          devices={devices} 
+                          links={topologyLinks} 
+                          onNodeClick={handleShowDetails} 
+                        />
+                      </Suspense>
                     </motion.div>
 
                   <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-black/5 backdrop-blur-md border border-black/5 px-4 py-2 rounded-full flex items-center gap-4">
@@ -5908,9 +6119,9 @@ const App: React.FC = () => {
                             </>
                           ) : (quickQueryRunning || quickQueryOutput) ? (
                             /* ── Terminal output in center panel ── */
-                            <div className="flex-1 flex flex-col overflow-hidden rounded-b-2xl" style={{ background: 'linear-gradient(180deg, #0d1117 0%, #151b23 100%)' }}>
+                            <div className="flex flex-1 flex-col overflow-hidden rounded-b-2xl bg-[linear-gradient(180deg,#0d1117_0%,#151b23_100%)]">
                               {/* Terminal Title Bar */}
-                              <div className="shrink-0 flex items-center justify-between px-4 py-2.5" style={{ background: 'linear-gradient(90deg, #1c2030 0%, #161b22 100%)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                              <div className="shrink-0 flex items-center justify-between border-b border-white/[0.06] bg-[linear-gradient(90deg,#1c2030_0%,#161b22_100%)] px-4 py-2.5">
                                 <div className="flex items-center gap-3 min-w-0">
                                   <div className="flex gap-[6px] mr-1 shrink-0">
                                     <span className="w-[10px] h-[10px] rounded-full bg-[#ff5f57]/80" />
@@ -5951,7 +6162,7 @@ const App: React.FC = () => {
                                   </div>
                                 ) : (
                                   <div className="p-5">
-                                    <div className="flex items-start gap-2 mb-3 pb-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                                    <div className="mb-3 flex items-start gap-2 border-b border-white/[0.04] pb-3">
                                       <span className="text-emerald-400/60 font-mono font-bold text-[11px] mt-0.5 select-none shrink-0">❯</span>
                                       <code className="text-[11px] font-mono text-emerald-400/40 leading-relaxed whitespace-pre-wrap">{quickQueryLabel}</code>
                                     </div>
@@ -6188,10 +6399,10 @@ const App: React.FC = () => {
                               // ── CATEGORIZED QUERY GRID MODE ──
                               // ═══════════════════════════════════════════
                               const categoryGroups = [
-                                { key: 'net', label: isZh ? '🌐 网络基础' : '🌐 Network', accent: '#3b82f6' },
-                                { key: 'route', label: isZh ? '🔀 路由协议' : '🔀 Routing', accent: '#f59e0b' },
-                                { key: 'sys', label: isZh ? '🖥️ 系统运维' : '🖥️ System', accent: '#10b981' },
-                                ...(userSavedCmds.length > 0 ? [{ key: 'custom', label: isZh ? '⭐ 自定义' : '⭐ Custom', accent: '#a855f7' }] : []),
+                                { key: 'net', label: isZh ? '🌐 网络基础' : '🌐 Network', accentClass: 'query-accent-net' },
+                                { key: 'route', label: isZh ? '🔀 路由协议' : '🔀 Routing', accentClass: 'query-accent-route' },
+                                { key: 'sys', label: isZh ? '🖥️ 系统运维' : '🖥️ System', accentClass: 'query-accent-sys' },
+                                ...(userSavedCmds.length > 0 ? [{ key: 'custom', label: isZh ? '⭐ 自定义' : '⭐ Custom', accentClass: 'query-accent-custom' }] : []),
                               ];
 
                               return (
@@ -6222,9 +6433,9 @@ const App: React.FC = () => {
                                         return (
                                           <div key={grp.key}>
                                             <div className="flex items-center gap-2 mb-2">
-                                              <div className="h-3 w-0.5 rounded-full" style={{ background: grp.accent }} />
-                                              <span className="text-[10px] font-bold tracking-wide" style={{ color: grp.accent }}>{grp.label}</span>
-                                              <div className="flex-1 h-px" style={{ background: `linear-gradient(90deg, ${grp.accent}18, transparent)` }} />
+                                              <div className={`h-3 w-0.5 rounded-full ${grp.accentClass}`} />
+                                              <span className={`text-[10px] font-bold tracking-wide ${grp.accentClass}`}>{grp.label}</span>
+                                              <div className={`flex-1 h-px ${grp.accentClass}-line`} />
                                             </div>
                                             <div className="grid grid-cols-4 gap-2">
                                               {items.map((cmd, i) => (
@@ -6538,6 +6749,7 @@ const App: React.FC = () => {
                                   <select
                                     value={playbookVars[v.key] || v.options?.[0] || ''}
                                     onChange={e => setPlaybookVars(prev => ({ ...prev, [v.key]: e.target.value }))}
+                                    title={v.label_zh || v.label || v.key}
                                     className="w-full mt-1 px-3 py-2 border border-black/10 rounded-xl text-xs outline-none"
                                   >
                                     {v.options?.map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
@@ -6585,6 +6797,7 @@ const App: React.FC = () => {
                           <div className="flex items-center gap-1.5">
                             <span className="text-[10px] text-black/40">{t('concurrency')}:</span>
                             <select value={playbookConcurrency} onChange={e => setPlaybookConcurrency(Number(e.target.value))}
+                              title={language === 'zh' ? '并发执行数量' : 'Execution concurrency'}
                               className="text-xs border border-black/10 rounded-lg px-2 py-1 outline-none">
                               {[1,2,3,5,10].map(n => <option key={n} value={n}>{n}</option>)}
                             </select>
@@ -6777,6 +6990,7 @@ const App: React.FC = () => {
                   <p className="text-sm text-black/40">{t('executionHistoryDesc')}</p>
                 </div>
                 <button onClick={loadPlaybookHistory}
+                  title={isZh ? '刷新执行历史' : 'Refresh execution history'}
                   className="p-2 rounded-xl border border-black/10 hover:bg-black/5 transition-all">
                   <RotateCcw size={14} />
                 </button>
@@ -6809,6 +7023,7 @@ const App: React.FC = () => {
                         />
                         {playbookHistoryScenarioSearch && (
                           <button onClick={() => { setPlaybookHistoryScenarioSearch(''); setPlaybookHistoryPage(1); loadPlaybookHistory(1, playbookHistoryStatusFilter, ''); }}
+                            title={isZh ? '清空搜索' : 'Clear search'}
                             className="absolute right-2 top-1/2 -translate-y-1/2 text-black/25 hover:text-black/50">
                             <X size={11} />
                           </button>
@@ -6931,6 +7146,7 @@ const App: React.FC = () => {
                       <button
                         disabled={playbookHistoryPage <= 1}
                         onClick={() => { const p = playbookHistoryPage - 1; setPlaybookHistoryPage(p); loadPlaybookHistory(p); }}
+                        title={language === 'zh' ? '上一页' : 'Previous page'}
                         className="px-2 py-1 text-[10px] rounded border border-black/10 disabled:opacity-30"
                       >
                         <ChevronLeft size={10} />
@@ -6939,6 +7155,7 @@ const App: React.FC = () => {
                       <button
                         disabled={playbookHistoryPage * 20 >= playbookHistoryTotal}
                         onClick={() => { const p = playbookHistoryPage + 1; setPlaybookHistoryPage(p); loadPlaybookHistory(p); }}
+                        title={language === 'zh' ? '下一页' : 'Next page'}
                         className="px-2 py-1 text-[10px] rounded border border-black/10 disabled:opacity-30"
                       >
                         <ChevronRight size={10} />
@@ -7175,12 +7392,14 @@ const App: React.FC = () => {
                                 <button
                                   disabled={selectedExecDevicesPage <= 1}
                                   onClick={() => { const p = selectedExecDevicesPage - 1; setSelectedExecDevicesPage(p); loadExecDevices(exec.id, p, selectedExecDevicesStatusFilter); }}
+                                  title={language === 'zh' ? '上一页' : 'Previous page'}
                                   className="px-2 py-1 text-xs rounded border border-black/10 disabled:opacity-30"
                                 ><ChevronLeft size={12} /></button>
                                 <span className="text-xs text-black/40 px-2 py-1">{selectedExecDevicesPage} / {Math.ceil(selectedExecDevicesTotal / 20)}</span>
                                 <button
                                   disabled={selectedExecDevicesPage * 20 >= selectedExecDevicesTotal}
                                   onClick={() => { const p = selectedExecDevicesPage + 1; setSelectedExecDevicesPage(p); loadExecDevices(exec.id, p, selectedExecDevicesStatusFilter); }}
+                                  title={language === 'zh' ? '下一页' : 'Next page'}
                                   className="px-2 py-1 text-xs rounded border border-black/10 disabled:opacity-30"
                                 ><ChevronRight size={12} /></button>
                               </div>
@@ -7273,28 +7492,30 @@ const App: React.FC = () => {
           })()}
 
           {activeTab === 'compliance' && (
-            <ComplianceTab
-              complianceOverview={complianceOverview}
-              complianceFindings={complianceFindings}
-              complianceFindingTotal={complianceFindingTotal}
-              complianceSeverityFilter={complianceSeverityFilter}
-              setComplianceSeverityFilter={setComplianceSeverityFilter}
-              complianceStatusFilter={complianceStatusFilter}
-              setComplianceStatusFilter={setComplianceStatusFilter}
-              complianceCategoryFilter={complianceCategoryFilter}
-              setComplianceCategoryFilter={setComplianceCategoryFilter}
-              compliancePage={compliancePage}
-              setCompliancePage={setCompliancePage}
-              compliancePageSize={compliancePageSize}
-              setCompliancePageSize={setCompliancePageSize}
-              complianceLoading={complianceLoading}
-              complianceRunLoading={complianceRunLoading}
-              runComplianceAudit={runComplianceAudit}
-              openComplianceFindingDetail={openComplianceFindingDetail}
-              updateComplianceFinding={updateComplianceFinding}
-              language={language}
-              t={t}
-            />
+            <Suspense fallback={lazyPanelFallback}>
+              <ComplianceTab
+                complianceOverview={complianceOverview}
+                complianceFindings={complianceFindings}
+                complianceFindingTotal={complianceFindingTotal}
+                complianceSeverityFilter={complianceSeverityFilter}
+                setComplianceSeverityFilter={setComplianceSeverityFilter}
+                complianceStatusFilter={complianceStatusFilter}
+                setComplianceStatusFilter={setComplianceStatusFilter}
+                complianceCategoryFilter={complianceCategoryFilter}
+                setComplianceCategoryFilter={setComplianceCategoryFilter}
+                compliancePage={compliancePage}
+                setCompliancePage={setCompliancePage}
+                compliancePageSize={compliancePageSize}
+                setCompliancePageSize={setCompliancePageSize}
+                complianceLoading={complianceLoading}
+                complianceRunLoading={complianceRunLoading}
+                runComplianceAudit={runComplianceAudit}
+                openComplianceFindingDetail={openComplianceFindingDetail}
+                updateComplianceFinding={updateComplianceFinding}
+                language={language}
+                t={t}
+              />
+            </Suspense>
           )}
 
           {/* ================================================================
@@ -7480,6 +7701,7 @@ const App: React.FC = () => {
                           </button>
                           <span className="text-[9px] font-bold uppercase text-black/30">{t('retentionPeriod')}</span>
                           <select value={retentionDays} onChange={e => setRetentionDays(Number(e.target.value))}
+                            title={language === 'zh' ? '快照保留周期' : 'Snapshot retention period'}
                             className="text-[10px] border border-black/10 rounded-lg px-2 py-1 outline-none bg-white">
                             <option value={30}>30 {t('retentionDays')}</option>
                             <option value={90}>90 {t('retentionDays')}</option>
@@ -7488,6 +7710,7 @@ const App: React.FC = () => {
                             <option value={730}>2 {language === 'zh' ? '年' : 'yr'} (730d)</option>
                           </select>
                           <button onClick={() => loadConfigSnapshots(configCenterDevice?.id, { requireFilter: true })}
+                            title={language === 'zh' ? '刷新配置快照' : 'Refresh config snapshots'}
                             className="p-1.5 rounded-lg border border-black/10 hover:bg-black/5 transition-all">
                             <RotateCcw size={13} className={configSnapshotsLoading ? 'animate-spin' : ''} />
                           </button>
@@ -7664,6 +7887,7 @@ const App: React.FC = () => {
                           <select
                             value={current?.id || ''}
                             disabled={side === 'right' && !configDiffLeft}
+                            title={side === 'left' ? (language === 'zh' ? '选择变更前快照' : 'Select before snapshot') : (language === 'zh' ? '选择变更后快照' : 'Select after snapshot')}
                             onChange={async e => {
                               const snap = snapList.find(s => s.id === e.target.value) || null;
                               if (snap) {
@@ -8106,6 +8330,7 @@ const App: React.FC = () => {
                         <p className="text-[11px] text-black/40 mt-0.5">{t('enableScheduleHint')}</p>
                       </div>
                       <button onClick={() => setScheduleEnabled(!scheduleEnabled)}
+                        title={scheduleEnabled ? (language === 'zh' ? '关闭定时备份' : 'Disable scheduled backup') : (language === 'zh' ? '开启定时备份' : 'Enable scheduled backup')}
                         className={`relative w-11 h-6 rounded-full transition-colors ${scheduleEnabled ? 'bg-[#00bceb]' : 'bg-black/10'}`}>
                         <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${scheduleEnabled ? 'translate-x-5' : ''}`} />
                       </button>
@@ -8115,6 +8340,7 @@ const App: React.FC = () => {
                       <div>
                         <label className="text-[10px] font-bold uppercase text-black/30 block mb-1">{t('scheduleHour')}</label>
                         <select value={scheduleHour} onChange={e => setScheduleHour(Number(e.target.value))}
+                          title={language === 'zh' ? '定时备份小时' : 'Scheduled backup hour'}
                           className="px-3 py-2 border border-black/10 rounded-xl text-sm outline-none bg-white w-28">
                           {Array.from({ length: 24 }, (_, i) => <option key={i} value={i}>{String(i).padStart(2,'0')}:00</option>)}
                         </select>
@@ -8122,6 +8348,7 @@ const App: React.FC = () => {
                       <div>
                         <label className="text-[10px] font-bold uppercase text-black/30 block mb-1">{t('scheduleMinute')}</label>
                         <select value={scheduleMinute} onChange={e => setScheduleMinute(Number(e.target.value))}
+                          title={language === 'zh' ? '定时备份分钟' : 'Scheduled backup minute'}
                           className="px-3 py-2 border border-black/10 rounded-xl text-sm outline-none bg-white w-24">
                           {[0,15,30,45].map(m => <option key={m} value={m}>{String(m).padStart(2,'0')}</option>)}
                         </select>
@@ -8137,6 +8364,7 @@ const App: React.FC = () => {
                       <label className="text-[10px] font-bold uppercase text-black/30 block mb-1">{t('retentionPeriod')}</label>
                       <div className="flex items-center gap-3">
                         <select value={retentionDays} onChange={e => setRetentionDays(Number(e.target.value))}
+                          title={language === 'zh' ? '保留天数' : 'Retention days'}
                           className="px-3 py-2 border border-black/10 rounded-xl text-sm outline-none bg-white">
                           <option value={30}>30 {t('retentionDays')}</option>
                           <option value={90}>90 {t('retentionDays')}</option>
@@ -8429,6 +8657,7 @@ const App: React.FC = () => {
                             <input
                               type="text"
                               value={selectedConfigTemplate?.name || ''}
+                              title={language === 'zh' ? '模板名称' : 'Template name'}
                               onChange={(e) => {
                                 const newName = e.target.value;
                                 setConfigTemplates((prev) => prev.map((template) =>
@@ -8440,6 +8669,7 @@ const App: React.FC = () => {
                             />
                             <select
                               value={selectedConfigTemplate?.vendor || 'Custom'}
+                              title={language === 'zh' ? '模板厂商' : 'Template vendor'}
                               onChange={(e) => {
                                 const newVendor = e.target.value;
                                 setConfigTemplates((prev) => prev.map((template) =>
@@ -8454,6 +8684,7 @@ const App: React.FC = () => {
                             </select>
                             <select
                               value={selectedConfigTemplate?.type || 'Jinja2'}
+                              title={language === 'zh' ? '模板类型' : 'Template type'}
                               onChange={(e) => {
                                 const newType = e.target.value as 'Jinja2' | 'YAML';
                                 setConfigTemplates((prev) => prev.map((template) =>
@@ -8551,6 +8782,8 @@ const App: React.FC = () => {
                       <textarea
                         value={editorContent}
                         onChange={(e) => setEditorContent(e.target.value)}
+                        title={language === 'zh' ? '模板源码编辑器' : 'Template source editor'}
+                        placeholder={language === 'zh' ? '在这里编辑模板源码' : 'Edit template source here'}
                         className="flex-1 p-6 bg-transparent font-mono text-sm text-[#D4D4D4] outline-none resize-none leading-6"
                         spellCheck={false}
                       />
@@ -8674,6 +8907,7 @@ const App: React.FC = () => {
                         </label>
                         <select
                           value={configScopePlatform}
+                          title={language === 'zh' ? '发布范围平台' : 'Release scope platform'}
                           onChange={(e) => setConfigScopePlatform(e.target.value)}
                           className="w-full px-3 py-2 rounded-xl border border-black/10 bg-white text-sm outline-none"
                         >
@@ -8689,6 +8923,7 @@ const App: React.FC = () => {
                         </label>
                         <select
                           value={configScopeRole}
+                          title={language === 'zh' ? '发布范围设备角色' : 'Release scope device role'}
                           onChange={(e) => setConfigScopeRole(e.target.value)}
                           className="w-full px-3 py-2 rounded-xl border border-black/10 bg-white text-sm outline-none"
                         >
@@ -8704,6 +8939,7 @@ const App: React.FC = () => {
                         </label>
                         <select
                           value={configScopeSite}
+                          title={language === 'zh' ? '发布范围站点' : 'Release scope site'}
                           onChange={(e) => setConfigScopeSite(e.target.value)}
                           className="w-full px-3 py-2 rounded-xl border border-black/10 bg-white text-sm outline-none"
                         >
@@ -8803,49 +9039,53 @@ const App: React.FC = () => {
           )}
 
           {activeTab === 'users' && (
-            <UsersTab
-              users={users}
-              showAddUserModal={showAddUserModal}
-              setShowAddUserModal={setShowAddUserModal}
-              showEditUserModal={showEditUserModal}
-              setShowEditUserModal={setShowEditUserModal}
-              editingUser={editingUser}
-              setEditingUser={setEditingUser}
-              newUserForm={newUserForm}
-              setNewUserForm={setNewUserForm}
-              editUserForm={editUserForm}
-              setEditUserForm={setEditUserForm}
-              showNewUserPwd={showNewUserPwd}
-              setShowNewUserPwd={setShowNewUserPwd}
-              showEditUserPwd={showEditUserPwd}
-              setShowEditUserPwd={setShowEditUserPwd}
-              handleAddUser={handleAddUser}
-              handleEditUser={handleEditUser}
-              language={language}
-              t={t}
-            />
+            <Suspense fallback={lazyPanelFallback}>
+              <UsersTab
+                users={users}
+                showAddUserModal={showAddUserModal}
+                setShowAddUserModal={setShowAddUserModal}
+                showEditUserModal={showEditUserModal}
+                setShowEditUserModal={setShowEditUserModal}
+                editingUser={editingUser}
+                setEditingUser={setEditingUser}
+                newUserForm={newUserForm}
+                setNewUserForm={setNewUserForm}
+                editUserForm={editUserForm}
+                setEditUserForm={setEditUserForm}
+                showNewUserPwd={showNewUserPwd}
+                setShowNewUserPwd={setShowNewUserPwd}
+                showEditUserPwd={showEditUserPwd}
+                setShowEditUserPwd={setShowEditUserPwd}
+                handleAddUser={handleAddUser}
+                handleEditUser={handleEditUser}
+                language={language}
+                t={t}
+              />
+            </Suspense>
           )}
           {activeTab === 'history' && (
-            <HistoryTab
-              auditRows={auditRows}
-              auditTotal={auditTotal}
-              auditPage={auditPage}
-              setAuditPage={setAuditPage}
-              auditPageSize={auditPageSize}
-              setAuditPageSize={setAuditPageSize}
-              auditLoading={auditLoading}
-              auditCategoryFilter={auditCategoryFilter}
-              setAuditCategoryFilter={setAuditCategoryFilter}
-              auditSeverityFilter={auditSeverityFilter}
-              setAuditSeverityFilter={setAuditSeverityFilter}
-              auditStatusFilter={auditStatusFilter}
-              setAuditStatusFilter={setAuditStatusFilter}
-              auditTimeFilter={auditTimeFilter}
-              setAuditTimeFilter={setAuditTimeFilter}
-              openAuditEventDetail={openAuditEventDetail}
-              language={language}
-              t={t}
-            />
+            <Suspense fallback={lazyPanelFallback}>
+              <HistoryTab
+                auditRows={auditRows}
+                auditTotal={auditTotal}
+                auditPage={auditPage}
+                setAuditPage={setAuditPage}
+                auditPageSize={auditPageSize}
+                setAuditPageSize={setAuditPageSize}
+                auditLoading={auditLoading}
+                auditCategoryFilter={auditCategoryFilter}
+                setAuditCategoryFilter={setAuditCategoryFilter}
+                auditSeverityFilter={auditSeverityFilter}
+                setAuditSeverityFilter={setAuditSeverityFilter}
+                auditStatusFilter={auditStatusFilter}
+                setAuditStatusFilter={setAuditStatusFilter}
+                auditTimeFilter={auditTimeFilter}
+                setAuditTimeFilter={setAuditTimeFilter}
+                openAuditEventDetail={openAuditEventDetail}
+                language={language}
+                t={t}
+              />
+            </Suspense>
           )}
         </main>
         <footer className={`h-10 px-8 border-t flex items-center justify-between text-[11px] ${resolvedTheme === 'dark' ? 'border-white/10 text-white/45 bg-[#0b1320]' : 'border-black/8 text-black/45 bg-white/70'}`}>
@@ -9252,32 +9492,32 @@ const App: React.FC = () => {
               )}
               <div>
                 <label className="text-[10px] font-bold uppercase tracking-widest text-black/45">Name</label>
-                <input value={newScenarioForm.name} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, name: e.target.value }))} className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none" />
+                <input value={newScenarioForm.name} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, name: e.target.value }))} title="Scenario name" placeholder="e.g. Core interface recovery" className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none" />
               </div>
               <div>
                 <label className="text-[10px] font-bold uppercase tracking-widest text-black/45">Name (ZH)</label>
-                <input value={newScenarioForm.name_zh} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, name_zh: e.target.value }))} className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none" />
+                <input value={newScenarioForm.name_zh} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, name_zh: e.target.value }))} title="Scenario name in Chinese" placeholder="例如：核心链路恢复" className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none" />
               </div>
               <div>
                 <label className="text-[10px] font-bold uppercase tracking-widest text-black/45">Description</label>
-                <input value={newScenarioForm.description} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, description: e.target.value }))} className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none" />
+                <input value={newScenarioForm.description} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, description: e.target.value }))} title="Scenario description" placeholder="Short summary for operators" className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none" />
               </div>
               <div>
                 <label className="text-[10px] font-bold uppercase tracking-widest text-black/45">Description (ZH)</label>
-                <input value={newScenarioForm.description_zh} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, description_zh: e.target.value }))} className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none" />
+                <input value={newScenarioForm.description_zh} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, description_zh: e.target.value }))} title="Scenario description in Chinese" placeholder="给运维人员的简要说明" className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none" />
               </div>
               <div>
                 <label className="text-[10px] font-bold uppercase tracking-widest text-black/45">Category</label>
-                <input value={newScenarioForm.category} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, category: e.target.value }))} className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none" />
+                <input value={newScenarioForm.category} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, category: e.target.value }))} title="Scenario category" placeholder="routing / access / security" className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none" />
               </div>
               <div className="grid grid-cols-3 gap-2">
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-widest text-black/45">Icon</label>
-                  <input value={newScenarioForm.icon} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, icon: e.target.value }))} className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none" />
+                  <input value={newScenarioForm.icon} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, icon: e.target.value }))} title="Scenario icon" placeholder="Zap" className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none" />
                 </div>
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-widest text-black/45">Risk</label>
-                  <select value={newScenarioForm.risk} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, risk: e.target.value }))} className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none bg-white">
+                  <select value={newScenarioForm.risk} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, risk: e.target.value }))} title="Scenario risk" className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none bg-white">
                     <option value="low">low</option>
                     <option value="medium">medium</option>
                     <option value="high">high</option>
@@ -9285,18 +9525,18 @@ const App: React.FC = () => {
                 </div>
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-widest text-black/45">Platform</label>
-                  <select value={newScenarioForm.platform} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, platform: e.target.value }))} className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none bg-white">
+                  <select value={newScenarioForm.platform} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, platform: e.target.value }))} title="Scenario platform" className="mt-1 w-full px-3 py-2 border border-black/10 rounded-xl text-sm outline-none bg-white">
                     {Object.keys(platforms).map(pk => <option key={pk} value={pk}>{pk}</option>)}
                   </select>
                 </div>
               </div>
               <div className="col-span-2">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-black/45">Pre-Check Commands (one per line)</label>
-                <textarea value={newScenarioForm.pre_check} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, pre_check: e.target.value }))} className="mt-1 w-full h-20 px-3 py-2 border border-black/10 rounded-xl text-xs font-mono outline-none" />
+                <textarea value={newScenarioForm.pre_check} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, pre_check: e.target.value }))} title="Pre-check commands" placeholder="show interface status" className="mt-1 w-full h-20 px-3 py-2 border border-black/10 rounded-xl text-xs font-mono outline-none" />
               </div>
               <div className="col-span-2">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-black/45">Execute Commands (one per line)</label>
-                <textarea value={newScenarioForm.execute} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, execute: e.target.value }))} className="mt-1 w-full h-24 px-3 py-2 border border-black/10 rounded-xl text-xs font-mono outline-none" />
+                <textarea value={newScenarioForm.execute} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, execute: e.target.value }))} title="Execute commands" placeholder="configure terminal" className="mt-1 w-full h-24 px-3 py-2 border border-black/10 rounded-xl text-xs font-mono outline-none" />
               </div>
               {newScenarioVariables.length > 0 && (
                 <div className="col-span-2 rounded-2xl border border-black/10 bg-black/[0.02] p-4">
@@ -9331,11 +9571,11 @@ const App: React.FC = () => {
               <div className="col-span-2 grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-widest text-black/45">Post-Check Commands</label>
-                  <textarea value={newScenarioForm.post_check} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, post_check: e.target.value }))} className="mt-1 w-full h-20 px-3 py-2 border border-black/10 rounded-xl text-xs font-mono outline-none" />
+                  <textarea value={newScenarioForm.post_check} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, post_check: e.target.value }))} title="Post-check commands" placeholder="show logging | last 20" className="mt-1 w-full h-20 px-3 py-2 border border-black/10 rounded-xl text-xs font-mono outline-none" />
                 </div>
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-widest text-black/45">Rollback Commands</label>
-                  <textarea value={newScenarioForm.rollback} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, rollback: e.target.value }))} className="mt-1 w-full h-20 px-3 py-2 border border-black/10 rounded-xl text-xs font-mono outline-none" />
+                  <textarea value={newScenarioForm.rollback} onChange={(e) => setNewScenarioForm(prev => ({ ...prev, rollback: e.target.value }))} title="Rollback commands" placeholder="rollback configuration" className="mt-1 w-full h-20 px-3 py-2 border border-black/10 rounded-xl text-xs font-mono outline-none" />
                 </div>
               </div>
             </div>
@@ -9411,6 +9651,8 @@ const App: React.FC = () => {
                   type="text"
                   value={profileForm.username}
                   onChange={(e) => setProfileForm(prev => ({ ...prev, username: e.target.value }))}
+                  title="Profile username"
+                  placeholder="Username"
                   className={`w-full rounded-xl px-3 py-2.5 text-sm outline-none border transition-all ${resolvedTheme === 'dark' ? 'bg-white/5 border-white/15 text-white placeholder-white/30 focus:border-[#00bceb]/60' : 'bg-black/[0.02] border-black/10 text-[#0b2a3c] placeholder-black/30 focus:border-[#00bceb]/50'}`}
                 />
               </div>
@@ -9421,6 +9663,7 @@ const App: React.FC = () => {
                   type="text"
                   value={currentUser.role || currentUserRecord?.role || 'Administrator'}
                   disabled
+                  title="Profile role"
                   className={`w-full rounded-xl px-3 py-2.5 text-sm border ${resolvedTheme === 'dark' ? 'bg-white/5 border-white/10 text-white/60' : 'bg-black/[0.03] border-black/10 text-black/55'}`}
                 />
               </div>
@@ -9432,10 +9675,11 @@ const App: React.FC = () => {
                     type={showProfilePwd ? 'text' : 'password'}
                     value={profileForm.password}
                     onChange={(e) => setProfileForm(prev => ({ ...prev, password: e.target.value }))}
+                    title="New password"
                     placeholder="Leave blank to keep unchanged"
                     className={`w-full rounded-xl px-3 pr-10 py-2.5 text-sm outline-none border transition-all ${resolvedTheme === 'dark' ? 'bg-white/5 border-white/15 text-white placeholder-white/30 focus:border-[#00bceb]/60' : 'bg-black/[0.02] border-black/10 text-[#0b2a3c] placeholder-black/30 focus:border-[#00bceb]/50'}`}
                   />
-                  <button type="button" onClick={() => setShowProfilePwd(v => !v)} className={`absolute right-3 top-1/2 -translate-y-1/2 ${resolvedTheme === 'dark' ? 'text-white/40 hover:text-white/70' : 'text-black/35 hover:text-black/60'}`}>
+                  <button type="button" title={showProfilePwd ? 'Hide password' : 'Show password'} onClick={() => setShowProfilePwd(v => !v)} className={`absolute right-3 top-1/2 -translate-y-1/2 ${resolvedTheme === 'dark' ? 'text-white/40 hover:text-white/70' : 'text-black/35 hover:text-black/60'}`}>
                     {showProfilePwd ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
                 </div>
@@ -9447,6 +9691,7 @@ const App: React.FC = () => {
                   type={showProfilePwd ? 'text' : 'password'}
                   value={profileForm.confirmPassword}
                   onChange={(e) => setProfileForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                  title="Confirm password"
                   placeholder="Confirm new password"
                   className={`w-full rounded-xl px-3 py-2.5 text-sm outline-none border transition-all ${resolvedTheme === 'dark' ? 'bg-white/5 border-white/15 text-white placeholder-white/30 focus:border-[#00bceb]/60' : 'bg-black/[0.02] border-black/10 text-[#0b2a3c] placeholder-black/30 focus:border-[#00bceb]/50'}`}
                 />
@@ -9554,6 +9799,7 @@ const App: React.FC = () => {
                           type="text"
                           value={ch.webhook_url}
                           onChange={(e) => setNotificationChannels(prev => ({ ...prev, [key]: { ...prev[key], webhook_url: e.target.value } }))}
+                          title={`${label} Webhook URL`}
                           placeholder={hint}
                           className={`w-full rounded-lg px-2.5 py-2 text-[11px] outline-none border transition-all font-mono ${resolvedTheme === 'dark'
                             ? 'bg-black/20 border-white/10 text-white/80 placeholder-white/20 focus:border-[#00bceb]/50'
@@ -9565,6 +9811,7 @@ const App: React.FC = () => {
                             type="password"
                             value={(ch as any).secret || ''}
                             onChange={(e) => setNotificationChannels(prev => ({ ...prev, [key]: { ...prev[key], secret: e.target.value } }))}
+                            title={`${label} Secret`}
                             placeholder="加签 Secret（可选，留空则不验签）"
                             className={`w-full rounded-lg px-2.5 py-2 text-[11px] outline-none border transition-all font-mono ${resolvedTheme === 'dark'
                               ? 'bg-black/20 border-white/10 text-white/80 placeholder-white/20 focus:border-[#00bceb]/50'
@@ -9658,16 +9905,25 @@ const App: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="text-lg font-bold text-[#00172D]">
-                    {isTestingConnection ? 'Testing Connection...' : 
-                     testResult?.success ? 'Connection Successful' : 'Connection Failed'}
+                    {isTestingConnection
+                      ? (connectionTestMode === 'deep'
+                        ? (language === 'zh' ? 'SSH 登录校验中...' : 'Running SSH Login Validation...')
+                        : (language === 'zh' ? '快速连通性检测中...' : 'Running Reachability Check...'))
+                      : testResult?.success
+                        ? (testResult?.checkMode === 'deep'
+                          ? (language === 'zh' ? 'SSH 登录成功' : 'SSH Login Successful')
+                          : (language === 'zh' ? '连通性正常' : 'Reachability Confirmed'))
+                        : (testResult?.checkMode === 'deep'
+                          ? (language === 'zh' ? 'SSH 登录异常' : 'SSH Login Failed')
+                          : (language === 'zh' ? '连通性异常' : 'Reachability Failed'))}
                   </h3>
                   <p className="text-xs text-black/40">
-                    {selectedDevice?.hostname} ({selectedDevice?.ip_address})
+                    {connectionTestDevice?.hostname || '-'} ({connectionTestDevice?.ip_address || '-'})
                   </p>
                 </div>
               </div>
               {!isTestingConnection && (
-                <button onClick={() => setShowTestResult(false)} className="text-black/40 hover:text-black">
+                <button onClick={() => setShowTestResult(false)} title={language === 'zh' ? '关闭结果窗口' : 'Close result dialog'} className="text-black/40 hover:text-black">
                   <XCircle size={24} />
                 </button>
               )}
@@ -9680,10 +9936,53 @@ const App: React.FC = () => {
                     <div className="w-16 h-16 border-4 border-blue-100 rounded-full" />
                     <div className="absolute inset-0 w-16 h-16 border-4 border-blue-500 rounded-full border-t-transparent animate-spin" />
                   </div>
-                  <p className="text-sm font-medium text-blue-600 animate-pulse">Verifying network connectivity via ICMP...</p>
+                  <p className="text-sm font-medium text-blue-600 animate-pulse">
+                    {connectionTestMode === 'deep'
+                      ? (language === 'zh' ? '正在检查 ICMP、目标端口与 SSH 登录状态...' : 'Checking ICMP, target port, and SSH login state...')
+                      : (language === 'zh' ? '正在检查 ICMP 与目标端口可达性...' : 'Checking ICMP and target port reachability...')}
+                  </p>
                 </div>
               ) : (
                 <>
+                  <div className="rounded-2xl border border-blue-100 bg-blue-50/60 px-4 py-3">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-blue-700">{language === 'zh' ? '检测模式' : 'Check Mode'}</p>
+                    <p className="mt-2 text-sm text-blue-900">
+                      {testResult?.checkMode === 'quick' || !testResult?.checkMode
+                        ? (language === 'zh' ? '当前默认执行快速连通性检测，只检查 ICMP 和目标管理端口，不执行 Netmiko 登录。' : 'The default check is a quick reachability probe that verifies ICMP and the management port only, without a Netmiko login.')
+                        : (language === 'zh' ? '当前结果包含深度 SSH 登录校验。' : 'This result includes deep SSH login validation.')}
+                    </p>
+                  </div>
+
+                  {Array.isArray(testResult?.stages) && testResult.stages.length > 0 && (
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      {testResult.stages.map((stage) => {
+                        const tone = stage.ok
+                          ? 'border-emerald-100 bg-emerald-50/60 text-emerald-800'
+                          : 'border-red-100 bg-red-50/60 text-red-800';
+                        const label = stage.stage === 'icmp'
+                          ? 'ICMP'
+                          : stage.stage === 'tcp'
+                            ? (connectionTestDevice?.connection_method === 'telnet' ? 'TCP/23' : 'TCP/22')
+                            : 'SSH';
+                        return (
+                          <div key={`${stage.stage}-${stage.summary}`} className={`rounded-2xl border p-4 ${tone}`}>
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-[11px] font-bold uppercase tracking-[0.18em]">{label}</p>
+                              <span className="rounded-full bg-white/80 px-2 py-1 text-[10px] font-bold uppercase">
+                                {stage.ok ? (language === 'zh' ? '正常' : 'OK') : (language === 'zh' ? '失败' : 'Fail')}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-sm font-semibold">{stage.summary}</p>
+                            <p className="mt-1 text-xs opacity-80">{stage.detail}</p>
+                            {typeof stage.latency_ms === 'number' && Number.isFinite(stage.latency_ms) && (
+                              <p className="mt-2 text-[11px] font-medium opacity-80">{language === 'zh' ? '耗时' : 'Latency'} {stage.latency_ms} ms</p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   <div className={`p-4 rounded-2xl border ${
                     testResult?.success ? 'bg-emerald-50/50 border-emerald-100' : 'bg-red-50/50 border-red-100'
                   }`}>
@@ -9709,11 +10008,29 @@ const App: React.FC = () => {
                       </p>
                     </div>
                   )}
+
+                  {testResult?.errorCode === SSH_TIMEOUT_ERROR_CODE && (
+                    <div className="rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-orange-700">SSH Timeout</p>
+                      <p className="mt-2 text-sm text-orange-900">
+                        这不是单纯的端口不通，而是 SSH 会话在建立或读取阶段超时。优先检查设备 CPU、AAA/VTY 响应、会话配额，以及中间安全设备是否对管理流量做了限速或拦截。
+                      </p>
+                    </div>
+                  )}
+
+                  {testResult?.errorCode === SSH_TRANSPORT_ERROR_CODE && (
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-700">SSH Transport</p>
+                      <p className="mt-2 text-sm text-slate-900">
+                        当前更像是 SSH 传输层没建立起来。优先核对 22 端口是否开放、设备是否启用了 SSH、以及 ACL、防火墙或堡垒链路是否直接拒绝连接。
+                      </p>
+                    </div>
+                  )}
                   
                   {testResult?.output && (
                     <div className="space-y-2">
                       <label className="text-[10px] font-bold uppercase tracking-widest text-black/30 ml-1">
-                        {testResult?.errorCode === LEGACY_SSH_ERROR_CODE || testResult?.errorCode === SSH_AUTH_ERROR_CODE ? 'Raw SSH Error' : 'Device Output'}
+                        {testResult?.errorCode === LEGACY_SSH_ERROR_CODE || testResult?.errorCode === SSH_AUTH_ERROR_CODE || testResult?.errorCode === SSH_TIMEOUT_ERROR_CODE || testResult?.errorCode === SSH_TRANSPORT_ERROR_CODE ? 'Raw SSH Error' : 'Device Output'}
                       </label>
                       <div className="bg-[#00172D] p-4 rounded-xl overflow-auto max-h-[200px]">
                         <pre className="text-xs font-mono text-emerald-400/90 whitespace-pre-wrap">
@@ -9731,12 +10048,20 @@ const App: React.FC = () => {
                       Close
                     </button>
                     {!testResult?.success && (
-                      <button 
-                        onClick={() => handleTestConnection()}
-                        className="flex-1 px-4 py-3 rounded-xl bg-black text-white font-bold uppercase tracking-widest text-[10px] hover:bg-black/80 transition-all shadow-lg shadow-black/20"
-                      >
-                        Retry
-                      </button>
+                      <div className="flex flex-1 gap-3">
+                        <button 
+                          onClick={() => handleTestConnection(connectionTestDevice || selectedDevice, 'quick')}
+                          className="flex-1 px-4 py-3 rounded-xl bg-black text-white font-bold uppercase tracking-widest text-[10px] hover:bg-black/80 transition-all shadow-lg shadow-black/20"
+                        >
+                          {language === 'zh' ? '重试快速检测' : 'Retry Quick Check'}
+                        </button>
+                        <button 
+                          onClick={() => handleTestConnection(connectionTestDevice || selectedDevice, 'deep')}
+                          className="flex-1 px-4 py-3 rounded-xl border border-black/10 font-bold uppercase tracking-widest text-[10px] hover:bg-black/5 transition-all"
+                        >
+                          {language === 'zh' ? 'SSH 登录校验' : 'SSH Login Check'}
+                        </button>
+                      </div>
                     )}
                   </div>
                 </>
@@ -9757,7 +10082,7 @@ const App: React.FC = () => {
             <div className="p-8 space-y-6">
               <div className="flex justify-between items-center">
                 <h3 className="text-xl font-medium">{t('importInventory')}</h3>
-                <button onClick={() => setShowImportModal(false)} className="text-black/40 hover:text-black">
+                <button onClick={() => setShowImportModal(false)} title={language === 'zh' ? '关闭导入窗口' : 'Close import dialog'} className="text-black/40 hover:text-black">
                   <XCircle size={24} />
                 </button>
               </div>
@@ -9821,7 +10146,7 @@ const App: React.FC = () => {
                 <h3 className="text-lg font-medium">{t('configChangeReview')}</h3>
                 <p className="text-xs text-black/40">{t('reviewDiff')} {selectedDevice?.hostname}</p>
               </div>
-              <button onClick={() => setShowDiff(false)} className="text-black/40 hover:text-black">
+              <button onClick={() => setShowDiff(false)} title={language === 'zh' ? '关闭差异窗口' : 'Close diff dialog'} className="text-black/40 hover:text-black">
                 <XCircle size={24} />
               </button>
             </div>
@@ -9872,7 +10197,7 @@ const App: React.FC = () => {
                 <h3 className="text-lg font-medium">{t('viewConfig')}: {viewingConfig.id}</h3>
                 <p className="text-xs text-black/40">{viewingConfig.timestamp} • {viewingConfig.author}</p>
               </div>
-              <button onClick={() => setShowConfigModal(false)} className="text-black/40 hover:text-black">
+              <button onClick={() => setShowConfigModal(false)} title={language === 'zh' ? '关闭配置窗口' : 'Close configuration dialog'} className="text-black/40 hover:text-black">
                 <XCircle size={24} />
               </button>
             </div>
@@ -9931,7 +10256,7 @@ const App: React.FC = () => {
                 <h3 className="text-lg font-medium">{t('scheduleTask')}</h3>
                 <p className="text-xs text-black/40">{schedulingTask} for {selectedDevice?.hostname}</p>
               </div>
-              <button onClick={() => setShowScheduleModal(false)} className="text-black/40 hover:text-black">
+              <button onClick={() => setShowScheduleModal(false)} title={language === 'zh' ? '关闭定时任务窗口' : 'Close schedule dialog'} className="text-black/40 hover:text-black">
                 <XCircle size={24} />
               </button>
             </div>
@@ -9962,6 +10287,7 @@ const App: React.FC = () => {
                   <select
                     value={scheduleForm.interval}
                     onChange={(e) => setScheduleForm({ ...scheduleForm, interval: e.target.value as any })}
+                    title={language === 'zh' ? '计划周期' : 'Schedule interval'}
                     className="w-full px-4 py-2 bg-black/[0.02] border border-black/10 rounded-xl text-xs outline-none focus:border-black/20"
                   >
                     <option value="daily">{t('daily')}</option>
@@ -9977,6 +10303,7 @@ const App: React.FC = () => {
                   type="datetime-local"
                   value={scheduleForm.time}
                   onChange={(e) => setScheduleForm({ ...scheduleForm, time: e.target.value })}
+                  title={language === 'zh' ? '计划执行时间' : 'Scheduled execution time'}
                   className="w-full px-4 py-2 bg-black/[0.02] border border-black/10 rounded-xl text-xs outline-none focus:border-black/20"
                 />
               </div>
@@ -9986,6 +10313,7 @@ const App: React.FC = () => {
                 <select
                   value={scheduleForm.timezone}
                   onChange={(e) => setScheduleForm({ ...scheduleForm, timezone: e.target.value })}
+                  title={language === 'zh' ? '时区' : 'Timezone'}
                   className="w-full px-4 py-2 bg-black/[0.02] border border-black/10 rounded-xl text-xs outline-none focus:border-black/20"
                 >
                   <option value="UTC">UTC</option>
@@ -10030,7 +10358,7 @@ const App: React.FC = () => {
                   <p className="text-xs text-red-700/70">{remediatingDevice.hostname}</p>
                 </div>
               </div>
-              <button onClick={() => setShowRemediationModal(false)} className="text-red-900/40 hover:text-red-900">
+              <button onClick={() => setShowRemediationModal(false)} title={language === 'zh' ? '关闭修复确认窗口' : 'Close remediation dialog'} className="text-red-900/40 hover:text-red-900">
                 <XCircle size={24} />
               </button>
             </div>
@@ -10085,7 +10413,7 @@ const App: React.FC = () => {
                   {isDeletingSelected ? 'Delete Selected Devices' : 'Delete Device'}
                 </h2>
               </div>
-              <button onClick={() => { setShowDeleteModal(false); setDeviceToDelete(null); setIsDeletingSelected(false); }} className="text-red-900/40 hover:text-red-900">
+              <button onClick={() => { setShowDeleteModal(false); setDeviceToDelete(null); setIsDeletingSelected(false); }} title={language === 'zh' ? '关闭删除确认窗口' : 'Close delete confirmation'} className="text-red-900/40 hover:text-red-900">
                 <X size={20} />
               </button>
             </div>
@@ -10132,7 +10460,7 @@ const App: React.FC = () => {
                 </div>
                 <h2 className="text-lg font-semibold text-black">Add New Device</h2>
               </div>
-              <button onClick={() => setShowAddModal(false)} className="text-black/40 hover:text-black">
+              <button onClick={() => setShowAddModal(false)} title={language === 'zh' ? '关闭新增设备窗口' : 'Close add device dialog'} className="text-black/40 hover:text-black">
                 <X size={20} />
               </button>
             </div>
@@ -10144,6 +10472,7 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     value={addForm.hostname || ''}
+                    title="Device hostname"
                     onChange={(e) => setAddForm({...addForm, hostname: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                     placeholder="e.g. Core-SW-01"
@@ -10154,6 +10483,7 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     value={addForm.ip_address || ''}
+                    title="Device IP address"
                     onChange={(e) => setAddForm({...addForm, ip_address: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                     placeholder="e.g. 192.168.1.1"
@@ -10163,6 +10493,7 @@ const App: React.FC = () => {
                   <label className="block text-xs font-medium text-black/60 mb-1.5 uppercase tracking-wider">Software / Platform</label>
                   <select 
                     value={addForm.platform || 'cisco_ios'}
+                    title="Device platform"
                     onChange={(e) => setAddForm({...addForm, platform: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                   >
@@ -10180,6 +10511,7 @@ const App: React.FC = () => {
                   <label className="block text-xs font-medium text-black/60 mb-1.5 uppercase tracking-wider">Role</label>
                   <select 
                     value={addForm.role || 'Access'}
+                    title="Device role"
                     onChange={(e) => setAddForm({...addForm, role: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                   >
@@ -10196,6 +10528,7 @@ const App: React.FC = () => {
                   <label className="block text-xs font-medium text-black/60 mb-1.5 uppercase tracking-wider">Connection Method</label>
                   <select 
                     value={addForm.connection_method || 'ssh'}
+                    title="Connection method"
                     onChange={(e) => setAddForm({...addForm, connection_method: e.target.value as 'ssh' | 'netconf'})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                   >
@@ -10208,6 +10541,7 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     value={addForm.site || ''}
+                    title="Device site"
                     onChange={(e) => setAddForm({...addForm, site: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                     placeholder="e.g. DataCenter-A"
@@ -10218,6 +10552,7 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     value={addForm.sn || ''}
+                    title="Serial number"
                     onChange={(e) => setAddForm({...addForm, sn: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                     placeholder="e.g. SN12345678"
@@ -10228,6 +10563,7 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     value={addForm.model || ''}
+                    title="Device model"
                     onChange={(e) => setAddForm({...addForm, model: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                     placeholder="e.g. C9300-48P"
@@ -10238,6 +10574,7 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     value={addForm.version || ''}
+                    title="Software version"
                     onChange={(e) => setAddForm({...addForm, version: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                     placeholder="e.g. 17.3.3"
@@ -10248,6 +10585,7 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     value={addForm.snmp_community || 'public'}
+                    title="SNMP community"
                     onChange={(e) => setAddForm({...addForm, snmp_community: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                     placeholder="public"
@@ -10258,6 +10596,7 @@ const App: React.FC = () => {
                   <input 
                     type="number" 
                     value={addForm.snmp_port || 161}
+                    title="SNMP port"
                     onChange={(e) => setAddForm({...addForm, snmp_port: parseInt(e.target.value)})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                   />
@@ -10267,6 +10606,7 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     value={addForm.username || ''}
+                    title="Login username"
                     onChange={(e) => setAddForm({...addForm, username: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                   />
@@ -10277,10 +10617,11 @@ const App: React.FC = () => {
                     <input 
                       type={showAddDevicePwd ? 'text' : 'password'}
                       value={addForm.password || ''}
+                      title="Login password"
                       onChange={(e) => setAddForm({...addForm, password: e.target.value})}
                       className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 pr-10 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                     />
-                    <button type="button" onClick={() => setShowAddDevicePwd(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-black/30 hover:text-black/60 transition-colors">
+                    <button type="button" title={showAddDevicePwd ? 'Hide password' : 'Show password'} onClick={() => setShowAddDevicePwd(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-black/30 hover:text-black/60 transition-colors">
                       {showAddDevicePwd ? <EyeOff size={15} /> : <Eye size={15} />}
                     </button>
                   </div>
@@ -10320,7 +10661,7 @@ const App: React.FC = () => {
                 </div>
                 <h2 className="text-lg font-semibold text-black">Edit Device</h2>
               </div>
-              <button onClick={() => setShowEditModal(false)} className="text-black/40 hover:text-black">
+              <button onClick={() => setShowEditModal(false)} title={language === 'zh' ? '关闭编辑设备窗口' : 'Close edit device dialog'} className="text-black/40 hover:text-black">
                 <X size={20} />
               </button>
             </div>
@@ -10332,6 +10673,7 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     value={editForm.hostname || ''}
+                    title="Device hostname"
                     onChange={(e) => setEditForm({...editForm, hostname: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                   />
@@ -10341,6 +10683,7 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     value={editForm.ip_address || ''}
+                    title="Device IP address"
                     onChange={(e) => setEditForm({...editForm, ip_address: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                   />
@@ -10349,6 +10692,7 @@ const App: React.FC = () => {
                   <label className="block text-xs font-medium text-black/60 mb-1.5 uppercase tracking-wider">Software / Platform</label>
                   <select 
                     value={editForm.platform || ''}
+                    title="Device platform"
                     onChange={(e) => setEditForm({...editForm, platform: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                   >
@@ -10366,6 +10710,7 @@ const App: React.FC = () => {
                   <label className="block text-xs font-medium text-black/60 mb-1.5 uppercase tracking-wider">Role</label>
                   <select 
                     value={editForm.role || ''}
+                    title="Device role"
                     onChange={(e) => setEditForm({...editForm, role: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                   >
@@ -10382,6 +10727,7 @@ const App: React.FC = () => {
                   <label className="block text-xs font-medium text-black/60 mb-1.5 uppercase tracking-wider">Connection Method</label>
                   <select 
                     value={editForm.connection_method || ''}
+                    title="Connection method"
                     onChange={(e) => setEditForm({...editForm, connection_method: e.target.value as 'ssh' | 'netconf'})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                   >
@@ -10394,6 +10740,7 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     value={editForm.sn || ''}
+                    title="Serial number"
                     onChange={(e) => setEditForm({...editForm, sn: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                   />
@@ -10403,6 +10750,7 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     value={editForm.model || ''}
+                    title="Device model"
                     onChange={(e) => setEditForm({...editForm, model: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                   />
@@ -10412,6 +10760,7 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     value={editForm.version || ''}
+                    title="Software version"
                     onChange={(e) => setEditForm({...editForm, version: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                   />
@@ -10421,6 +10770,7 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     value={editForm.site || ''}
+                    title="Device site"
                     onChange={(e) => setEditForm({...editForm, site: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                   />
@@ -10430,6 +10780,7 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     value={editForm.snmp_community || ''}
+                    title="SNMP community"
                     onChange={(e) => setEditForm({...editForm, snmp_community: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                     placeholder="public"
@@ -10440,6 +10791,7 @@ const App: React.FC = () => {
                   <input 
                     type="number" 
                     value={editForm.snmp_port || 161}
+                    title="SNMP port"
                     onChange={(e) => setEditForm({...editForm, snmp_port: parseInt(e.target.value)})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                   />
@@ -10449,6 +10801,7 @@ const App: React.FC = () => {
                   <input 
                     type="text" 
                     value={editForm.username || ''}
+                    title="Login username"
                     onChange={(e) => setEditForm({...editForm, username: e.target.value})}
                     className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                   />
@@ -10459,11 +10812,12 @@ const App: React.FC = () => {
                     <input 
                       type={showEditDevicePwd ? 'text' : 'password'}
                       value={editForm.password || ''}
+                      title="Login password"
                       onChange={(e) => setEditForm({...editForm, password: e.target.value})}
                       placeholder="Leave blank to keep unchanged"
                       className="w-full bg-black/[0.02] border border-black/5 rounded-xl px-4 pr-10 py-2.5 text-sm outline-none focus:border-black/20 focus:bg-white transition-colors"
                     />
-                    <button type="button" onClick={() => setShowEditDevicePwd(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-black/30 hover:text-black/60 transition-colors">
+                    <button type="button" title={showEditDevicePwd ? 'Hide password' : 'Show password'} onClick={() => setShowEditDevicePwd(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-black/30 hover:text-black/60 transition-colors">
                       {showEditDevicePwd ? <EyeOff size={15} /> : <Eye size={15} />}
                     </button>
                   </div>
@@ -10495,23 +10849,82 @@ const App: React.FC = () => {
           <motion.div 
             initial={{ scale: 0.95, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden"
+            className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
           >
-            <div className="p-6 border-b border-black/5 flex justify-between items-center bg-black/[0.02]">
-              <div className="flex items-center gap-3">
+            <div className="shrink-0 border-b border-black/5 bg-black/[0.02] px-5 py-4 sm:px-6 flex flex-wrap items-start justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-3">
                 <Server className="text-black/60" size={24} />
-                <div>
+                <div className="min-w-0">
                   <h3 className="text-lg font-medium">{t('deviceDetails')}</h3>
-                  <p className="text-xs text-black/40">{viewingDevice.hostname}</p>
+                  <p className="truncate text-xs text-black/40">{viewingDevice.hostname}</p>
+                  {(viewingDeviceConnectionSummary || connectionTestingDeviceId === viewingDevice.id) && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {connectionTestingDeviceId === viewingDevice.id ? (
+                        <span className="rounded-full border border-blue-200 bg-blue-100 px-2 py-1 text-[10px] font-bold uppercase text-blue-700">
+                          {language === 'zh' ? '检测中' : 'Running'}
+                        </span>
+                      ) : viewingDeviceConnectionSummary ? (
+                        <span className={`rounded-full border px-2 py-1 text-[10px] font-bold uppercase ${connectionCheckBadgeMeta[viewingDeviceConnectionSummary.status].className}`}>
+                          {language === 'zh' ? connectionCheckBadgeMeta[viewingDeviceConnectionSummary.status].zh : connectionCheckBadgeMeta[viewingDeviceConnectionSummary.status].en}
+                        </span>
+                      ) : null}
+                      {viewingDeviceConnectionSummary && (
+                        <span className="text-[11px] text-black/40">
+                          {(viewingDeviceConnectionSummary.mode === 'deep'
+                            ? (language === 'zh' ? 'SSH 登录校验' : 'SSH login check')
+                            : (language === 'zh' ? '快速连通性检测' : 'Reachability check'))}
+                          {' · '}
+                          {formatConnectionCheckTime(viewingDeviceConnectionSummary.checked_at, language)}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
-              <button onClick={() => setShowDetailsModal(false)} className="text-black/20 hover:text-black">
-                <XCircle size={24} />
-              </button>
+              <div className="flex items-center gap-3 self-start sm:self-center">
+                <span className="hidden text-[11px] text-black/40 sm:inline">
+                  {deviceDetailLoading
+                    ? (language === 'zh' ? '健康详情加载中...' : 'Loading health detail...')
+                    : (language === 'zh' ? '健康详情已更新' : 'Health detail updated')}
+                </span>
+                <button onClick={() => setShowDetailsModal(false)} title={language === 'zh' ? '关闭设备详情' : 'Close device details'} className="text-black/20 hover:text-black">
+                  <XCircle size={24} />
+                </button>
+              </div>
             </div>
-            
-            <div className="p-8 grid grid-cols-2 gap-8">
-              <div className="space-y-6">
+
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+              <div className="p-5 sm:p-6 xl:p-8 grid grid-cols-1 xl:grid-cols-[1fr_1fr_0.95fr] gap-6 xl:gap-8">
+                <div className="space-y-6 xl:sticky xl:top-0 self-start">
+                <div>
+                  <h4 className="text-[10px] font-bold uppercase tracking-widest text-black/30 mb-2">{language === 'zh' ? '健康概览' : 'Health Overview'}</h4>
+                  <div className="rounded-2xl border border-black/5 bg-[linear-gradient(180deg,rgba(0,0,0,0.01),rgba(0,0,0,0.03))] p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-black/35">{language === 'zh' ? '健康评分' : 'Health Score'}</p>
+                        <p className="mt-1 text-2xl font-semibold text-[#00172D]">{Math.max(0, Math.min(100, Number(viewingDevice.health_score || 0)))}</p>
+                        <p className="text-[11px] text-black/45">{language === 'zh' ? '统一设备健康分' : 'Unified device health score'}</p>
+                      </div>
+                      <span className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase ${viewingDevice.health_status === 'critical' ? 'bg-red-100 text-red-700' : viewingDevice.health_status === 'warning' ? 'bg-amber-100 text-amber-700' : viewingDevice.health_status === 'healthy' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                        {viewingDevice.health_status === 'critical'
+                          ? (language === 'zh' ? '严重' : 'Critical')
+                          : viewingDevice.health_status === 'warning'
+                            ? (language === 'zh' ? '告警' : 'Warning')
+                            : viewingDevice.health_status === 'healthy'
+                              ? (language === 'zh' ? '健康' : 'Healthy')
+                              : (language === 'zh' ? '未知' : 'Unknown')}
+                      </span>
+                    </div>
+                    <p className="text-sm text-black/60">{viewingDevice.health_summary || (language === 'zh' ? '当前没有检测到明显健康问题。' : 'No material health issue is currently detected.')}</p>
+                    <div className="grid grid-cols-2 gap-3 text-xs text-black/50">
+                      <div className="rounded-xl border border-black/5 bg-white px-3 py-2">{language === 'zh' ? '开放告警' : 'Open alerts'} <span className="ml-1 font-semibold text-[#00172D]">{Number(viewingDevice.open_alert_count || 0)}</span></div>
+                      <div className="rounded-xl border border-black/5 bg-white px-3 py-2">{language === 'zh' ? '接口 Down' : 'Interfaces down'} <span className="ml-1 font-semibold text-[#00172D]">{Number(viewingDevice.interface_down_count || 0)}</span></div>
+                      <div className="rounded-xl border border-black/5 bg-white px-3 py-2">{language === 'zh' ? '接口抖动' : 'Flapping'} <span className="ml-1 font-semibold text-[#00172D]">{Number(viewingDevice.interface_flap_count || 0)}</span></div>
+                      <div className="rounded-xl border border-black/5 bg-white px-3 py-2">{language === 'zh' ? '高利用率' : 'High util'} <span className="ml-1 font-semibold text-[#00172D]">{Number(viewingDevice.high_util_interface_count || 0)}</span></div>
+                    </div>
+                  </div>
+                </div>
+
                 <div>
                   <h4 className="text-[10px] font-bold uppercase tracking-widest text-black/30 mb-2">{t('basicInfo')}</h4>
                   <div className="space-y-3">
@@ -10563,7 +10976,7 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              <div className="space-y-6">
+                <div className="space-y-6">
                 <div>
                   <h4 className="text-[10px] font-bold uppercase tracking-widest text-black/30 mb-2">{t('hardwareInfo')}</h4>
                   <div className="space-y-3">
@@ -10609,87 +11022,275 @@ const App: React.FC = () => {
                     </div>
                   </div>
                 </div>
-              </div>
-            </div>
 
-            {/* Interface Monitoring Table */}
-            {viewingDevice.interface_data && viewingDevice.interface_data.length > 0 && (
-              <div className="px-8 pb-4">
-                <h4 className="text-[10px] font-bold uppercase tracking-widest text-black/30 mb-3">{language === 'zh' ? '接口监控' : 'Interface Monitoring'} ({viewingDevice.interface_data.length})</h4>
-                <div className="border border-black/5 rounded-xl overflow-hidden max-h-60 overflow-auto">
-                  <table className="w-full text-xs">
-                    <thead className="bg-black/[0.02] sticky top-0">
-                      <tr>
-                        <th className="px-3 py-2 text-left font-bold text-[10px] uppercase text-black/40">{language === 'zh' ? '接口' : 'Interface'}</th>
-                        <th className="px-3 py-2 text-left font-bold text-[10px] uppercase text-black/40">{language === 'zh' ? '状态' : 'Status'}</th>
-                        <th className="px-3 py-2 text-right font-bold text-[10px] uppercase text-black/40">{language === 'zh' ? '速率' : 'Speed'}</th>
-                        <th className="px-3 py-2 text-right font-bold text-[10px] uppercase text-black/40">IN</th>
-                        <th className="px-3 py-2 text-right font-bold text-[10px] uppercase text-black/40">OUT</th>
-                        <th className="px-3 py-2 text-right font-bold text-[10px] uppercase text-black/40">{language === 'zh' ? '带宽' : 'BW%'}</th>
-                        <th className="px-3 py-2 text-right font-bold text-[10px] uppercase text-black/40">{language === 'zh' ? '错误' : 'Err'}</th>
-                        <th className="px-3 py-2 text-right font-bold text-[10px] uppercase text-black/40">{language === 'zh' ? '丢包' : 'Drop'}</th>
-                        <th className="px-3 py-2 text-left font-bold text-[10px] uppercase text-black/40">{language === 'zh' ? '描述' : 'Desc'}</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-black/5">
-                      {viewingDevice.interface_data.map((intf, i) => {
-                        const fmtBytes = (b: number) => b > 1073741824 ? `${(b / 1073741824).toFixed(1)} GB` : b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : b > 1024 ? `${(b / 1024).toFixed(0)} KB` : `${b} B`;
-                        const fmtRate = (bps?: number) => {
-                          if (bps == null || !Number.isFinite(bps) || bps < 0) return '-';
-                          if (bps >= 1_000_000_000) return `${(bps / 1_000_000_000).toFixed(2)} Gbps`;
-                          if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(2)} Mbps`;
-                          if (bps >= 1_000) return `${(bps / 1_000).toFixed(1)} Kbps`;
-                          return `${bps.toFixed(0)} bps`;
-                        };
-                        const totalErr = (intf.in_errors || 0) + (intf.out_errors || 0);
-                        const totalDrop = (intf.in_discards || 0) + (intf.out_discards || 0);
-                        const maxBw = (intf.bw_in_pct != null || intf.bw_out_pct != null) ? Math.max(intf.bw_in_pct || 0, intf.bw_out_pct || 0) : null;
-                        return (
-                          <tr key={i} className="hover:bg-black/[0.01]">
-                            <td className="px-3 py-1.5 font-mono text-[11px]">{intf.name}</td>
-                            <td className="px-3 py-1.5">
-                              <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase ${intf.status === 'up' ? 'text-emerald-600' : 'text-red-500'}`}>
-                                <span className={`w-1.5 h-1.5 rounded-full ${intf.status === 'up' ? 'bg-emerald-500' : 'bg-red-500'}`} />
-                                {intf.status}
-                              </span>
-                            </td>
-                            <td className="px-3 py-1.5 text-right text-black/60">{intf.speed_mbps > 0 ? `${intf.speed_mbps >= 1000 ? `${intf.speed_mbps / 1000}G` : `${intf.speed_mbps}M`}` : '-'}</td>
-                            <td className="px-3 py-1.5 text-right font-mono text-[10px]">
-                              <div className="text-blue-600">{fmtRate(intf.in_bps)}</div>
-                              <div className="text-black/30">{fmtBytes(intf.in_octets || 0)}</div>
-                            </td>
-                            <td className="px-3 py-1.5 text-right font-mono text-[10px]">
-                              <div className="text-orange-600">{fmtRate(intf.out_bps)}</div>
-                              <div className="text-black/30">{fmtBytes(intf.out_octets || 0)}</div>
-                            </td>
-                            <td className="px-3 py-1.5 text-right font-mono text-[10px]">
-                              {maxBw != null ? <span className={maxBw > 80 ? 'text-red-600' : maxBw > 50 ? 'text-orange-600' : 'text-black/50'}>{maxBw.toFixed(1)}%</span> : <span className="text-black/20">-</span>}
-                            </td>
-                            <td className="px-3 py-1.5 text-right font-mono text-[10px]">
-                              <span className={totalErr > 0 ? 'text-red-600 font-bold' : 'text-black/30'}>{totalErr}</span>
-                            </td>
-                            <td className="px-3 py-1.5 text-right font-mono text-[10px]">
-                              <span className={totalDrop > 0 ? 'text-orange-600 font-bold' : 'text-black/30'}>{totalDrop}</span>
-                            </td>
-                            <td className="px-3 py-1.5 text-black/40 truncate max-w-[120px]">{intf.description || '-'}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                <div>
+                  <h4 className="text-[10px] font-bold uppercase tracking-widest text-black/30 mb-2">{language === 'zh' ? '健康原因' : 'Health Reasons'}</h4>
+                  <div className="space-y-2 rounded-2xl border border-black/5 bg-black/[0.01] p-4">
+                    {Array.isArray(viewingDevice.health_reasons) && viewingDevice.health_reasons.length > 0 ? viewingDevice.health_reasons.slice(0, 6).map((reason, index) => (
+                      <div key={`${reason}-${index}`} className="rounded-xl border border-black/5 bg-white px-3 py-2 text-sm text-black/60">
+                        {reason}
+                      </div>
+                    )) : (
+                      <div className="rounded-xl border border-dashed border-black/10 bg-white px-3 py-4 text-sm text-black/40">
+                        {language === 'zh' ? '当前没有需要升级处理的健康原因。' : 'There are no escalated health reasons right now.'}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-            )}
 
-            <div className="p-6 bg-black/[0.01] border-t border-black/5 flex justify-between items-center">
-              <div className="flex gap-3">
+                <div className="space-y-6">
+                <div>
+                  <h4 className="text-[10px] font-bold uppercase tracking-widest text-black/30 mb-2">{language === 'zh' ? '开放告警' : 'Open Alerts'}</h4>
+                  <div className="space-y-2 rounded-2xl border border-black/5 bg-black/[0.01] p-4 max-h-[520px] overflow-auto">
+                    {viewingDeviceAlerts.length > 0 ? viewingDeviceAlerts.map((alert) => {
+                      const tone = String(alert.severity || '').toLowerCase() === 'critical' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700';
+                      return (
+                        <div key={alert.id} className="rounded-xl border border-black/5 bg-white p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase ${tone}`}>{String(alert.severity || '').toUpperCase()}</span>
+                            <span className="text-[11px] text-black/40">{new Date(alert.created_at).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US', { hour12: false })}</span>
+                          </div>
+                          <p className="mt-2 text-sm font-semibold text-[#0b2340]">{alert.title}</p>
+                          <p className="mt-1 text-[11px] text-black/55">{alert.message}</p>
+                          {alert.interface_name && <p className="mt-2 text-[11px] font-mono text-black/35">{alert.interface_name}</p>}
+                        </div>
+                      );
+                    }) : (
+                      <div className="rounded-xl border border-dashed border-black/10 bg-white px-3 py-4 text-sm text-black/40">
+                        {deviceDetailLoading
+                          ? (language === 'zh' ? '正在加载告警详情...' : 'Loading alert detail...')
+                          : (language === 'zh' ? '当前没有未恢复告警。' : 'There are no open alerts right now.')}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h4 className="text-[10px] font-bold uppercase tracking-widest text-black/30">{language === 'zh' ? '健康趋势' : 'Health Trend'}</h4>
+                    <div className="flex items-center gap-2">
+                      {[1, 24, 168].map((hours) => (
+                        <button
+                          key={hours}
+                          type="button"
+                          onClick={() => setDeviceTrendRangeHours(hours)}
+                          className={`rounded-lg px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] transition-all ${deviceTrendRangeHours === hours ? 'bg-black text-white' : 'border border-black/10 text-black/50 hover:bg-black/[0.03]'}`}
+                        >
+                          {hours === 1 ? (language === 'zh' ? '1 小时' : '1h') : hours === 24 ? (language === 'zh' ? '24 小时' : '24h') : (language === 'zh' ? '7 天' : '7d')}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-black/5 bg-[linear-gradient(180deg,rgba(0,0,0,0.01),rgba(0,0,0,0.03))] p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3 text-[11px] text-black/45">
+                      <span>
+                        {deviceHealthTrendLoading
+                          ? (language === 'zh' ? '趋势加载中...' : 'Loading trend...')
+                          : `${deviceHealthTrend?.sample_count || 0} ${language === 'zh' ? '个采样点' : 'samples'}`}
+                      </span>
+                      <span>{language === 'zh' ? '开放告警' : 'Open alerts'} {Number(viewingDevice.open_alert_count || 0)}</span>
+                    </div>
+                    <div className="h-[220px] rounded-xl border border-black/5 bg-white p-3">
+                      {deviceHealthTrend?.series?.length ? (
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={deviceHealthTrend.series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="2 4" vertical={false} stroke="#dbe4ee" />
+                            <XAxis
+                              dataKey="ts"
+                              axisLine={false}
+                              tickLine={false}
+                              tick={{ fontSize: 11, fill: '#60748a' }}
+                              tickFormatter={(value) => new Date(String(value)).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}
+                              minTickGap={28}
+                            />
+                            <YAxis yAxisId="score" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#60748a' }} domain={[0, 100]} width={32} />
+                            <YAxis yAxisId="alerts" orientation="right" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#60748a' }} width={28} />
+                            <Tooltip
+                              contentStyle={{ borderRadius: 14, borderColor: '#d9e3ef', boxShadow: '0 18px 38px rgba(15,23,42,0.12)', padding: '14px 16px', background: 'rgba(255,255,255,0.96)' }}
+                              labelFormatter={(value) => new Date(String(value)).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US', { hour12: false })}
+                            />
+                            <Area yAxisId="score" type="monotone" dataKey="health_score" name={language === 'zh' ? '健康分' : 'Health score'} stroke="#2563eb" fill="#2563eb1f" strokeWidth={2.1} isAnimationActive={false} />
+                            <Area yAxisId="alerts" type="monotone" dataKey="open_alert_count" name={language === 'zh' ? '开放告警' : 'Open alerts'} stroke="#dc2626" fill="#dc262618" strokeWidth={1.8} isAnimationActive={false} />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-sm text-black/35">
+                          {deviceHealthTrendLoading
+                            ? (language === 'zh' ? '正在拉取设备趋势...' : 'Loading device trend...')
+                            : (language === 'zh' ? '当前没有该设备的健康趋势样本。' : 'No health trend samples are available for this device yet.')}
+                        </div>
+                      )}
+                    </div>
+                    {deviceHealthTrend?.series?.length ? (
+                      <div className="grid grid-cols-1 gap-2 text-xs text-black/55">
+                        {[...deviceHealthTrend.series].slice(-2).reverse().map((point) => (
+                          <div key={point.ts} className="rounded-xl border border-black/5 bg-white px-3 py-2">
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="font-medium text-[#00172D]">{new Date(point.ts).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US', { hour12: false })}</span>
+                              <span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase ${point.health_status === 'critical' ? 'bg-red-100 text-red-700' : point.health_status === 'warning' ? 'bg-amber-100 text-amber-700' : point.health_status === 'healthy' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>{point.health_status}</span>
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-black/45">
+                              <span>{language === 'zh' ? '健康分' : 'Score'} {Number(point.health_score || 0)}</span>
+                              <span>{language === 'zh' ? '开放告警' : 'Open alerts'} {Number(point.open_alert_count || 0)}</span>
+                              <span>{language === 'zh' ? 'Down 接口' : 'Down links'} {Number(point.interface_down_count || 0)}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className="rounded-xl border border-black/5 bg-white p-4 space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-black/35">{language === 'zh' ? '最近一次变化' : 'Latest Change'}</p>
+                        <span className="text-[11px] text-black/40">
+                          {deviceTrendInsights.latest
+                            ? new Date(deviceTrendInsights.latest.ts).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US', { hour12: false })
+                            : (language === 'zh' ? '暂无样本' : 'No samples')}
+                        </span>
+                      </div>
+                      {deviceTrendInsights.latest ? (
+                        <>
+                          <div className="grid grid-cols-2 gap-3 text-xs">
+                            <div className="rounded-xl border border-black/5 bg-black/[0.015] px-3 py-2 text-black/55">
+                              <span className="block text-[10px] font-bold uppercase tracking-[0.14em] text-black/35">{language === 'zh' ? '健康分变化' : 'Score delta'}</span>
+                              <span className={`mt-1 block text-sm font-semibold ${deviceTrendInsights.scoreDelta < 0 ? 'text-red-600' : deviceTrendInsights.scoreDelta > 0 ? 'text-emerald-600' : 'text-[#00172D]'}`}>
+                                {deviceTrendInsights.scoreDelta > 0 ? '+' : ''}{deviceTrendInsights.scoreDelta}
+                              </span>
+                            </div>
+                            <div className="rounded-xl border border-black/5 bg-black/[0.015] px-3 py-2 text-black/55">
+                              <span className="block text-[10px] font-bold uppercase tracking-[0.14em] text-black/35">{language === 'zh' ? '告警数变化' : 'Alert delta'}</span>
+                              <span className={`mt-1 block text-sm font-semibold ${deviceTrendInsights.alertDelta > 0 ? 'text-red-600' : deviceTrendInsights.alertDelta < 0 ? 'text-emerald-600' : 'text-[#00172D]'}`}>
+                                {deviceTrendInsights.alertDelta > 0 ? '+' : ''}{deviceTrendInsights.alertDelta}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                            <div className="rounded-xl border border-red-100 bg-red-50/50 p-3">
+                              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-red-600">{language === 'zh' ? '新增风险原因' : 'New risk reasons'}</p>
+                              <div className="mt-2 space-y-2">
+                                {deviceTrendInsights.addedReasons.length > 0 ? deviceTrendInsights.addedReasons.slice(0, 4).map((reason) => (
+                                  <div key={reason} className="rounded-lg bg-white px-3 py-2 text-xs text-red-700 border border-red-100">{reason}</div>
+                                )) : (
+                                  <div className="rounded-lg border border-dashed border-red-200 bg-white/80 px-3 py-2 text-xs text-red-400">
+                                    {language === 'zh' ? '最近一次采样没有新增风险原因。' : 'No new risk reasons appeared in the latest sample.'}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <div className="rounded-xl border border-emerald-100 bg-emerald-50/50 p-3">
+                              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-emerald-700">{language === 'zh' ? '已缓解原因' : 'Cleared reasons'}</p>
+                              <div className="mt-2 space-y-2">
+                                {deviceTrendInsights.removedReasons.length > 0 ? deviceTrendInsights.removedReasons.slice(0, 4).map((reason) => (
+                                  <div key={reason} className="rounded-lg bg-white px-3 py-2 text-xs text-emerald-700 border border-emerald-100">{reason}</div>
+                                )) : (
+                                  <div className="rounded-lg border border-dashed border-emerald-200 bg-white/80 px-3 py-2 text-xs text-emerald-500">
+                                    {language === 'zh' ? '最近一次采样没有观察到已缓解原因。' : 'No reasons were cleared in the latest sample.'}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="rounded-xl border border-dashed border-black/10 bg-black/[0.015] px-3 py-4 text-sm text-black/40">
+                          {language === 'zh' ? '至少需要一次健康采样后才能比较原因变化。' : 'At least one health sample is required before reason changes can be compared.'}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              </div>
+
+              {/* Interface Monitoring Table */}
+              {viewingDevice.interface_data && viewingDevice.interface_data.length > 0 && (
+                <div className="px-5 pb-5 sm:px-6 sm:pb-6 xl:px-8 xl:pb-6">
+                  <h4 className="mb-3 text-[10px] font-bold uppercase tracking-widest text-black/30">{language === 'zh' ? '接口监控' : 'Interface Monitoring'} ({viewingDevice.interface_data.length})</h4>
+                  <div className="max-h-60 overflow-auto rounded-xl border border-black/5">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-black/[0.02]">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-bold text-[10px] uppercase text-black/40">{language === 'zh' ? '接口' : 'Interface'}</th>
+                          <th className="px-3 py-2 text-left font-bold text-[10px] uppercase text-black/40">{language === 'zh' ? '状态' : 'Status'}</th>
+                          <th className="px-3 py-2 text-right font-bold text-[10px] uppercase text-black/40">{language === 'zh' ? '速率' : 'Speed'}</th>
+                          <th className="px-3 py-2 text-right font-bold text-[10px] uppercase text-black/40">IN</th>
+                          <th className="px-3 py-2 text-right font-bold text-[10px] uppercase text-black/40">OUT</th>
+                          <th className="px-3 py-2 text-right font-bold text-[10px] uppercase text-black/40">{language === 'zh' ? '带宽' : 'BW%'}</th>
+                          <th className="px-3 py-2 text-right font-bold text-[10px] uppercase text-black/40">{language === 'zh' ? '错误' : 'Err'}</th>
+                          <th className="px-3 py-2 text-right font-bold text-[10px] uppercase text-black/40">{language === 'zh' ? '丢包' : 'Drop'}</th>
+                          <th className="px-3 py-2 text-left font-bold text-[10px] uppercase text-black/40">{language === 'zh' ? '描述' : 'Desc'}</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-black/5">
+                        {viewingDevice.interface_data.map((intf, i) => {
+                          const fmtBytes = (b: number) => b > 1073741824 ? `${(b / 1073741824).toFixed(1)} GB` : b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : b > 1024 ? `${(b / 1024).toFixed(0)} KB` : `${b} B`;
+                          const fmtRate = (bps?: number) => {
+                            if (bps == null || !Number.isFinite(bps) || bps < 0) return '-';
+                            if (bps >= 1_000_000_000) return `${(bps / 1_000_000_000).toFixed(2)} Gbps`;
+                            if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(2)} Mbps`;
+                            if (bps >= 1_000) return `${(bps / 1_000).toFixed(1)} Kbps`;
+                            return `${bps.toFixed(0)} bps`;
+                          };
+                          const totalErr = (intf.in_errors || 0) + (intf.out_errors || 0);
+                          const totalDrop = (intf.in_discards || 0) + (intf.out_discards || 0);
+                          const maxBw = (intf.bw_in_pct != null || intf.bw_out_pct != null) ? Math.max(intf.bw_in_pct || 0, intf.bw_out_pct || 0) : null;
+                          return (
+                            <tr key={i} className="hover:bg-black/[0.01]">
+                              <td className="px-3 py-1.5 font-mono text-[11px]">{intf.name}</td>
+                              <td className="px-3 py-1.5">
+                                <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase ${intf.status === 'up' ? 'text-emerald-600' : 'text-red-500'}`}>
+                                  <span className={`h-1.5 w-1.5 rounded-full ${intf.status === 'up' ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                                  {intf.status}
+                                </span>
+                              </td>
+                              <td className="px-3 py-1.5 text-right text-black/60">{intf.speed_mbps > 0 ? `${intf.speed_mbps >= 1000 ? `${intf.speed_mbps / 1000}G` : `${intf.speed_mbps}M`}` : '-'}</td>
+                              <td className="px-3 py-1.5 text-right font-mono text-[10px]">
+                                <div className="text-blue-600">{fmtRate(intf.in_bps)}</div>
+                                <div className="text-black/30">{fmtBytes(intf.in_octets || 0)}</div>
+                              </td>
+                              <td className="px-3 py-1.5 text-right font-mono text-[10px]">
+                                <div className="text-orange-600">{fmtRate(intf.out_bps)}</div>
+                                <div className="text-black/30">{fmtBytes(intf.out_octets || 0)}</div>
+                              </td>
+                              <td className="px-3 py-1.5 text-right font-mono text-[10px]">
+                                {maxBw != null ? <span className={maxBw > 80 ? 'text-red-600' : maxBw > 50 ? 'text-orange-600' : 'text-black/50'}>{maxBw.toFixed(1)}%</span> : <span className="text-black/20">-</span>}
+                              </td>
+                              <td className="px-3 py-1.5 text-right font-mono text-[10px]">
+                                <span className={totalErr > 0 ? 'text-red-600 font-bold' : 'text-black/30'}>{totalErr}</span>
+                              </td>
+                              <td className="px-3 py-1.5 text-right font-mono text-[10px]">
+                                <span className={totalDrop > 0 ? 'text-orange-600 font-bold' : 'text-black/30'}>{totalDrop}</span>
+                              </td>
+                              <td className="max-w-[120px] truncate px-3 py-1.5 text-black/40">{intf.description || '-'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="shrink-0 border-t border-black/5 bg-black/[0.01] px-5 py-4 sm:px-6">
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div className="flex flex-wrap gap-3">
                 <button 
-                  onClick={() => handleTestConnection(viewingDevice)}
+                  onClick={() => handleTestConnection(viewingDevice, 'quick')}
                   disabled={isTestingConnection}
                   className="px-6 py-2 bg-blue-50 text-blue-600 rounded-xl text-sm font-medium hover:bg-blue-100 transition-all flex items-center gap-2 disabled:opacity-50"
                 >
                   <Activity size={16} />
-                  {isTestingConnection ? 'Testing...' : t('testConnection')}
+                  {isTestingConnection ? 'Testing...' : (language === 'zh' ? '快速连通性' : 'Reachability Check')}
+                </button>
+                <button 
+                  onClick={() => handleTestConnection(viewingDevice, 'deep')}
+                  disabled={isTestingConnection}
+                  className="px-6 py-2 bg-violet-50 text-violet-700 rounded-xl text-sm font-medium hover:bg-violet-100 transition-all flex items-center gap-2 disabled:opacity-50"
+                >
+                  <ShieldCheck size={16} />
+                  {isTestingConnection ? 'Testing...' : (language === 'zh' ? 'SSH 登录校验' : 'SSH Login Check')}
                 </button>
                 <button
                   onClick={() => handleSnmpTest(viewingDevice.id)}
@@ -10720,13 +11321,16 @@ const App: React.FC = () => {
                   <Zap size={16} />
                   Go to Automation
                 </button>
+                </div>
+                <div className="flex justify-end">
+                  <button 
+                    onClick={() => setShowDetailsModal(false)}
+                    className="px-8 py-2 bg-black text-white rounded-xl text-sm font-medium hover:bg-black/80 transition-all shadow-lg shadow-black/20"
+                  >
+                    {t('close')}
+                  </button>
+                </div>
               </div>
-              <button 
-                onClick={() => setShowDetailsModal(false)}
-                className="px-8 py-2 bg-black text-white rounded-xl text-sm font-medium hover:bg-black/80 transition-all shadow-lg shadow-black/20"
-              >
-                {t('close')}
-              </button>
             </div>
           </motion.div>
         </div>
@@ -10743,7 +11347,7 @@ const App: React.FC = () => {
           >
             <div className="p-5 border-b border-black/5 flex justify-between items-center">
               <h3 className="text-sm font-semibold">SNMP Test Result</h3>
-              <button onClick={() => setShowSnmpTestResult(false)} className="text-black/30 hover:text-black">
+              <button onClick={() => setShowSnmpTestResult(false)} title={language === 'zh' ? '关闭 SNMP 测试结果' : 'Close SNMP test result'} className="text-black/30 hover:text-black">
                 <X size={18} />
               </button>
             </div>
@@ -10905,6 +11509,7 @@ const App: React.FC = () => {
                   <label className="text-[10px] font-bold uppercase tracking-widest text-black/35">{language === 'zh' ? '状态' : 'Status'}</label>
                   <select
                     value={selectedFinding.status}
+                    title={language === 'zh' ? '审计项状态' : 'Finding status'}
                     onChange={(e) => setSelectedFinding((prev) => prev ? { ...prev, status: e.target.value } : prev)}
                     className="mt-2 w-full px-3 py-2 rounded-xl border border-black/10 text-sm outline-none bg-white"
                   >
@@ -10918,6 +11523,7 @@ const App: React.FC = () => {
                   <label className="text-[10px] font-bold uppercase tracking-widest text-black/35">{language === 'zh' ? '负责人' : 'Owner'}</label>
                   <input
                     value={selectedFinding.owner || ''}
+                    title={language === 'zh' ? '负责人' : 'Owner'}
                     onChange={(e) => setSelectedFinding((prev) => prev ? { ...prev, owner: e.target.value } : prev)}
                     className="mt-2 w-full px-3 py-2 rounded-xl border border-black/10 text-sm outline-none"
                     placeholder={language === 'zh' ? '例如：SecOps / NOC' : 'e.g. SecOps / NOC'}
@@ -10935,6 +11541,7 @@ const App: React.FC = () => {
                 <label className="text-[10px] font-bold uppercase tracking-widest text-black/35">{language === 'zh' ? '备注' : 'Note'}</label>
                 <textarea
                   value={selectedFinding.note || ''}
+                  title={language === 'zh' ? '备注' : 'Note'}
                   onChange={(e) => setSelectedFinding((prev) => prev ? { ...prev, note: e.target.value } : prev)}
                   className="mt-2 w-full min-h-[120px] px-4 py-3 rounded-2xl border border-black/10 text-sm outline-none resize-y"
                   placeholder={language === 'zh' ? '记录处理过程、风险接受依据或整改计划。' : 'Document triage notes, risk acceptance rationale, or remediation plan.'}

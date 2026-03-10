@@ -12,7 +12,7 @@ THRESHOLD_METRICS = {'cpu', 'memory', 'interface_util'}
 SCOPE_TYPES = {'global', 'site', 'device', 'interface'}
 SCOPE_MATCH_MODES = {'exact', 'contains', 'prefix', 'glob'}
 SCOPE_PRIORITY = {'global': 0, 'site': 1, 'device': 2, 'interface': 3}
-ALLOWED_SEVERITIES = {'critical', 'major', 'warning', 'high', 'medium', 'low', 'info'}
+ALLOWED_SEVERITIES = {'critical', 'major', 'warning'}
 
 
 def _utc_now_iso() -> str:

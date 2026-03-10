@@ -1,8 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Copy, Eye, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
+import { Check, Copy, Eye, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
-import type { AlertMaintenanceListResponse, AlertMaintenanceWindow, Device, User } from '../types';
+import type {
+  AlertMaintenanceCondition,
+  AlertMaintenanceConditionField,
+  AlertMaintenanceConditionLogic,
+  AlertMaintenanceConditionOperator,
+  AlertMaintenanceListResponse,
+  AlertMaintenanceWindow,
+  Device,
+  User,
+} from '../types';
 import Pagination from '../components/Pagination';
 import {
   alertAccentButtonClass,
@@ -15,16 +24,84 @@ import {
   alertTableActionBarClass,
   alertTableActionButtonClass,
   alertTableActionDangerButtonClass,
+  ALERT_SEVERITY_OPTIONS,
   AlertPageCommonProps,
+  buildEmptyMaintenanceCondition,
+  buildDefaultMaintenanceConditions,
   buildDefaultMaintenanceForm,
   formatTs,
   maintenanceBadgeClass,
   maintenanceStatusLabel,
   MaintenanceFormState,
+  severityLabel,
   useAlertOverlayDismiss,
 } from './alertManagementShared';
 
 type RuntimeFilter = 'all' | AlertMaintenanceWindow['runtime_status'];
+
+type SelectionMode = MaintenanceFormState['selection_mode'];
+
+const CONDITION_LOGIC_OPTIONS: Array<{ value: AlertMaintenanceConditionLogic; zh: string; en: string }> = [
+  { value: 'all', zh: '满足全部', en: 'Match All' },
+  { value: 'any', zh: '满足任意', en: 'Match Any' },
+  { value: 'none', zh: '都不满足', en: 'Match None' },
+];
+
+const CONDITION_OPERATOR_OPTIONS: Array<{ value: AlertMaintenanceConditionOperator; zh: string; en: string }> = [
+  { value: 'contains', zh: '包含', en: 'Contains' },
+  { value: 'equals', zh: '等于', en: 'Equals' },
+  { value: 'not_contains', zh: '不包含', en: 'Does Not Contain' },
+  { value: 'not_equals', zh: '不等于', en: 'Not Equal' },
+  { value: 'regex', zh: '正则表达式', en: 'Regex' },
+];
+
+const fieldLabel = (field: AlertMaintenanceConditionField, language: string) => {
+  switch (field) {
+    case 'alert_description':
+      return language === 'zh' ? '告警描述' : 'Alert Description';
+    case 'alert_ip':
+      return language === 'zh' ? '告警IP' : 'Alert IP';
+    case 'alert_level':
+      return language === 'zh' ? '告警等级' : 'Alert Level';
+    default:
+      return field;
+  }
+};
+
+const fieldPlaceholder = (field: AlertMaintenanceConditionField, language: string) => {
+  switch (field) {
+    case 'alert_description':
+      return language === 'zh' ? '例如 Interface Down / CPU High' : 'Example: Interface Down / CPU High';
+    case 'alert_ip':
+      return language === 'zh' ? '例如 10.0.0.5' : 'Example: 10.0.0.5';
+    case 'alert_level':
+      return language === 'zh' ? '例如 critical / major / warning' : 'Example: critical / major / warning';
+    default:
+      return '';
+  }
+};
+
+const normalizeConditionsForForm = (source?: AlertMaintenanceCondition[] | null) => {
+  const items = (source || [])
+    .filter((item): item is AlertMaintenanceCondition => Boolean(item?.field && item?.operator))
+    .map((item) => ({
+      field: item.field,
+      operator: item.operator,
+      value: item.value || '',
+    }));
+  return items.length ? items : [buildEmptyMaintenanceCondition()];
+};
+
+const conditionSummary = (condition: AlertMaintenanceCondition, language: string) => {
+  const operator = CONDITION_OPERATOR_OPTIONS.find((item) => item.value === condition.operator);
+  const operatorLabel = operator ? (language === 'zh' ? operator.zh : operator.en) : condition.operator;
+  return `${fieldLabel(condition.field, language)} ${operatorLabel} ${condition.value || '--'}`;
+};
+
+const conditionLogicLabel = (logic: AlertMaintenanceConditionLogic | undefined, language: string) => {
+  const option = CONDITION_LOGIC_OPTIONS.find((item) => item.value === logic);
+  return option ? (language === 'zh' ? option.zh : option.en) : (language === 'zh' ? '满足全部' : 'Match All');
+};
 
 const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, currentUsername, showToast }) => {
   const location = useLocation();
@@ -38,6 +115,11 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<RuntimeFilter>('all');
   const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
+  const [showAssetPicker, setShowAssetPicker] = useState(false);
+  const [assetSearchQuery, setAssetSearchQuery] = useState('');
+  const [assetSearchResults, setAssetSearchResults] = useState<Device[]>([]);
+  const [assetSearchLoading, setAssetSearchLoading] = useState(false);
+  const [assetPickerSelection, setAssetPickerSelection] = useState<string[]>([]);
   const [maintenanceSubmitting, setMaintenanceSubmitting] = useState(false);
   const [maintenanceForm, setMaintenanceForm] = useState<MaintenanceFormState>(buildDefaultMaintenanceForm(null));
   const [maintenanceCancelingId, setMaintenanceCancelingId] = useState<string | null>(null);
@@ -48,19 +130,106 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
     [selectedWindowId, windows],
   );
 
-  const deviceOptions = useMemo(
-    () => devices.filter((device) => Boolean(device.ip_address)).sort((left, right) => left.hostname.localeCompare(right.hostname)),
+  const assetByIp = useMemo(
+    () => new Map(devices.filter((device) => Boolean(device.ip_address)).map((device) => [device.ip_address, device])),
     [devices],
   );
 
-  const assetByIp = useMemo(
-    () => new Map(deviceOptions.map((device) => [device.ip_address, device])),
-    [deviceOptions],
+  const selectedAssets = useMemo(
+    () => maintenanceForm.target_ips.map((ip) => assetByIp.get(ip)).filter(Boolean) as Device[],
+    [assetByIp, maintenanceForm.target_ips],
   );
 
-  const selectedAsset = maintenanceForm.target_ip ? assetByIp.get(maintenanceForm.target_ip) || null : null;
+  const pickerSelectedAssets = useMemo(
+    () => assetPickerSelection.map((ip) => assetByIp.get(ip)).filter(Boolean) as Device[],
+    [assetByIp, assetPickerSelection],
+  );
 
-  const selectedWindowAsset = selectedWindow?.target_ip ? assetByIp.get(selectedWindow.target_ip) || null : null;
+  const mergeDeviceCache = (items: Device[]) => {
+    if (!items.length) return;
+    setDevices((prev) => {
+      const merged = new Map(prev.map((device) => [device.ip_address || device.id, device]));
+      items.forEach((device) => {
+        merged.set(device.ip_address || device.id, device);
+      });
+      return Array.from(merged.values());
+    });
+  };
+
+  const updateMaintenanceField = <K extends keyof MaintenanceFormState>(key: K, value: MaintenanceFormState[K]) => {
+    setMaintenanceForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const updateSelectionMode = (mode: SelectionMode) => {
+    setMaintenanceForm((prev) => ({
+      ...prev,
+      selection_mode: mode,
+      target_ip: mode === 'resources' ? (prev.target_ips[0] || prev.target_ip) : prev.target_ip,
+    }));
+  };
+
+  const updateCondition = (index: number, patch: Partial<AlertMaintenanceCondition>) => {
+    setMaintenanceForm((prev) => ({
+      ...prev,
+      match_conditions: prev.match_conditions.map((condition, conditionIndex) => (
+        conditionIndex === index ? { ...condition, ...patch } : condition
+      )),
+    }));
+  };
+
+  const addConditionRow = () => {
+    setMaintenanceForm((prev) => ({
+      ...prev,
+      match_conditions: [...prev.match_conditions, buildEmptyMaintenanceCondition()],
+    }));
+  };
+
+  const removeConditionRow = (index: number) => {
+    setMaintenanceForm((prev) => {
+      const nextConditions = prev.match_conditions.filter((_, conditionIndex) => conditionIndex !== index);
+      return {
+        ...prev,
+        match_conditions: nextConditions.length ? nextConditions : [buildEmptyMaintenanceCondition()],
+      };
+    });
+  };
+
+  const applySelectedAssets = (targetIps: string[]) => {
+    const unique = Array.from(new Set(targetIps.map((ip) => ip.trim()).filter(Boolean)));
+    setMaintenanceForm((prev) => ({
+      ...prev,
+      target_ips: unique,
+      target_ip: unique[0] || '',
+    }));
+  };
+
+  const ensureDeviceLoaded = async (targetIp?: string | null) => {
+    const target = targetIp?.trim();
+    if (!target || assetByIp.has(target)) return;
+    try {
+      const params = new URLSearchParams({
+        mode: 'light',
+        page: '1',
+        page_size: '20',
+        sort_key: 'hostname',
+        sort_direction: 'asc',
+        search: target,
+      });
+      const resp = await fetch(`/api/devices?${params.toString()}`);
+      if (!resp.ok) throw new Error('Failed to load device');
+      const data = await resp.json();
+      const items = Array.isArray(data) ? data : (Array.isArray(data.items) ? data.items : []);
+      mergeDeviceCache(items);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const ensureDevicesLoaded = async (targetIps: string[]) => {
+    const missing = targetIps.filter((ip) => ip && !assetByIp.has(ip));
+    if (!missing.length) return;
+    await Promise.all(missing.map((ip) => ensureDeviceLoaded(ip)));
+  };
 
   const loadUsers = async () => {
     try {
@@ -72,22 +241,26 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
     }
   };
 
-  const loadDevices = async () => {
+  const searchDevices = async (keyword: string) => {
     try {
       const params = new URLSearchParams({
         mode: 'light',
         page: '1',
-        page_size: '200',
+        page_size: '50',
         sort_key: 'hostname',
         sort_direction: 'asc',
+        search: keyword,
       });
       const resp = await fetch(`/api/devices?${params.toString()}`);
       if (!resp.ok) throw new Error('Failed to load devices');
       const data = await resp.json();
-      setDevices(Array.isArray(data) ? data : (Array.isArray(data.items) ? data.items : []));
+      const items = Array.isArray(data) ? data : (Array.isArray(data.items) ? data.items : []);
+      setAssetSearchResults(items);
+      mergeDeviceCache(items);
     } catch (error) {
       console.error(error);
-      showToast(language === 'zh' ? '加载资产列表失败' : 'Failed to load devices', 'error');
+      setAssetSearchResults([]);
+      showToast(language === 'zh' ? '搜索资产失败' : 'Failed to search devices', 'error');
     }
   };
 
@@ -117,7 +290,6 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
   };
 
   useEffect(() => {
-    void loadDevices();
     void loadUsers();
   }, []);
 
@@ -128,30 +300,91 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     if (params.get('open') !== '1') return;
+
     const next = buildDefaultMaintenanceForm(null);
     next.name = params.get('name') || next.name;
-    next.target_ip = params.get('target_ip') || next.target_ip;
-    next.title_pattern = params.get('title_pattern') || next.title_pattern;
-    next.message_pattern = params.get('message_pattern') || next.message_pattern;
+
+    const targetIp = params.get('target_ip') || '';
+    const titlePattern = params.get('title_pattern') || '';
+    const messagePattern = params.get('message_pattern') || '';
+
+    if (targetIp && !titlePattern && !messagePattern) {
+      next.selection_mode = 'resources';
+      next.target_ips = [targetIp];
+      next.target_ip = targetIp;
+    } else {
+      next.selection_mode = 'conditions';
+      next.condition_logic = 'all';
+      next.match_conditions = normalizeConditionsForForm([
+        titlePattern ? { field: 'alert_description', operator: 'contains', value: titlePattern } : null,
+        messagePattern ? { field: 'alert_description', operator: 'contains', value: messagePattern } : null,
+        targetIp ? { field: 'alert_ip', operator: 'equals', value: targetIp } : null,
+      ].filter(Boolean) as AlertMaintenanceCondition[]);
+    }
+
     setMaintenanceForm(next);
     setShowMaintenanceModal(true);
   }, [location.search]);
 
-  const updateMaintenanceField = <K extends keyof MaintenanceFormState>(key: K, value: MaintenanceFormState[K]) => {
-    setMaintenanceForm((prev) => ({ ...prev, [key]: value }));
-  };
+  useEffect(() => {
+    if (!showAssetPicker) {
+      setAssetSearchLoading(false);
+      return;
+    }
+
+    const keyword = assetSearchQuery.trim();
+    if (!keyword) {
+      setAssetSearchResults([]);
+      setAssetSearchLoading(false);
+      return;
+    }
+
+    let active = true;
+    setAssetSearchLoading(true);
+    const timer = window.setTimeout(() => {
+      void searchDevices(keyword).finally(() => {
+        if (active) setAssetSearchLoading(false);
+      });
+    }, 250);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [assetSearchQuery, showAssetPicker]);
+
+  useEffect(() => {
+    void ensureDevicesLoaded(maintenanceForm.target_ips);
+  }, [maintenanceForm.target_ips]);
+
+  useEffect(() => {
+    const windowIps = windows.flatMap((item) => item.target_ips || (item.target_ip ? [item.target_ip] : []));
+    void ensureDevicesLoaded(windowIps);
+  }, [windows]);
 
   const closeMaintenanceModal = () => setShowMaintenanceModal(false);
+  const closeAssetPicker = () => {
+    setShowAssetPicker(false);
+    setAssetSearchQuery('');
+    setAssetSearchResults([]);
+  };
   const closeSelectedWindow = () => setSelectedWindowId(null);
 
   useAlertOverlayDismiss(showMaintenanceModal, closeMaintenanceModal);
+  useAlertOverlayDismiss(showAssetPicker, closeAssetPicker);
   useAlertOverlayDismiss(Boolean(selectedWindow), closeSelectedWindow);
 
   const handleCreateMaintenance = async () => {
-    if (!maintenanceForm.target_ip.trim()) {
-      showToast(language === 'zh' ? '请先填写维护对象 IP' : 'Target IP is required', 'error');
+    const activeConditions = maintenanceForm.match_conditions.filter((item) => item.value.trim());
+    if (maintenanceForm.selection_mode === 'resources' && !maintenanceForm.target_ips.length) {
+      showToast(language === 'zh' ? '请至少选择一个资源对象' : 'Select at least one resource object', 'error');
       return;
     }
+    if (maintenanceForm.selection_mode === 'conditions' && !activeConditions.length) {
+      showToast(language === 'zh' ? '请至少填写一个条件定义' : 'Add at least one condition', 'error');
+      return;
+    }
+
     setMaintenanceSubmitting(true);
     try {
       const toIso = (value: string) => {
@@ -159,15 +392,17 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
         if (Number.isNaN(dt.getTime())) return value;
         return dt.toISOString();
       };
+      const payload = {
+        ...maintenanceForm,
+        target_ip: maintenanceForm.target_ips[0] || '',
+        starts_at: toIso(maintenanceForm.starts_at),
+        ends_at: toIso(maintenanceForm.ends_at),
+        created_by: currentUsername,
+      };
       const resp = await fetch('/api/alerts/maintenance-windows', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...maintenanceForm,
-          starts_at: toIso(maintenanceForm.starts_at),
-          ends_at: toIso(maintenanceForm.ends_at),
-          created_by: currentUsername,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) throw new Error(data.detail || 'Failed to create maintenance window');
@@ -223,10 +458,13 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
   const handleCopyWindow = (window: AlertMaintenanceWindow) => {
     const next = buildDefaultMaintenanceForm(null);
     next.name = language === 'zh' ? `${window.name} 副本` : `${window.name} Copy`;
-    next.target_ip = window.target_ip || '';
-    next.title_pattern = window.title_pattern || '';
-    next.message_pattern = window.message_pattern || '';
+    next.selection_mode = window.selection_mode || 'resources';
+    next.condition_logic = window.condition_logic || 'all';
+    next.target_ips = window.target_ips || (window.target_ip ? [window.target_ip] : []);
+    next.target_ip = next.target_ips[0] || window.target_ip || '';
+    next.match_conditions = normalizeConditionsForForm(window.match_conditions);
     next.reason = window.reason || '';
+    next.notify_user_ids = window.notify_user_ids || [];
 
     setMaintenanceForm(next);
     setSelectedWindowId(null);
@@ -236,7 +474,58 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
 
   const openCreate = () => {
     setMaintenanceForm(buildDefaultMaintenanceForm(null));
+    setAssetPickerSelection([]);
+    setAssetSearchQuery('');
+    setAssetSearchResults([]);
     setShowMaintenanceModal(true);
+  };
+
+  const openAssetPicker = () => {
+    setAssetPickerSelection(maintenanceForm.target_ips);
+    setAssetSearchQuery('');
+    setAssetSearchResults([]);
+    setShowAssetPicker(true);
+  };
+
+  const toggleAssetSelection = (targetIp: string) => {
+    setAssetPickerSelection((prev) => (
+      prev.includes(targetIp) ? prev.filter((item) => item !== targetIp) : [...prev, targetIp]
+    ));
+  };
+
+  const confirmAssetSelection = () => {
+    applySelectedAssets(assetPickerSelection);
+    closeAssetPicker();
+    showToast(language === 'zh' ? '资源对象已更新' : 'Resource objects updated', 'success');
+  };
+
+  const removeSelectedAsset = (targetIp: string) => {
+    applySelectedAssets(maintenanceForm.target_ips.filter((item) => item !== targetIp));
+  };
+
+  const renderWindowScope = (window: AlertMaintenanceWindow) => {
+    if ((window.selection_mode || 'resources') === 'resources') {
+      const targets = window.target_ips || (window.target_ip ? [window.target_ip] : []);
+      const firstTarget = targets[0] || '--';
+      const firstAsset = assetByIp.get(firstTarget);
+      return (
+        <div>
+          <div className="font-mono">{firstTarget}</div>
+          <div className="mt-1 text-xs text-black/40">
+            {firstAsset?.hostname || (targets.length > 1 ? `+${targets.length - 1}` : '--')}
+          </div>
+        </div>
+      );
+    }
+
+    const activeConditions = (window.match_conditions || []).filter((item) => item.value.trim());
+    return (
+      <div className="space-y-1">
+        <div className="text-xs font-semibold text-[#0b2340]">{conditionLogicLabel(window.condition_logic, language)}</div>
+        <div className="text-xs text-black/45">{activeConditions[0] ? conditionSummary(activeConditions[0], language) : '--'}</div>
+        {activeConditions.length > 1 ? <div className="text-[11px] text-black/35">+{activeConditions.length - 1}</div> : null}
+      </div>
+    );
   };
 
   return (
@@ -251,7 +540,7 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
               {language === 'zh' ? '当前维护期' : 'Current Maintenance Windows'}
             </h2>
             <p className="mt-2 text-sm text-black/50">
-              {language === 'zh' ? '只保留维护窗列表、分页和必要操作。' : 'A compact page with the maintenance window list, pagination, and essential actions.'}
+              {language === 'zh' ? '维护期支持按条件定义或按资源对象批量覆盖。' : 'Maintenance windows can now target alerts by conditions or by multiple resource objects.'}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -275,7 +564,7 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
                 setPage(1);
                 setSearchQuery(e.target.value);
               }}
-              placeholder={language === 'zh' ? '搜索名称、IP、原因、创建人' : 'Search name, IP, reason, creator'}
+              placeholder={language === 'zh' ? '搜索名称、资源IP、条件、原因、创建人' : 'Search name, resource IP, conditions, reason, creator'}
               className={`${alertInputClass} rounded-xl py-3 pl-9 pr-3`}
             />
           </label>
@@ -301,7 +590,7 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
             <thead>
               <tr className="border-y border-black/5 bg-[#f8fafc] text-[11px] font-bold uppercase tracking-[0.16em] text-black/40">
                 <th className="px-5 py-3">{language === 'zh' ? '维护名称' : 'Name'}</th>
-                <th className="px-5 py-3">IP</th>
+                <th className="px-5 py-3">{language === 'zh' ? '作用范围' : 'Scope'}</th>
                 <th className="px-5 py-3">{language === 'zh' ? '开始时间' : 'Start Time'}</th>
                 <th className="px-5 py-3">{language === 'zh' ? '结束时间' : 'End Time'}</th>
                 <th className="px-5 py-3">{language === 'zh' ? '状态' : 'Status'}</th>
@@ -325,10 +614,7 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
                         <p className="mt-1 line-clamp-1 text-xs text-black/45">{window.reason || (language === 'zh' ? '未填写原因' : 'No reason')}</p>
                       </button>
                     </td>
-                    <td className="px-5 py-4 align-top text-sm text-black/60">
-                      <div className="font-mono">{window.target_ip}</div>
-                      <div className="mt-1 text-xs text-black/40">{assetByIp.get(window.target_ip)?.hostname || '--'}</div>
-                    </td>
+                    <td className="px-5 py-4 align-top text-sm text-black/60">{renderWindowScope(window)}</td>
                     <td className="px-5 py-4 align-top text-sm text-black/60">{formatTs(window.starts_at)}</td>
                     <td className="px-5 py-4 align-top text-sm text-black/60">{formatTs(window.ends_at)}</td>
                     <td className="px-5 py-4 align-top">
@@ -399,7 +685,7 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
             }}
           >
             <motion.div
-              className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-3xl bg-white shadow-2xl"
+              className="max-h-[90vh] w-full max-w-4xl overflow-auto rounded-3xl bg-white shadow-2xl"
               initial={{ y: 18, opacity: 0, scale: 0.98 }}
               animate={{ y: 0, opacity: 1, scale: 1 }}
               exit={{ y: 18, opacity: 0, scale: 0.98 }}
@@ -408,7 +694,7 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
               <div className="flex items-start justify-between gap-4 border-b border-black/5 px-6 py-5">
                 <div>
                   <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-black/35">{language === 'zh' ? '新建维护期' : 'New Maintenance Window'}</p>
-                  <h3 className="mt-2 text-xl font-semibold text-[#0b2340]">{language === 'zh' ? '填写基础信息后直接创建' : 'Create a window with the basic fields only'}</h3>
+                  <h3 className="mt-2 text-xl font-semibold text-[#0b2340]">{language === 'zh' ? '按条件定义或资源对象创建维护期' : 'Create a maintenance window by conditions or resource objects'}</h3>
                 </div>
                 <button title={language === 'zh' ? '关闭弹层' : 'Close modal'} onClick={closeMaintenanceModal} className="rounded-xl border border-black/10 p-2 text-black/55 hover:bg-black/[0.03]">
                   <X size={16} />
@@ -421,32 +707,165 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
                     <span>{language === 'zh' ? '维护名称' : 'Window Name'}</span>
                     <input value={maintenanceForm.name} onChange={(e) => updateMaintenanceField('name', e.target.value)} className={`${alertInputClass} mt-2 rounded-xl px-3 py-2`} />
                   </label>
-                  <label className="text-sm text-black/65">
-                    <span>{language === 'zh' ? '资产对象' : 'Asset Target'}</span>
-                    <select
-                      value={maintenanceForm.target_ip}
-                      onChange={(e) => updateMaintenanceField('target_ip', e.target.value)}
-                      className="mt-2 w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-[#0b2340] outline-none"
-                    >
-                      <option value="">{language === 'zh' ? '请选择资产 IP' : 'Select asset IP'}</option>
-                      {maintenanceForm.target_ip && !selectedAsset ? (
-                        <option value={maintenanceForm.target_ip}>{maintenanceForm.target_ip}</option>
-                      ) : null}
-                      {deviceOptions.map((device) => (
-                        <option key={device.id} value={device.ip_address}>
-                          {`${device.hostname} / ${device.ip_address}`}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-2 text-xs text-black/40">
-                      {selectedAsset
-                        ? (language === 'zh'
-                          ? `来自资产信息：${selectedAsset.hostname} / ${selectedAsset.site || '未分组'}`
-                          : `From inventory: ${selectedAsset.hostname} / ${selectedAsset.site || 'Unassigned'}`)
-                        : (language === 'zh' ? '维护对象 IP 从资产信息中选择。' : 'Target IP is selected from inventory.')}
-                    </p>
-                  </label>
+                  <div className="text-sm text-black/65">
+                    <span>{language === 'zh' ? '覆盖方式' : 'Targeting Mode'}</span>
+                    <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => updateSelectionMode('conditions')}
+                        className={`rounded-2xl border px-4 py-3 text-left transition ${maintenanceForm.selection_mode === 'conditions' ? 'border-[#0f2743] bg-[#f4f8fc] text-[#0b2340]' : 'border-black/10 bg-white text-black/55 hover:bg-black/[0.02]'}`}
+                      >
+                        <p className="text-sm font-semibold">{language === 'zh' ? '条件定义' : 'Condition Rules'}</p>
+                        <p className="mt-1 text-xs text-black/45">{language === 'zh' ? '按多行条件定义匹配范围' : 'Build the scope with multiple condition rows'}</p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateSelectionMode('resources')}
+                        className={`rounded-2xl border px-4 py-3 text-left transition ${maintenanceForm.selection_mode === 'resources' ? 'border-[#0f2743] bg-[#f4f8fc] text-[#0b2340]' : 'border-black/10 bg-white text-black/55 hover:bg-black/[0.02]'}`}
+                      >
+                        <p className="text-sm font-semibold">{language === 'zh' ? '资源对象' : 'Resource Objects'}</p>
+                        <p className="mt-1 text-xs text-black/45">{language === 'zh' ? '按资源勾选多个设备' : 'Select multiple devices by checkbox'}</p>
+                      </button>
+                    </div>
+                  </div>
                 </div>
+
+                {maintenanceForm.selection_mode === 'conditions' ? (
+                  <div className="rounded-[24px] border border-black/8 bg-[#fbfcfe] p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-[#0b2340]">{language === 'zh' ? '条件定义' : 'Condition Rules'}</p>
+                        <p className="mt-1 text-xs text-black/45">{language === 'zh' ? '每一行代表一个条件；组合逻辑会作用于整组条件。' : 'Each row is a single condition. The condition logic applies to the full set.'}</p>
+                      </div>
+                      <div className="flex min-w-[320px] flex-wrap items-end justify-end gap-3">
+                        <label className="min-w-[180px] text-sm text-black/60">
+                          <span>{language === 'zh' ? '组合逻辑' : 'Condition Logic'}</span>
+                          <select
+                            value={maintenanceForm.condition_logic}
+                            onChange={(e) => updateMaintenanceField('condition_logic', e.target.value as AlertMaintenanceConditionLogic)}
+                            className="mt-2 w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-[#0b2340] outline-none"
+                          >
+                            {CONDITION_LOGIC_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>{language === 'zh' ? option.zh : option.en}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <button type="button" onClick={addConditionRow} className={alertSecondaryButtonClass}>
+                          <Plus size={14} />
+                          {language === 'zh' ? '添加条件' : 'Add Condition'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="overflow-hidden rounded-2xl border border-black/8 bg-white">
+                      <div className="hidden grid-cols-[160px_180px_minmax(0,1fr)_44px] gap-3 border-b border-black/6 bg-[#f7f9fc] px-4 py-3 text-[11px] font-bold uppercase tracking-[0.14em] text-black/35 lg:grid">
+                        <span>{language === 'zh' ? '字段' : 'Field'}</span>
+                        <span>{language === 'zh' ? '运算符' : 'Operator'}</span>
+                        <span>{language === 'zh' ? '匹配值' : 'Value'}</span>
+                        <span className="text-center">#</span>
+                      </div>
+                      {maintenanceForm.match_conditions.map((condition, index) => (
+                        <div key={`${condition.field}-${index}`} className="grid grid-cols-1 gap-3 border-t border-black/6 px-4 py-4 first:border-t-0 lg:grid-cols-[160px_180px_minmax(0,1fr)_44px] lg:items-center">
+                          <label className="text-sm text-black/60 lg:text-[#0b2340]">
+                            <span className="mb-2 block lg:hidden">{language === 'zh' ? '字段' : 'Field'}</span>
+                            <select
+                              value={condition.field}
+                              onChange={(e) => updateCondition(index, { field: e.target.value as AlertMaintenanceConditionField })}
+                              className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-[#0b2340] outline-none"
+                            >
+                              <option value="alert_description">{fieldLabel('alert_description', language)}</option>
+                              <option value="alert_ip">{fieldLabel('alert_ip', language)}</option>
+                              <option value="alert_level">{fieldLabel('alert_level', language)}</option>
+                            </select>
+                          </label>
+                          <label className="text-sm text-black/60 lg:text-[#0b2340]">
+                            <span className="mb-2 block lg:hidden">{language === 'zh' ? '运算符' : 'Operator'}</span>
+                            <select
+                              value={condition.operator}
+                              onChange={(e) => updateCondition(index, { operator: e.target.value as AlertMaintenanceConditionOperator })}
+                              className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-[#0b2340] outline-none"
+                            >
+                              {CONDITION_OPERATOR_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>{language === 'zh' ? option.zh : option.en}</option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="text-sm text-black/60 lg:text-[#0b2340]">
+                            <span className="mb-2 block lg:hidden">{language === 'zh' ? '匹配值' : 'Value'}</span>
+                            {condition.field === 'alert_level' ? (
+                              <select
+                                value={condition.value}
+                                onChange={(e) => updateCondition(index, { value: e.target.value })}
+                                className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-[#0b2340] outline-none"
+                              >
+                                <option value="">{language === 'zh' ? '选择告警等级' : 'Select Severity'}</option>
+                                {ALERT_SEVERITY_OPTIONS.map((severity) => (
+                                  <option key={severity} value={severity}>{severityLabel(severity, language)}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                value={condition.value}
+                                onChange={(e) => updateCondition(index, { value: e.target.value })}
+                                placeholder={fieldPlaceholder(condition.field, language)}
+                                className={`${alertInputClass} rounded-xl px-3 py-2`}
+                              />
+                            )}
+                          </label>
+                          <div className="flex items-end lg:justify-center">
+                            <button
+                              type="button"
+                              onClick={() => removeConditionRow(index)}
+                              className="inline-flex h-[42px] w-[42px] items-center justify-center rounded-xl border border-black/10 text-black/45 transition hover:bg-black/[0.03]"
+                              title={language === 'zh' ? '删除当前条件' : 'Remove condition'}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-[24px] border border-black/8 bg-[#fbfcfe] p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-[#0b2340]">{language === 'zh' ? '资源对象' : 'Resource Objects'}</p>
+                        <p className="mt-1 text-xs text-black/45">{language === 'zh' ? '点击“关联资源”后可按名称、SN、管理IP搜索，并勾选多个设备。' : 'Use “Link Resources” to search by name, serial number, or management IP, then check multiple devices.'}</p>
+                      </div>
+                      <button type="button" onClick={openAssetPicker} className={alertSecondaryButtonClass}>
+                        <Search size={14} />
+                        {language === 'zh' ? '关联资源' : 'Link Resources'}
+                      </button>
+                    </div>
+                    <div className="mt-4 rounded-2xl border border-dashed border-black/10 bg-white p-4">
+                      {selectedAssets.length ? (
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                          {selectedAssets.map((device) => (
+                            <div key={device.id} className="rounded-2xl border border-[#d8e1eb] bg-[#fbfcfe] px-4 py-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-semibold text-[#0b2340]">{device.hostname || (language === 'zh' ? '未命名资产' : 'Unnamed Asset')}</p>
+                                  <p className="mt-1 font-mono text-xs text-black/45">{device.ip_address}</p>
+                                </div>
+                                <button type="button" onClick={() => removeSelectedAsset(device.ip_address)} className="rounded-xl border border-black/10 px-2.5 py-1 text-xs font-semibold text-black/45 hover:bg-black/[0.03]">
+                                  {language === 'zh' ? '移除' : 'Remove'}
+                                </button>
+                              </div>
+                              <div className="mt-2 flex flex-wrap gap-3 text-xs text-black/45">
+                                <span>{`SN ${device.sn || '--'}`}</span>
+                                <span>{language === 'zh' ? `站点 ${device.site || '未分组'}` : `Site ${device.site || 'Unassigned'}`}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-sm text-black/40">
+                          {language === 'zh' ? '尚未选择资源对象。' : 'No resource objects selected yet.'}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <label className="text-sm text-black/65">
@@ -456,17 +875,6 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
                   <label className="text-sm text-black/65">
                     <span>{language === 'zh' ? '结束时间' : 'End Time'}</span>
                     <input type="datetime-local" value={maintenanceForm.ends_at} onChange={(e) => updateMaintenanceField('ends_at', e.target.value)} className={`${alertInputClass} mt-2 rounded-xl px-3 py-2`} />
-                  </label>
-                </div>
-
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <label className="text-sm text-black/65">
-                    <span>{language === 'zh' ? '标题匹配' : 'Title Match'}</span>
-                    <input value={maintenanceForm.title_pattern} onChange={(e) => updateMaintenanceField('title_pattern', e.target.value)} className={`${alertInputClass} mt-2 rounded-xl px-3 py-2`} />
-                  </label>
-                  <label className="text-sm text-black/65">
-                    <span>{language === 'zh' ? '消息匹配' : 'Message Match'}</span>
-                    <input value={maintenanceForm.message_pattern} onChange={(e) => updateMaintenanceField('message_pattern', e.target.value)} className={`${alertInputClass} mt-2 rounded-xl px-3 py-2`} />
                   </label>
                 </div>
 
@@ -506,6 +914,124 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
                 </button>
                 <button disabled={maintenanceSubmitting} onClick={() => void handleCreateMaintenance()} className={alertPrimaryButtonClass}>
                   {maintenanceSubmitting ? (language === 'zh' ? '创建中...' : 'Creating...') : (language === 'zh' ? '创建维护期' : 'Create Window')}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showAssetPicker ? (
+          <motion.div
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/35 p-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                closeAssetPicker();
+              }
+            }}
+          >
+            <motion.div
+              className="max-h-[88vh] w-full max-w-3xl overflow-hidden rounded-3xl bg-white shadow-2xl"
+              initial={{ y: 18, opacity: 0, scale: 0.98 }}
+              animate={{ y: 0, opacity: 1, scale: 1 }}
+              exit={{ y: 18, opacity: 0, scale: 0.98 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-black/5 px-6 py-5">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-black/35">{language === 'zh' ? '关联资源' : 'Link Resources'}</p>
+                  <h3 className="mt-2 text-xl font-semibold text-[#0b2340]">{language === 'zh' ? '搜索设备并勾选多个资源对象' : 'Search devices and check multiple resource objects'}</h3>
+                </div>
+                <button title={language === 'zh' ? '关闭弹层' : 'Close modal'} onClick={closeAssetPicker} className="rounded-xl border border-black/10 p-2 text-black/55 hover:bg-black/[0.03]">
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="space-y-4 px-6 py-6">
+                <label className="relative block">
+                  <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-black/30" />
+                  <input
+                    autoFocus
+                    value={assetSearchQuery}
+                    onChange={(e) => setAssetSearchQuery(e.target.value)}
+                    placeholder={language === 'zh' ? '输入设备名称、SN 或管理IP' : 'Search by device name, serial number, or management IP'}
+                    className={`${alertInputClass} rounded-xl py-3 pl-9 pr-3`}
+                  />
+                </label>
+
+                <div className="rounded-2xl border border-black/8 bg-[#fbfcfe] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-[#0b2340]">{language === 'zh' ? `已选资源 ${assetPickerSelection.length} 个` : `${assetPickerSelection.length} resources selected`}</p>
+                    {pickerSelectedAssets.length ? (
+                      <div className="flex flex-wrap gap-2">
+                        {pickerSelectedAssets.map((device) => (
+                          <span key={device.id} className="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-semibold text-[#36506c] shadow-sm">
+                            {device.hostname || device.ip_address}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-black/8 bg-[#fbfcfe]">
+                  {!assetSearchQuery.trim() ? (
+                    <div className="px-5 py-10 text-center text-sm text-black/40">
+                      {language === 'zh' ? '输入关键字后开始搜索设备。' : 'Enter a keyword to search devices.'}
+                    </div>
+                  ) : assetSearchLoading ? (
+                    <div className="px-5 py-10 text-center text-sm text-black/40">
+                      {language === 'zh' ? '正在搜索资产...' : 'Searching devices...'}
+                    </div>
+                  ) : assetSearchResults.length > 0 ? (
+                    <div className="max-h-[420px] overflow-auto p-2">
+                      {assetSearchResults.map((device) => {
+                        const checked = assetPickerSelection.includes(device.ip_address);
+                        return (
+                          <label key={device.id} className={`flex cursor-pointer items-start gap-4 rounded-2xl px-4 py-3 transition ${checked ? 'bg-white' : 'hover:bg-white'}`}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleAssetSelection(device.ip_address)}
+                              className="mt-1"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-semibold text-[#0b2340]">{device.hostname || (language === 'zh' ? '未命名资产' : 'Unnamed Asset')}</p>
+                                  <p className="mt-1 font-mono text-xs text-black/45">{device.ip_address}</p>
+                                </div>
+                                {checked ? <Check size={16} className="text-[#2b6b8f]" /> : null}
+                              </div>
+                              <div className="mt-2 flex flex-wrap gap-3 text-xs text-black/40">
+                                <span>{`SN ${device.sn || '--'}`}</span>
+                                <span>{language === 'zh' ? `站点 ${device.site || '未分组'}` : `Site ${device.site || 'Unassigned'}`}</span>
+                                <span>{language === 'zh' ? `平台 ${device.platform || '--'}` : `Platform ${device.platform || '--'}`}</span>
+                              </div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="px-5 py-10 text-center text-sm text-black/40">
+                      {language === 'zh' ? '没有搜索到匹配设备。' : 'No matching devices found.'}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 border-t border-black/5 px-6 py-4">
+                <button onClick={closeAssetPicker} className={alertSecondaryButtonClass}>
+                  {language === 'zh' ? '取消' : 'Cancel'}
+                </button>
+                <button onClick={confirmAssetSelection} className={alertPrimaryButtonClass}>
+                  {language === 'zh' ? '确认关联' : 'Confirm Selection'}
                 </button>
               </div>
             </motion.div>
@@ -554,8 +1080,8 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
                   <div className="rounded-2xl bg-[#f7f8fb] p-4 text-sm text-black/65">
                     <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-black/35">{language === 'zh' ? '时间信息' : 'Schedule'}</p>
                     <div className="mt-3 space-y-2">
-                      <p><span className="text-black/35">IP:</span> {selectedWindow.target_ip}</p>
-                      {selectedWindowAsset ? <p><span className="text-black/35">{language === 'zh' ? '资产' : 'Asset'}:</span> {selectedWindowAsset.hostname}</p> : null}
+                      <p><span className="text-black/35">{language === 'zh' ? '覆盖方式' : 'Mode'}:</span> {selectedWindow.selection_mode === 'conditions' ? (language === 'zh' ? '条件定义' : 'Condition Rules') : (language === 'zh' ? '资源对象' : 'Resource Objects')}</p>
+                      {selectedWindow.selection_mode === 'conditions' ? <p><span className="text-black/35">{language === 'zh' ? '组合逻辑' : 'Condition Logic'}:</span> {conditionLogicLabel(selectedWindow.condition_logic, language)}</p> : null}
                       <p><span className="text-black/35">{language === 'zh' ? '开始' : 'Start'}:</span> {formatTs(selectedWindow.starts_at)}</p>
                       <p><span className="text-black/35">{language === 'zh' ? '结束' : 'End'}:</span> {formatTs(selectedWindow.ends_at)}</p>
                       <p><span className="text-black/35">{language === 'zh' ? '创建人' : 'Created By'}:</span> {selectedWindow.created_by}</p>
@@ -563,12 +1089,22 @@ const AlertMaintenanceTab: React.FC<AlertPageCommonProps> = ({ language, current
                   </div>
 
                   <div className="rounded-2xl bg-[#f7f8fb] p-4 text-sm text-black/65">
-                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-black/35">{language === 'zh' ? '匹配条件' : 'Matching Rules'}</p>
-                    <div className="mt-3 space-y-2">
-                      <p><span className="text-black/35">{language === 'zh' ? '标题匹配' : 'Title Match'}:</span> {selectedWindow.title_pattern || '--'}</p>
-                      <p><span className="text-black/35">{language === 'zh' ? '消息匹配' : 'Message Match'}:</span> {selectedWindow.message_pattern || '--'}</p>
-                      <p><span className="text-black/35">{language === 'zh' ? '最近命中' : 'Recent Matches'}:</span> {selectedWindow.last_match_count || 0}</p>
-                    </div>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-black/35">{language === 'zh' ? '命中范围' : 'Scope Detail'}</p>
+                    {selectedWindow.selection_mode === 'conditions' ? (
+                      <div className="mt-3 space-y-2">
+                        {(selectedWindow.match_conditions || []).filter((item) => item.value.trim()).map((condition) => (
+                          <p key={condition.field}>{conditionSummary(condition, language)}</p>
+                        ))}
+                        <p><span className="text-black/35">{language === 'zh' ? '最近命中' : 'Recent Matches'}:</span> {selectedWindow.last_match_count || 0}</p>
+                      </div>
+                    ) : (
+                      <div className="mt-3 space-y-2">
+                        {(selectedWindow.target_ips || (selectedWindow.target_ip ? [selectedWindow.target_ip] : [])).map((ip) => (
+                          <p key={ip}><span className="font-mono">{ip}</span>{assetByIp.get(ip)?.hostname ? ` / ${assetByIp.get(ip)?.hostname}` : ''}</p>
+                        ))}
+                        <p><span className="text-black/35">{language === 'zh' ? '资源数量' : 'Resource Count'}:</span> {(selectedWindow.target_ips || (selectedWindow.target_ip ? [selectedWindow.target_ip] : [])).length}</p>
+                      </div>
+                    )}
                   </div>
                 </div>
 

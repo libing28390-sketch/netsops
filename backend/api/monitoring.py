@@ -7,6 +7,7 @@ import threading
 from fastapi import APIRouter, HTTPException, Query
 
 from database import get_db_connection
+from services.device_health_service import annotate_devices_with_health, build_health_overview
 
 router = APIRouter()
 
@@ -253,6 +254,19 @@ def monitoring_overview(force_refresh: bool = Query(default=False)):
             'recent_open_alerts': [dict(r) for r in recent_open_alerts],
             'updated_at': now_utc.isoformat(),
         }
+
+        health_rows = conn.execute(
+            '''
+            SELECT id, hostname, ip_address, platform, status, compliance, role, site,
+                   cpu_usage, memory_usage, temp, fan_status, psu_status, interface_data
+            FROM devices
+            ORDER BY hostname ASC
+            '''
+        ).fetchall()
+        evaluated_devices = annotate_devices_with_health(conn, [dict(row) for row in health_rows])
+        payload['device_health_summary'] = build_health_overview(evaluated_devices)
+        payload['top_risky_devices'] = payload['device_health_summary']['top_risky_devices']
+
         with _overview_cache_lock:
             _overview_cache['payload'] = payload
             _overview_cache['expires_at'] = now_utc + timedelta(seconds=_OVERVIEW_CACHE_TTL_SECONDS)
@@ -589,6 +603,7 @@ def monitoring_device_trend(
 def monitoring_alerts(
     device_id: Optional[str] = Query(default=None),
     severity: Optional[str] = Query(default='all'),
+    phase: Optional[str] = Query(default='all'),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ):
@@ -602,10 +617,15 @@ def monitoring_alerts(
             params.append(device_id)
 
         sev = (severity or 'all').lower()
+        phase_filter = (phase or 'all').lower()
         where.append("COALESCE(workflow_status, 'open') != 'suppressed'")
         if sev != 'all':
             where.append('LOWER(severity) = ?')
             params.append(sev)
+        if phase_filter == 'active':
+            where.append('resolved_at IS NULL')
+        elif phase_filter == 'recovered':
+            where.append('resolved_at IS NOT NULL')
 
         where_sql = f"WHERE {' AND '.join(where)}" if where else ''
 

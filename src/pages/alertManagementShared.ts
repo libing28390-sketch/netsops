@@ -1,5 +1,12 @@
 import { useEffect } from 'react';
-import type { AlertRecord, AlertRuleScopeMatchMode, AlertRuleScopeType, AlertRuleSettings } from '../types';
+import type {
+  AlertMaintenanceCondition,
+  AlertMaintenanceConditionLogic,
+  AlertRecord,
+  AlertRuleScopeMatchMode,
+  AlertRuleScopeType,
+  AlertRuleSettings,
+} from '../types';
 
 export type AlertSection = 'alerts' | 'alert-rules' | 'maintenance';
 
@@ -14,13 +21,41 @@ export interface AlertPageCommonProps {
 export interface MaintenanceFormState {
   name: string;
   target_ip: string;
-  title_pattern: string;
-  message_pattern: string;
+  target_ips: string[];
+  selection_mode: 'conditions' | 'resources';
+  condition_logic: AlertMaintenanceConditionLogic;
+  match_conditions: AlertMaintenanceCondition[];
   starts_at: string;
   ends_at: string;
   reason: string;
   notify_user_ids: string[];
 }
+
+export const buildEmptyMaintenanceCondition = (): AlertMaintenanceCondition => ({
+  field: 'alert_description',
+  operator: 'contains',
+  value: '',
+});
+
+export const buildDefaultMaintenanceConditions = (selectedItem?: AlertRecord | null): AlertMaintenanceCondition[] => {
+  if (!selectedItem) {
+    return [buildEmptyMaintenanceCondition()];
+  }
+
+  const seeded: AlertMaintenanceCondition[] = [];
+  if (selectedItem.title) {
+    seeded.push({ field: 'alert_description', operator: 'contains', value: selectedItem.title });
+  }
+  if (selectedItem.ip_address) {
+    seeded.push({ field: 'alert_ip', operator: 'equals', value: selectedItem.ip_address });
+  }
+  if (selectedItem.severity) {
+    seeded.push({ field: 'alert_level', operator: 'equals', value: selectedItem.severity });
+  }
+  return seeded.length ? seeded : [buildEmptyMaintenanceCondition()];
+};
+
+export const ALERT_SEVERITY_OPTIONS = ['critical', 'major', 'warning'] as const;
 
 export const alertHeroClass = 'overflow-hidden rounded-[28px] border border-[#07233d]/10 bg-[linear-gradient(135deg,#f4fbff_0%,#ffffff_58%,#eef6ec_100%)] shadow-[0_18px_40px_rgba(11,35,64,0.08)]';
 export const alertPanelClass = 'rounded-[28px] border border-black/5 bg-white shadow-[0_16px_36px_rgba(11,35,64,0.06)]';
@@ -115,7 +150,7 @@ export const severityLabel = (severity: string, language: string) => {
   switch (severity) {
     case 'critical': return language === 'zh' ? '严重' : 'Critical';
     case 'major': return language === 'zh' ? '主要' : 'Major';
-    case 'warning': return language === 'zh' ? '预警' : 'Warning';
+    case 'warning': return language === 'zh' ? '次要' : 'Minor';
     case 'high': return language === 'zh' ? '高危' : 'High';
     case 'medium': return language === 'zh' ? '中等' : 'Medium';
     case 'info': return language === 'zh' ? '信息' : 'Info';
@@ -156,8 +191,10 @@ export const buildDefaultMaintenanceForm = (selectedItem?: AlertRecord | null): 
   return {
     name: selectedItem ? `${selectedItem.hostname || selectedItem.ip_address || 'Alert'} Maintenance` : '',
     target_ip: selectedItem?.ip_address || '',
-    title_pattern: selectedItem?.title || '',
-    message_pattern: selectedItem?.interface_name || '',
+    target_ips: selectedItem?.ip_address ? [selectedItem.ip_address] : [],
+    selection_mode: selectedItem?.ip_address ? 'resources' : 'conditions',
+    condition_logic: 'all',
+    match_conditions: buildDefaultMaintenanceConditions(selectedItem),
     starts_at: toLocalInput(start),
     ends_at: toLocalInput(end),
     reason: '',

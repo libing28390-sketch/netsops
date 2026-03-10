@@ -16,8 +16,10 @@ from api.playbooks import router as playbooks_router
 from services import notification_service
 from services import alert_maintenance_service
 from services import alert_rule_service
+from services.device_health_service import record_device_health_snapshot
 from api.notifications import router as notifications_router
 from api.monitoring import router as monitoring_router
+from api.device_health import router as device_health_router
 from api.alerts import router as alerts_router
 from api.audit import router as audit_router
 from api.compliance import router as compliance_router
@@ -62,6 +64,15 @@ async def lifespan(app: FastAPI):
         minutes=1,
         id='host_resource_sampler',
         name='Host Resource Sampler',
+        replace_existing=True,
+    )
+    record_device_health_snapshot()
+    scheduler.add_job(
+        record_device_health_snapshot,
+        'interval',
+        minutes=1,
+        id='device_health_sampler',
+        name='Device Health Sampler',
         replace_existing=True,
     )
     reschedule_backup(schedule_cfg)
@@ -121,6 +132,7 @@ app.include_router(configs_router, prefix="/api")
 app.include_router(playbooks_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(monitoring_router, prefix="/api")
+app.include_router(device_health_router, prefix="/api")
 app.include_router(alerts_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
 app.include_router(compliance_router, prefix="/api")
@@ -527,6 +539,13 @@ async def status_monitor():
                 rule=rule,
             )
 
+    def resolved_alert_severity(rule: dict | None, fallback: str) -> str:
+        configured = str((rule or {}).get('severity') or '').strip().lower()
+        if configured:
+            return configured
+        normalized_fallback = str(fallback or '').strip().lower()
+        return normalized_fallback or 'major'
+
     async def process_device(device, collect_intf: bool, collect_info: bool):
         async with sem:
             device = _as_dict(device)
@@ -636,7 +655,7 @@ async def status_monitor():
                     )
                 else:
                     set_alert_state(
-                        cpu_key, False, 'major', 'CPU Usage High',
+                        cpu_key, False, resolved_alert_severity(cpu_rule, 'major'), 'CPU Usage High',
                         f"{dev_label} CPU 利用率已恢复（当前 {cpu_usage:.1f}%）",
                         dev_id, ip_address=ip, status='resolved', rule=cpu_rule,
                     )
@@ -652,7 +671,7 @@ async def status_monitor():
                     )
                 else:
                     set_alert_state(
-                        mem_key, False, 'major', 'Memory Usage High',
+                        mem_key, False, resolved_alert_severity(memory_rule, 'major'), 'Memory Usage High',
                         f"{dev_label} 内存利用率已恢复（当前 {memory_usage:.1f}%）",
                         dev_id, ip_address=ip, status='resolved', rule=memory_rule,
                     )
@@ -797,14 +816,14 @@ async def status_monitor():
                                     )
                                 elif prev_status == 'down' and curr_status == 'up':
                                     set_alert_state(
-                                        down_key, False, 'major', 'Interface Down',
+                                        down_key, False, resolved_alert_severity(down_rule, 'major'), 'Interface Down',
                                         f"{iname} 状态恢复：DOWN → UP",
                                         dev_id, iname,
                                         ip_address=ip, status='resolved', rule=down_rule,
                                     )
                             else:
                                 set_alert_state(
-                                    f"if_down:{dev_id}:{iname}", False, 'major', 'Interface Down',
+                                    f"if_down:{dev_id}:{iname}", False, resolved_alert_severity(None, 'major'), 'Interface Down',
                                     f"{iname} 状态恢复：DOWN → UP",
                                     dev_id, iname,
                                     ip_address=ip, status='resolved',
@@ -827,7 +846,7 @@ async def status_monitor():
                             else:
                                 set_alert_state(
                                     util_key, False,
-                                    'major',
+                                    resolved_alert_severity(util_rule, 'warning'),
                                     'Interface Utilization High',
                                     f"{iname} 带宽占用率已恢复正常（当前 {max_util:.1f}%）",
                                     dev_id, iname,

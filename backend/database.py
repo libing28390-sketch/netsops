@@ -420,6 +420,10 @@ def init_db():
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             target_ip TEXT NOT NULL,
+            target_ips_json TEXT DEFAULT '[]',
+            selection_mode TEXT DEFAULT 'resources',
+            condition_logic TEXT DEFAULT 'all',
+            match_conditions_json TEXT DEFAULT '[]',
             title_pattern TEXT DEFAULT '',
             message_pattern TEXT DEFAULT '',
             starts_at TEXT NOT NULL,
@@ -515,6 +519,31 @@ def init_db():
         ''')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_host_resource_samples_ts ON host_resource_samples(ts)')
 
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS device_health_samples (
+            ts TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            hostname TEXT,
+            status TEXT,
+            health_status TEXT NOT NULL,
+            health_score INTEGER NOT NULL,
+            open_alert_count INTEGER DEFAULT 0,
+            critical_open_alerts INTEGER DEFAULT 0,
+            major_open_alerts INTEGER DEFAULT 0,
+            warning_open_alerts INTEGER DEFAULT 0,
+            interface_down_count INTEGER DEFAULT 0,
+            interface_flap_count INTEGER DEFAULT 0,
+            high_util_interface_count INTEGER DEFAULT 0,
+            interface_error_count INTEGER DEFAULT 0,
+            health_summary TEXT DEFAULT '',
+            health_reasons_json TEXT DEFAULT '[]',
+            PRIMARY KEY (ts, device_id),
+            FOREIGN KEY (device_id) REFERENCES devices(id)
+        )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_device_health_samples_ts ON device_health_samples(ts)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_device_health_samples_device_ts ON device_health_samples(device_id, ts)')
+
         # Migration: add columns to playbook_executions if missing
         cursor.execute("PRAGMA table_info(playbook_executions)")
         pb_cols = [c[1] for c in cursor.fetchall()]
@@ -528,6 +557,14 @@ def init_db():
             cursor.execute("ALTER TABLE playbook_executions ADD COLUMN failed_count INTEGER DEFAULT 0")
         if 'partial_count' not in pb_cols:
             cursor.execute("ALTER TABLE playbook_executions ADD COLUMN partial_count INTEGER DEFAULT 0")
+
+        cursor.execute("PRAGMA table_info(device_health_samples)")
+        device_health_columns = [column[1] for column in cursor.fetchall()]
+        if device_health_columns and 'health_reasons_json' not in device_health_columns:
+            cursor.execute("ALTER TABLE device_health_samples ADD COLUMN health_reasons_json TEXT DEFAULT '[]'")
+            cursor.execute(
+                "UPDATE device_health_samples SET health_reasons_json = '[]' WHERE health_reasons_json IS NULL OR health_reasons_json = ''"
+            )
 
         # Migration: Add new columns if they don't exist
         cursor.execute("PRAGMA table_info(devices)")
@@ -567,6 +604,48 @@ def init_db():
             "UPDATE alert_events SET workflow_status = CASE WHEN resolved_at IS NULL THEN 'open' ELSE 'resolved' END WHERE workflow_status IS NULL OR workflow_status = ''"
         )
         cursor.execute("UPDATE alert_events SET updated_at = COALESCE(updated_at, resolved_at, created_at)")
+
+        cursor.execute("PRAGMA table_info(alert_maintenance_windows)")
+        maintenance_columns = [column[1] for column in cursor.fetchall()]
+        if 'target_ips_json' not in maintenance_columns:
+            cursor.execute("ALTER TABLE alert_maintenance_windows ADD COLUMN target_ips_json TEXT DEFAULT '[]'")
+        if 'selection_mode' not in maintenance_columns:
+            cursor.execute("ALTER TABLE alert_maintenance_windows ADD COLUMN selection_mode TEXT DEFAULT 'resources'")
+        if 'condition_logic' not in maintenance_columns:
+            cursor.execute("ALTER TABLE alert_maintenance_windows ADD COLUMN condition_logic TEXT DEFAULT 'all'")
+        if 'match_conditions_json' not in maintenance_columns:
+            cursor.execute("ALTER TABLE alert_maintenance_windows ADD COLUMN match_conditions_json TEXT DEFAULT '[]'")
+        cursor.execute(
+            '''
+            UPDATE alert_maintenance_windows
+            SET target_ips_json = CASE
+                WHEN COALESCE(target_ips_json, '') = '' OR target_ips_json = '[]' THEN json_array(target_ip)
+                ELSE target_ips_json
+            END
+            WHERE COALESCE(target_ip, '') != ''
+            '''
+        )
+        cursor.execute(
+            '''
+            UPDATE alert_maintenance_windows
+            SET selection_mode = CASE
+                WHEN COALESCE(selection_mode, '') = '' AND (
+                    COALESCE(title_pattern, '') != '' OR COALESCE(message_pattern, '') != ''
+                ) THEN 'conditions'
+                WHEN COALESCE(selection_mode, '') = '' THEN 'resources'
+                ELSE selection_mode
+            END
+            '''
+        )
+        cursor.execute(
+            '''
+            UPDATE alert_maintenance_windows
+            SET condition_logic = CASE
+                WHEN COALESCE(condition_logic, '') IN ('all', 'any', 'none') THEN condition_logic
+                ELSE 'all'
+            END
+            '''
+        )
 
         cursor.execute("PRAGMA table_info(alert_rule_settings)")
         rule_columns = [column[1] for column in cursor.fetchall()]

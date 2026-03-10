@@ -32,6 +32,8 @@ LEGACY_MAC_ALGORITHMS: List[str] = [
 
 LEGACY_SSH_ERROR_CODE = "legacy_ssh_algorithms"
 SSH_AUTH_ERROR_CODE = "ssh_authentication_failed"
+SSH_TIMEOUT_ERROR_CODE = "ssh_transport_timeout"
+SSH_TRANSPORT_ERROR_CODE = "ssh_transport_unreachable"
 
 
 def build_netmiko_compatibility_kwargs() -> Dict[str, Any]:
@@ -116,12 +118,64 @@ def build_ssh_authentication_guidance(error_text: str) -> str:
     )
 
 
+def is_ssh_timeout_error(error_text: str) -> bool:
+    normalized = (error_text or "").lower()
+    indicators = [
+        "timed-out reading channel",
+        "connection timed out",
+        "tcp connection to device failed",
+        "no existing session",
+        "timed out",
+    ]
+    return any(indicator in normalized for indicator in indicators)
+
+
+def build_ssh_timeout_guidance(error_text: str) -> str:
+    if not is_ssh_timeout_error(error_text):
+        return error_text
+
+    return (
+        "设备管理端口看起来可达，但 SSH 会话在建立或读取阶段超时。"
+        " 这通常意味着设备 CPU 忙、VTY/AAA 响应慢、管理平面被限速，或者中间防火墙对 SSH 流量做了会话拦截。"
+        " 建议先确认设备负载、VTY 空闲会话、ACL/防火墙策略，再重试 SSH 登录。"
+    )
+
+
+def is_ssh_transport_error(error_text: str) -> bool:
+    normalized = (error_text or "").lower()
+    indicators = [
+        "connection refused",
+        "actively refused",
+        "unable to connect",
+        "network is unreachable",
+        "no route to host",
+        "connection reset by peer",
+        "error reading ssh protocol banner",
+    ]
+    return any(indicator in normalized for indicator in indicators)
+
+
+def build_ssh_transport_guidance(error_text: str) -> str:
+    if not is_ssh_transport_error(error_text):
+        return error_text
+
+    return (
+        "设备 IP 可能可达，但 SSH 传输层没有正常建立。"
+        " 常见原因是 22 端口未开放、VTY 没启用 SSH、ACL/防火墙拦截，或目标主机直接拒绝连接。"
+        " 建议先核对管理端口开放状态、设备 SSH 配置和中间安全策略。"
+    )
+
+
 def get_ssh_error_code(error_text: str) -> str | None:
     """返回已识别的 SSH 错误分类。"""
     if is_legacy_ssh_negotiation_error(error_text):
         return LEGACY_SSH_ERROR_CODE
     if is_ssh_authentication_error(error_text):
         return SSH_AUTH_ERROR_CODE
+    if is_ssh_timeout_error(error_text):
+        return SSH_TIMEOUT_ERROR_CODE
+    if is_ssh_transport_error(error_text):
+        return SSH_TRANSPORT_ERROR_CODE
     return None
 
 
@@ -132,4 +186,8 @@ def build_ssh_error_guidance(error_text: str) -> str:
         return build_legacy_ssh_guidance(error_text)
     if error_code == SSH_AUTH_ERROR_CODE:
         return build_ssh_authentication_guidance(error_text)
+    if error_code == SSH_TIMEOUT_ERROR_CODE:
+        return build_ssh_timeout_guidance(error_text)
+    if error_code == SSH_TRANSPORT_ERROR_CODE:
+        return build_ssh_transport_guidance(error_text)
     return error_text

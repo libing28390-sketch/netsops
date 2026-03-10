@@ -51,6 +51,7 @@ def get_alert_summary():
         open_count = conn.execute("SELECT COUNT(*) AS c FROM alert_events WHERE resolved_at IS NULL AND COALESCE(workflow_status, 'open') != 'suppressed'").fetchone()['c']
         critical_open = conn.execute("SELECT COUNT(*) AS c FROM alert_events WHERE resolved_at IS NULL AND COALESCE(workflow_status, 'open') != 'suppressed' AND LOWER(severity) = 'critical'").fetchone()['c']
         major_open = conn.execute("SELECT COUNT(*) AS c FROM alert_events WHERE resolved_at IS NULL AND COALESCE(workflow_status, 'open') != 'suppressed' AND LOWER(severity) = 'major'").fetchone()['c']
+        warning_open = conn.execute("SELECT COUNT(*) AS c FROM alert_events WHERE resolved_at IS NULL AND COALESCE(workflow_status, 'open') != 'suppressed' AND LOWER(severity) = 'warning'").fetchone()['c']
         acknowledged_open = conn.execute("SELECT COUNT(*) AS c FROM alert_events WHERE resolved_at IS NULL AND workflow_status = 'acknowledged'").fetchone()['c']
         suppressed_open = conn.execute("SELECT COUNT(*) AS c FROM alert_events WHERE resolved_at IS NULL AND workflow_status = 'suppressed'").fetchone()['c']
         assigned_open = conn.execute("SELECT COUNT(*) AS c FROM alert_events WHERE resolved_at IS NULL AND assignee IS NOT NULL AND assignee != ''").fetchone()['c']
@@ -93,6 +94,7 @@ def get_alert_summary():
             'open_count': int(open_count),
             'critical_open': int(critical_open),
             'major_open': int(major_open),
+            'warning_open': int(warning_open),
             'acknowledged_open': int(acknowledged_open),
             'suppressed_open': int(suppressed_open),
             'assigned_open': int(assigned_open),
@@ -234,10 +236,10 @@ def read_maintenance_windows(
 
 @router.post('/alerts/maintenance-windows/preview')
 def preview_maintenance_window(payload: dict = Body(...)):
-    target_ip = str(payload.get('target_ip') or '').strip()
-    if not target_ip:
-        raise HTTPException(status_code=400, detail='target_ip is required')
-    return alert_maintenance_service.preview_matches(payload)
+    try:
+        return alert_maintenance_service.preview_matches(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post('/alerts/maintenance-windows')
@@ -273,6 +275,9 @@ def create_maintenance_window(payload: dict = Body(...)):
         target_name=window['name'],
         details={
             'target_ip': window['target_ip'],
+            'target_ips': window.get('target_ips') or [],
+            'selection_mode': window.get('selection_mode') or 'resources',
+            'match_conditions': window.get('match_conditions') or [],
             'starts_at': window['starts_at'],
             'ends_at': window['ends_at'],
             'title_pattern': window['title_pattern'],

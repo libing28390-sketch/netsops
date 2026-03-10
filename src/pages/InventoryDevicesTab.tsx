@@ -1,9 +1,43 @@
 import React from 'react';
-import { Upload, Download, Plus, Search, Filter } from 'lucide-react';
-import type { Device } from '../types';
+import { Upload, Download, Plus, Search, Filter, Activity } from 'lucide-react';
+import type { Device, DeviceConnectionCheckSummary } from '../types';
 import { sectionHeaderRowClass, sectionToolbarClass, secondaryActionBtnClass } from '../components/shared';
 import Sparkline from '../components/Sparkline';
 import Pagination from '../components/Pagination';
+
+const clampPercent = (value?: number) => {
+  const numeric = Number(value ?? 0);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.max(0, Math.min(100, numeric));
+};
+
+const healthToneMap: Record<string, string> = {
+  healthy: 'bg-emerald-100 text-emerald-700',
+  warning: 'bg-amber-100 text-amber-700',
+  critical: 'bg-red-100 text-red-700',
+  unknown: 'bg-slate-100 text-slate-600',
+};
+
+const healthLabelMap: Record<string, { zh: string; en: string }> = {
+  healthy: { zh: '健康', en: 'Healthy' },
+  warning: { zh: '告警', en: 'Warning' },
+  critical: { zh: '严重', en: 'Critical' },
+  unknown: { zh: '未知', en: 'Unknown' },
+};
+
+const formatCheckTime = (value: string, language: string) => {
+  try {
+    return new Date(value).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  } catch {
+    return value;
+  }
+};
 
 interface InventoryDevicesTabProps {
   inventoryRows: Device[];
@@ -28,6 +62,9 @@ interface InventoryDevicesTabProps {
   handleDeleteDevice: (id: string) => void;
   handleDeleteSelected: () => void;
   handleShowDetails: (device: Device) => void;
+  handleTestConnection: (device: Device, mode?: 'quick' | 'deep') => void;
+  deviceConnectionChecks: Record<string, DeviceConnectionCheckSummary>;
+  connectionTestingDeviceId: string | null;
   setShowAddModal: (v: boolean) => void;
   setShowEditModal: (v: boolean) => void;
   setEditingDevice: (d: Device) => void;
@@ -48,9 +85,21 @@ const InventoryDevicesTab: React.FC<InventoryDevicesTabProps> = ({
   selectedDeviceIds, setSelectedDeviceIds,
   handleSort, handleImport, handleExport,
   handleDeleteDevice, handleDeleteSelected, handleShowDetails,
+  handleTestConnection,
+  deviceConnectionChecks, connectionTestingDeviceId,
   setShowAddModal, setShowEditModal, setEditingDevice, setEditForm,
   setSelectedDevice, setActiveTab, language, t,
 }) => {
+  const checkBadgeMap: Record<DeviceConnectionCheckSummary['status'], { zh: string; en: string; className: string }> = {
+    ok: { zh: 'OK', en: 'OK', className: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+    tcp_fail: { zh: 'TCP 失败', en: 'TCP Fail', className: 'bg-red-100 text-red-700 border-red-200' },
+    ssh_auth_fail: { zh: 'SSH 认证失败', en: 'SSH Auth Fail', className: 'bg-rose-100 text-rose-700 border-rose-200' },
+    ssh_timeout: { zh: 'SSH 超时', en: 'SSH Timeout', className: 'bg-orange-100 text-orange-700 border-orange-200' },
+    ssh_transport: { zh: 'SSH 传输失败', en: 'SSH Transport', className: 'bg-slate-100 text-slate-700 border-slate-200' },
+    ssh_legacy: { zh: 'SSH 算法旧', en: 'Legacy SSH', className: 'bg-amber-100 text-amber-700 border-amber-200' },
+    fail: { zh: '失败', en: 'Fail', className: 'bg-red-100 text-red-700 border-red-200' },
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4">
@@ -63,14 +112,15 @@ const InventoryDevicesTab: React.FC<InventoryDevicesTabProps> = ({
             <label className="px-4 py-2 border border-black/10 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-black/5 transition-all cursor-pointer">
               <Upload size={18} />
               {t('import')}
-              <input type="file" className="hidden" onChange={handleImport} accept=".xlsx, .xls, .csv" />
+              <input type="file" className="hidden" onChange={handleImport} accept=".xlsx, .xls, .csv" title={language === 'zh' ? '导入设备文件' : 'Import device file'} />
             </label>
-            <button onClick={handleExport} className={secondaryActionBtnClass}>
+            <button onClick={handleExport} className={secondaryActionBtnClass} title={language === 'zh' ? '导出设备清单' : 'Export device inventory'}>
               <Download size={18} />
               {t('export')}
             </button>
             <button
               onClick={() => setShowAddModal(true)}
+              title={language === 'zh' ? '新增设备' : 'Add device'}
               className="bg-[#00bceb] text-white px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-[#0096bd] transition-all shadow-lg shadow-[#00bceb]/20"
             >
               <Plus size={18} />
@@ -93,6 +143,7 @@ const InventoryDevicesTab: React.FC<InventoryDevicesTabProps> = ({
           <div className="flex items-center gap-2">
             <Filter size={16} className="text-black/40" />
             <select value={inventoryPlatformFilter} onChange={(e) => setInventoryPlatformFilter(e.target.value)}
+              title={language === 'zh' ? '按平台筛选' : 'Filter by platform'}
               className="bg-black/[0.02] border border-black/5 rounded-xl px-3 py-2 text-sm outline-none text-black/60 focus:border-black/20">
               <option value="all">{t('allPlatforms')}</option>
               <option value="cisco_ios">Cisco IOS</option>
@@ -105,6 +156,7 @@ const InventoryDevicesTab: React.FC<InventoryDevicesTabProps> = ({
               <option value="ruijie_rgos">Ruijie RGOS</option>
             </select>
             <select value={inventoryStatusFilter} onChange={(e) => setInventoryStatusFilter(e.target.value)}
+              title={language === 'zh' ? '按状态筛选' : 'Filter by status'}
               className="bg-black/[0.02] border border-black/5 rounded-xl px-3 py-2 text-sm outline-none text-black/60 focus:border-black/20">
               <option value="all">All Status</option>
               <option value="online">Online</option>
@@ -112,6 +164,7 @@ const InventoryDevicesTab: React.FC<InventoryDevicesTabProps> = ({
               <option value="pending">Pending</option>
             </select>
             <select value={inventoryPageSize} onChange={(e) => setInventoryPageSize(Number(e.target.value))}
+              title={language === 'zh' ? '每页数量' : 'Items per page'}
               className="bg-black/[0.02] border border-black/5 rounded-xl px-3 py-2 text-sm outline-none text-black/60 focus:border-black/20">
               <option value={10}>10 / page</option>
               <option value={20}>20 / page</option>
@@ -127,6 +180,7 @@ const InventoryDevicesTab: React.FC<InventoryDevicesTabProps> = ({
           <div className="bg-emerald-50 px-6 py-3 border-b border-emerald-100 flex items-center justify-between">
             <span className="text-sm font-medium text-emerald-800">{selectedDeviceIds.length} device(s) selected</span>
             <button onClick={handleDeleteSelected}
+              title={language === 'zh' ? '删除已选设备' : 'Delete selected devices'}
               className="text-xs font-bold uppercase text-red-600 hover:text-red-700 bg-red-100 px-3 py-1.5 rounded-lg transition-colors">
               DELETE SELECTED
             </button>
@@ -139,6 +193,7 @@ const InventoryDevicesTab: React.FC<InventoryDevicesTabProps> = ({
               <th className="px-6 py-4 w-10">
                 <input
                   type="checkbox"
+                  title={language === 'zh' ? '选择当前页全部设备' : 'Select all devices on this page'}
                   className="rounded border-black/20 text-[#00bceb] focus:ring-[#00bceb]"
                   checked={inventoryRows.length > 0 && inventoryRows.every(d => selectedDeviceIds.includes(d.id))}
                   onChange={(e) => {
@@ -176,6 +231,7 @@ const InventoryDevicesTab: React.FC<InventoryDevicesTabProps> = ({
                 <td className="px-6 py-4">
                   <input
                     type="checkbox"
+                    title={language === 'zh' ? `选择设备 ${device.hostname || device.ip_address}` : `Select device ${device.hostname || device.ip_address}`}
                     className="rounded border-black/20 text-[#00bceb] focus:ring-[#00bceb]"
                     checked={selectedDeviceIds.includes(device.id)}
                     onChange={(e) => {
@@ -207,23 +263,44 @@ const InventoryDevicesTab: React.FC<InventoryDevicesTabProps> = ({
                 </td>
                 <td className="px-6 py-4">
                   <div className="flex flex-col gap-2 w-32">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase ${healthToneMap[device.health_status || 'unknown'] || healthToneMap.unknown}`}>
+                        {healthLabelMap[device.health_status || 'unknown']?.[language === 'zh' ? 'zh' : 'en'] || healthLabelMap.unknown[language === 'zh' ? 'zh' : 'en']}
+                      </span>
+                      <span className="text-[9px] font-bold text-black/45 uppercase">
+                        {language === 'zh' ? '评分' : 'Score'} {Math.max(0, Math.min(100, Number(device.health_score || 0)))}
+                      </span>
+                    </div>
+                    <p className="text-[10px] leading-4 text-black/45 line-clamp-2" title={device.health_summary || ''}>
+                      {device.health_summary || (language === 'zh' ? '暂无健康摘要' : 'No health summary')}
+                    </p>
                     <div className="flex items-center justify-between">
                       <div className="flex flex-col">
-                        <span className="text-[9px] font-bold text-black/40 uppercase">CPU {device.cpu_usage || 0}%</span>
-                        <div className="h-1 w-12 bg-black/5 rounded-full overflow-hidden mt-0.5">
-                          <div className="h-full bg-[#00bceb]" style={{ width: `${device.cpu_usage || 0}%` }} />
-                        </div>
+                        <span className="text-[9px] font-bold text-black/40 uppercase">CPU {clampPercent(device.cpu_usage)}%</span>
+                        <progress
+                          className="util-progress util-progress-in mt-0.5 w-12"
+                          max={100}
+                          value={clampPercent(device.cpu_usage)}
+                          title={language === 'zh' ? `CPU 使用率 ${clampPercent(device.cpu_usage)}%` : `CPU usage ${clampPercent(device.cpu_usage)}%`}
+                        />
                       </div>
                       <Sparkline data={device.cpu_history || [20, 30, 25, 40, 35, 45, 40]} color="#00bceb" />
                     </div>
                     <div className="flex items-center justify-between">
                       <div className="flex flex-col">
-                        <span className="text-[9px] font-bold text-black/40 uppercase">MEM {device.memory_usage || 0}%</span>
-                        <div className="h-1 w-12 bg-black/5 rounded-full overflow-hidden mt-0.5">
-                          <div className="h-full bg-emerald-500" style={{ width: `${device.memory_usage || 0}%` }} />
-                        </div>
+                        <span className="text-[9px] font-bold text-black/40 uppercase">MEM {clampPercent(device.memory_usage)}%</span>
+                        <progress
+                          className="util-progress util-progress-memory mt-0.5 w-12"
+                          max={100}
+                          value={clampPercent(device.memory_usage)}
+                          title={language === 'zh' ? `内存使用率 ${clampPercent(device.memory_usage)}%` : `Memory usage ${clampPercent(device.memory_usage)}%`}
+                        />
                       </div>
                       <Sparkline data={device.memory_history || [60, 62, 65, 63, 68, 70, 65]} color="#10b981" />
+                    </div>
+                    <div className="flex items-center gap-2 text-[9px] font-bold uppercase text-black/35">
+                      <span>{language === 'zh' ? '告警' : 'Alerts'} {Number(device.open_alert_count || 0)}</span>
+                      <span>{language === 'zh' ? 'Down' : 'Down'} {Number(device.interface_down_count || 0)}</span>
                     </div>
                   </div>
                 </td>
@@ -250,14 +327,47 @@ const InventoryDevicesTab: React.FC<InventoryDevicesTabProps> = ({
                   </div>
                 </td>
                 <td className="px-6 py-4">
-                  <div className="flex gap-3">
+                  <div className="flex flex-wrap items-center gap-3">
                     <button onClick={() => { setSelectedDevice(device); setActiveTab('automation'); }}
+                      title={language === 'zh' ? '前往自动化配置' : 'Open automation config'}
                       className="text-[10px] font-bold uppercase text-[#00bceb] hover:text-[#0096bd]">CONFIG</button>
+                    <div className="flex flex-col gap-1">
+                      <button onClick={() => handleTestConnection(device, 'quick')}
+                        title={language === 'zh' ? '快速连通性检测' : 'Run reachability check'}
+                        className="inline-flex items-center gap-1 text-[10px] font-bold uppercase text-violet-700 hover:text-violet-800">
+                        <Activity size={12} className={connectionTestingDeviceId === device.id ? 'animate-pulse' : ''} />
+                        {language === 'zh' ? 'CHECK' : 'CHECK'}
+                      </button>
+                      {connectionTestingDeviceId === device.id ? (
+                        <span className="w-fit rounded-full border border-blue-200 bg-blue-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-blue-700">
+                          {language === 'zh' ? '检测中' : 'Running'}
+                        </span>
+                      ) : deviceConnectionChecks[device.id] ? (() => {
+                        const summary = deviceConnectionChecks[device.id];
+                        const badge = checkBadgeMap[summary.status] || checkBadgeMap.fail;
+                        return (
+                          <div className="flex flex-col gap-0.5">
+                            <span
+                              title={`${summary.mode === 'deep' ? (language === 'zh' ? 'SSH 登录校验' : 'SSH login check') : (language === 'zh' ? '快速连通性检测' : 'Reachability check')} · ${new Date(summary.checked_at).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US', { hour12: false })}`}
+                              className={`w-fit rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase ${badge.className}`}
+                            >
+                              {language === 'zh' ? badge.zh : badge.en}
+                            </span>
+                            <span className="text-[9px] font-medium text-black/35">
+                              {formatCheckTime(summary.checked_at, language)}
+                            </span>
+                          </div>
+                        );
+                      })() : null}
+                    </div>
                     <button onClick={() => handleShowDetails(device)}
+                      title={language === 'zh' ? '查看设备详情' : 'View device details'}
                       className="text-[10px] font-bold uppercase text-black/40 hover:text-black">DETAILS</button>
                     <button onClick={() => { setEditingDevice(device); setEditForm(device); setShowEditModal(true); }}
+                      title={language === 'zh' ? '编辑设备' : 'Edit device'}
                       className="text-[10px] font-bold uppercase text-blue-600 hover:text-blue-700">EDIT</button>
                     <button onClick={() => handleDeleteDevice(device.id)}
+                      title={language === 'zh' ? '删除设备' : 'Delete device'}
                       className="text-[10px] font-bold uppercase text-red-600 hover:text-red-700">DELETE</button>
                   </div>
                 </td>

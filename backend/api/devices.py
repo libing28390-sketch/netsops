@@ -3,13 +3,37 @@ from fastapi.responses import JSONResponse
 import os
 import uuid
 import json
+import socket
+import time
 from typing import Optional
 from database import get_db_connection
 from services.audit_service import log_audit_event
+from services.device_health_service import annotate_devices_with_health
 from core.crypto import encrypt_credential, decrypt_credential
 from drivers.ssh_compat import build_ssh_error_guidance, get_ssh_error_code
 
 router = APIRouter()
+
+
+def _probe_tcp_port(host: str, port: int, timeout: float = 1.5) -> tuple[bool, float | None, str | None]:
+    started_at = time.perf_counter()
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            latency_ms = round((time.perf_counter() - started_at) * 1000, 1)
+            return True, latency_ms, None
+    except OSError as exc:
+        latency_ms = round((time.perf_counter() - started_at) * 1000, 1)
+        return False, latency_ms, str(exc)
+
+
+def _build_probe_stage(stage: str, ok: bool, summary: str, detail: str, latency_ms: float | None = None) -> dict:
+    return {
+        'stage': stage,
+        'ok': ok,
+        'summary': summary,
+        'detail': detail,
+        'latency_ms': latency_ms,
+    }
 
 def _normalize_device_row(row):
     item = dict(row)
@@ -95,9 +119,8 @@ def read_devices(
                 f'SELECT {select_clause} FROM devices {where_sql} ORDER BY {order_col} {order_dir} LIMIT 500',
                 tuple(params)
             ).fetchall()
-            if str(mode).lower() == 'light':
-                return [dict(d) for d in devices]
-            return [_normalize_device_row(d) for d in devices]
+            items = [dict(d) for d in devices] if str(mode).lower() == 'light' else [_normalize_device_row(d) for d in devices]
+            return annotate_devices_with_health(conn, items)
 
         total_row = conn.execute(
             f'SELECT COUNT(*) AS count FROM devices {where_sql}',
@@ -111,8 +134,10 @@ def read_devices(
             tuple([*params, page_size, offset])
         ).fetchall()
 
+        items = [dict(d) for d in devices] if str(mode).lower() == 'light' else [_normalize_device_row(d) for d in devices]
+
         return {
-            'items': [dict(d) for d in devices] if str(mode).lower() == 'light' else [_normalize_device_row(d) for d in devices],
+            'items': annotate_devices_with_health(conn, items),
             'total': total,
             'page': page,
             'page_size': page_size,
@@ -268,6 +293,7 @@ def test_device_connection(payload: dict = Body(...)):
     password = payload.get('password')
     method = payload.get('method', 'ssh')
     platform = payload.get('platform', 'cisco_ios')
+    check_mode = str(payload.get('check_mode') or 'quick').lower()
     
     if not ip_address:
         raise HTTPException(status_code=400, detail="IP address is required")
@@ -277,23 +303,90 @@ def test_device_connection(payload: dict = Body(...)):
     if method and method.lower() == 'telnet':
         port = 23
     
-    logger.info(f"Testing connection to device: {hostname or ip_address} (IP: {ip_address}, Port: {port}, Platform: {platform}, User: {username})")
+    logger.info(f"Testing connection to device: {hostname or ip_address} (IP: {ip_address}, Port: {port}, Platform: {platform}, User: {username}, Mode: {check_mode})")
+
+    probe_output: list[str] = []
+    probe_stages: list[dict] = []
+    ping_ok = False
+    ping_latency_ms: float | None = None
     
     # 第一步：快速 ICMP ping 测试网络连通性
     try:
         logger.debug(f"Step 1: Ping {ip_address}")
-        ping_result = ping(ip_address, timeout=3)
+        ping_result = ping(ip_address, timeout=1.5)
         if ping_result is None or ping_result is False:
             logger.warning(f"ICMP ping failed for {ip_address}")
-            raise HTTPException(status_code=400, detail=f"Device {hostname or ip_address} is not reachable (ping failed)")
-        logger.debug(f"Step 1: Ping successful ({ping_result*1000:.2f}ms)")
+            probe_output.append(f"ICMP: no reply from {ip_address}")
+            probe_stages.append(_build_probe_stage('icmp', False, 'ICMP unreachable', f'No ICMP reply from {ip_address}'))
+        else:
+            ping_ok = True
+            ping_latency_ms = round(float(ping_result) * 1000, 1)
+            probe_output.append(f"ICMP: reachable in {ping_latency_ms} ms")
+            probe_stages.append(_build_probe_stage('icmp', True, 'ICMP reachable', f'Replied from {ip_address}', ping_latency_ms))
+            logger.debug(f"Step 1: Ping successful ({ping_latency_ms:.2f}ms)")
     except Exception as ping_err:
         logger.warning(f"Ping error: {str(ping_err)}")
-        # 继续尝试 SSH，有些设备可能禁用 ICMP
-        logger.debug("Continuing with SSH test despite ping failure")
+        probe_output.append(f"ICMP: probe error ({ping_err})")
+        probe_stages.append(_build_probe_stage('icmp', False, 'ICMP probe error', str(ping_err)))
+
+    # 第二步：快速 TCP 端口探测，判断 SSH/Telnet 端口是否真正可达
+    logger.debug(f"Step 2: TCP port probe {ip_address}:{port}")
+    tcp_ok, tcp_latency_ms, tcp_error = _probe_tcp_port(ip_address, port)
+    if tcp_ok:
+        probe_output.append(f"TCP/{port}: reachable in {tcp_latency_ms} ms")
+        probe_stages.append(_build_probe_stage('tcp', True, f'TCP/{port} reachable', f'Port {port} accepted a connection', tcp_latency_ms))
+    else:
+        probe_output.append(f"TCP/{port}: unreachable ({tcp_error})")
+        probe_stages.append(_build_probe_stage('tcp', False, f'TCP/{port} unreachable', tcp_error or f'Port {port} is not reachable', tcp_latency_ms))
+
+    if check_mode != 'deep':
+        device_label = hostname or ip_address
+        if tcp_ok:
+            if ping_ok:
+                return {
+                    "status": "success",
+                    "message": f"{device_label} is reachable. ICMP responds and TCP/{port} is open.",
+                    "output": "\n".join(probe_output),
+                    "check_mode": "quick",
+                    "stages": probe_stages,
+                }
+            return {
+                "status": "success",
+                "message": f"{device_label} is reachable on TCP/{port}. ICMP may be filtered on the path.",
+                "output": "\n".join(probe_output),
+                "check_mode": "quick",
+                "stages": probe_stages,
+            }
+
+        failure_detail = (
+            f"{device_label} did not pass the quick reachability test. "
+            f"ICMP {'ok' if ping_ok else 'failed'}, TCP/{port} is not reachable."
+        )
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": failure_detail,
+                "output": "\n".join(probe_output),
+                "check_mode": "quick",
+                "stages": probe_stages,
+            },
+        )
     
-    # 第二步：SSH 认证测试
-    logger.debug(f"Step 2: SSH authentication test")
+    # 深度模式：在快速探测通过后再做 SSH 认证测试
+    if not tcp_ok:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": f"TCP/{port} is not reachable, so SSH login validation was skipped.",
+                "output": "\n".join(probe_output),
+                "check_mode": "deep",
+                "stages": probe_stages + [
+                    _build_probe_stage('ssh', False, 'SSH validation skipped', f'TCP/{port} was not reachable, so SSH login was skipped')
+                ],
+            },
+        )
+
+    logger.debug(f"Step 3: SSH authentication test")
     device_info = {
         'hostname': hostname,
         'ip_address': ip_address,
@@ -314,7 +407,15 @@ def test_device_connection(payload: dict = Body(...)):
         
         if is_connected:
             logger.info(f"Successfully connected to {hostname or ip_address}")
-            return {"status": "success", "message": f"Successfully connected to {hostname or ip_address}"}
+            return {
+                "status": "success",
+                "message": f"Successfully connected to {hostname or ip_address}",
+                "output": "\n".join(probe_output + ["SSH login: success"]),
+                "check_mode": "deep",
+                "stages": probe_stages + [
+                    _build_probe_stage('ssh', True, 'SSH login successful', f'Authenticated to {hostname or ip_address}')
+                ],
+            }
         else:
             logger.warning(f"Failed to connect to {hostname or ip_address}: {error_msg}")
             error_code = get_ssh_error_code(error_msg)
@@ -323,11 +424,25 @@ def test_device_connection(payload: dict = Body(...)):
                     status_code=400,
                     content={
                         "detail": build_ssh_error_guidance(error_msg),
-                        "output": error_msg,
+                        "output": "\n".join(probe_output + [f"SSH login: failed ({error_msg})"]),
                         "error_code": error_code,
+                        "check_mode": "deep",
+                        "stages": probe_stages + [
+                            _build_probe_stage('ssh', False, 'SSH login failed', error_msg)
+                        ],
                     },
                 )
-            raise HTTPException(status_code=400, detail=f"Failed to connect to {hostname or ip_address}: {error_msg}")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "detail": f"Failed to connect to {hostname or ip_address}: {error_msg}",
+                    "output": "\n".join(probe_output + [f"SSH login: failed ({error_msg})"]),
+                    "check_mode": "deep",
+                    "stages": probe_stages + [
+                        _build_probe_stage('ssh', False, 'SSH login failed', error_msg)
+                    ],
+                },
+            )
     except HTTPException:
         raise
     except Exception as e:
@@ -341,6 +456,9 @@ def test_device_connection(payload: dict = Body(...)):
                     "detail": build_ssh_error_guidance(raw_error),
                     "output": raw_error,
                     "error_code": error_code,
+                    "stages": probe_stages + [
+                        _build_probe_stage('ssh', False, 'SSH login failed', raw_error)
+                    ],
                 },
             )
         raise HTTPException(status_code=500, detail=f"Connection error: {raw_error}")

@@ -51,12 +51,14 @@ interface MonitoringCenterProps {
   monitorAlertsPageSize: number;
   monitorAlertsSeverity: string;
   setMonitorAlertsSeverity: (value: string) => void;
+  monitorAlertsPhase: string;
+  setMonitorAlertsPhase: (value: string) => void;
   monitorLoading: boolean;
   monitorPageVisible: boolean;
   monitorDashboardSiteFilter: string;
   setMonitorDashboardSiteFilter: (value: string) => void;
-  monitorDashboardAlertFilter: 'all' | 'critical' | 'major';
-  setMonitorDashboardAlertFilter: (value: 'all' | 'critical' | 'major') => void;
+  monitorDashboardAlertFilter: 'all' | 'critical' | 'major' | 'warning';
+  setMonitorDashboardAlertFilter: (value: 'all' | 'critical' | 'major' | 'warning') => void;
   hostResources: HostResourceSnapshot | null;
   fetchMonitoringOverview: () => void | Promise<void>;
   fetchMonitoringAlerts: () => void | Promise<void>;
@@ -214,6 +216,8 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
     monitorAlertsPageSize,
     monitorAlertsSeverity,
     setMonitorAlertsSeverity,
+    monitorAlertsPhase,
+    setMonitorAlertsPhase,
     monitorLoading,
     monitorPageVisible,
     monitorDashboardSiteFilter,
@@ -368,12 +372,18 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
   };
 
   const severityLabel = (sev: string) => {
-    if (language !== 'zh') return sev;
     const s = String(sev || '').toLowerCase();
-    if (s === 'critical') return '严重';
-    if (s === 'major') return '主要';
-    if (s === 'minor' || s === 'medium' || s === 'low') return '次要';
+    if (s === 'critical') return language === 'zh' ? '严重' : 'Critical';
+    if (s === 'major') return language === 'zh' ? '主要' : 'Major';
+    if (s === 'warning') return language === 'zh' ? '次要' : 'Minor';
     return sev;
+  };
+
+  const phaseLabel = (resolvedAt?: string | null) => {
+    if (language === 'zh') {
+      return resolvedAt ? '已恢复' : '告警中';
+    }
+    return resolvedAt ? 'Recovered' : 'Active';
   };
 
   const toNumOrNull = (value: any): number | null => {
@@ -573,6 +583,8 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
     memory_percent: point.memory_percent,
     disk_percent: point.disk_percent,
   }));
+  const deviceHealthSummary = monitorOverview?.device_health_summary || null;
+  const riskyDevices = Array.isArray(monitorOverview?.top_risky_devices) ? monitorOverview.top_risky_devices : [];
 
   React.useEffect(() => {
     fetchHostResourceHistory(hostResourceRange);
@@ -641,6 +653,84 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
         ))}
       </div>
 
+      {deviceHealthSummary && (
+        <div className="grid grid-cols-1 xl:grid-cols-[0.95fr_1.05fr] gap-4">
+          <div className="rounded-2xl border border-black/5 bg-white shadow-sm p-5 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#0089ac]">{language === 'zh' ? '设备健康' : 'Device Health'}</p>
+                <h3 className="mt-1 text-lg font-semibold text-[#0b2340]">{language === 'zh' ? '全网健康分布' : 'Fleet Health Summary'}</h3>
+                <p className="text-xs text-black/45">{language === 'zh' ? '把在线状态、硬件状态、接口异常和开放告警统一折算成可解释的健康结果。' : 'Connectivity, hardware, interface anomalies, and open alerts are folded into one explainable health result.'}</p>
+              </div>
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+                {language === 'zh' ? `平均分 ${deviceHealthSummary.average_score}` : `Avg ${deviceHealthSummary.average_score}`}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {[
+                { key: 'healthy', label: language === 'zh' ? '健康' : 'Healthy', tone: 'bg-emerald-100 text-emerald-700' },
+                { key: 'warning', label: language === 'zh' ? '告警' : 'Warning', tone: 'bg-amber-100 text-amber-700' },
+                { key: 'critical', label: language === 'zh' ? '严重' : 'Critical', tone: 'bg-red-100 text-red-700' },
+                { key: 'unknown', label: language === 'zh' ? '未知' : 'Unknown', tone: 'bg-slate-100 text-slate-600' },
+              ].map((item) => (
+                <div key={item.key} className="rounded-xl border border-black/8 bg-[linear-gradient(180deg,rgba(0,0,0,0.01),rgba(0,0,0,0.03))] p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-black/35">{item.label}</p>
+                  <p className="mt-2 text-2xl font-semibold text-[#00172D]">{deviceHealthSummary[item.key] ?? 0}</p>
+                  <span className={`mt-2 inline-flex rounded-full px-2 py-1 text-[10px] font-bold uppercase ${item.tone}`}>{item.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-black/5 bg-white shadow-sm p-5 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-red-600">{language === 'zh' ? '优先排障' : 'Priority Triage'}</p>
+                <h3 className="mt-1 text-lg font-semibold text-[#0b2340]">{language === 'zh' ? '风险设备 Top' : 'Top Risky Devices'}</h3>
+                <p className="text-xs text-black/45">{language === 'zh' ? '优先看分数最低且当前仍有开放告警的设备。' : 'Start with the lowest-scoring devices that still have active alerts.'}</p>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {riskyDevices.length > 0 ? riskyDevices.map((device: any) => {
+                const tone = device.health_status === 'critical'
+                  ? 'bg-red-100 text-red-700'
+                  : device.health_status === 'warning'
+                    ? 'bg-amber-100 text-amber-700'
+                    : device.health_status === 'healthy'
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : 'bg-slate-100 text-slate-600';
+                const label = device.health_status === 'critical'
+                  ? (language === 'zh' ? '严重' : 'Critical')
+                  : device.health_status === 'warning'
+                    ? (language === 'zh' ? '告警' : 'Warning')
+                    : device.health_status === 'healthy'
+                      ? (language === 'zh' ? '健康' : 'Healthy')
+                      : (language === 'zh' ? '未知' : 'Unknown');
+                return (
+                  <button key={device.id} type="button" onClick={() => openMonitorDevice(device)} className="w-full rounded-xl border border-black/10 p-3 text-left transition-all hover:border-red-200 hover:bg-red-50/20">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-[#0b2340] truncate">{device.hostname || device.ip_address}</p>
+                        <p className="mt-1 text-[11px] text-black/45 truncate">{[device.site, device.platform].filter(Boolean).join(' • ') || device.ip_address}</p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-bold uppercase ${tone}`}>{label}</span>
+                        <p className="mt-1 text-sm font-semibold text-[#00172D]">{language === 'zh' ? '评分' : 'Score'} {device.health_score ?? 0}</p>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-[11px] text-black/55 line-clamp-2">{device.health_summary || (language === 'zh' ? '暂无健康说明' : 'No health summary')}</p>
+                    <div className="mt-2 flex items-center gap-3 text-[11px] text-black/40">
+                      <span>{language === 'zh' ? '开放告警' : 'Open alerts'} {device.open_alert_count || 0}</span>
+                      <span>{language === 'zh' ? '连接状态' : 'Reachability'} {String(device.status || '').toUpperCase()}</span>
+                    </div>
+                  </button>
+                );
+              }) : <div className="rounded-xl border border-dashed border-black/10 bg-black/[0.01] p-6 text-center text-sm text-black/40">{language === 'zh' ? '当前没有风险设备。' : 'No risky devices right now.'}</div>}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_1fr] gap-4">
         <div className="rounded-2xl border border-black/5 bg-white shadow-sm p-5 space-y-4">
           <div className="flex items-start justify-between gap-3">
@@ -696,12 +786,12 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
             ))}
           </div>
             <div className="rounded-xl border border-black/8 bg-[linear-gradient(180deg,rgba(2,6,23,0.01),rgba(2,6,23,0.04))] p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+                <div className="min-w-0 flex-1">
                   <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-black/35">{language === 'zh' ? '资源趋势' : 'Resource Trend'}</p>
-                  <p className="mt-1 text-xs text-black/45">{language === 'zh' ? '展示宿主机 CPU、内存、磁盘占用曲线，长时间范围自动降采样。' : 'CPU, memory and disk usage for the platform host with automatic downsampling on longer ranges.'}</p>
+                  <p className="mt-1 text-xs text-black/45">{language === 'zh' ? '展示宿主机 CPU、内存、磁盘占用曲线，长时间范围自动降采样。' : 'CPU, memory and disk usage for the host. Longer ranges are downsampled automatically.'}</p>
                 </div>
-                <span className="text-[11px] text-black/40">{hostResourceHistoryLoading ? (language === 'zh' ? '加载中...' : 'Loading...') : `${hostResourceHistory?.sample_count || hostTrendData.length} ${language === 'zh' ? '个点' : 'points'} · ${hostResourceHistory?.resolution_hint || '1m'}`}</span>
+                <span className="shrink-0 text-[11px] text-black/40 sm:pt-0.5">{hostResourceHistoryLoading ? (language === 'zh' ? '加载中...' : 'Loading...') : `${hostResourceHistory?.sample_count || hostTrendData.length} ${language === 'zh' ? '个点' : 'points'} · ${hostResourceHistory?.resolution_hint || '1m'}`}</span>
               </div>
               <div className="mt-4 h-[220px]">
                 {hostTrendData.length > 0 ? (
@@ -762,7 +852,7 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
               return (
                 <div key={alert.id || `${alert.metric_key}-${index}`} className="rounded-xl border border-black/8 px-3 py-3">
                   <div className="flex items-center justify-between gap-2">
-                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${severityTone}`}>{alert.severity === 'critical' ? (language === 'zh' ? '严重' : 'Critical') : (language === 'zh' ? '告警' : 'Major')}</span>
+                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${severityTone}`}>{severityLabel(alert.severity)}</span>
                     <span className="text-[11px] text-black/40">{alert.created_at ? formatTs(alert.created_at, true) : '--'}</span>
                   </div>
                   <p className="mt-2 text-sm font-semibold text-[#0b2340]">{alert.title}</p>
@@ -854,10 +944,11 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
                 <p className="text-xs text-black/45">{language === 'zh' ? '保留在页面顶部，避免必须先搜索设备才能看到当前故障。' : 'Keep active faults visible without forcing a device search first.'}</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <select value={monitorDashboardAlertFilter} onChange={(e) => setMonitorDashboardAlertFilter(e.target.value as 'all' | 'critical' | 'major')} className="bg-white border border-black/10 rounded-lg px-2.5 py-1.5 text-xs outline-none" title={language === 'zh' ? '按级别筛选' : 'Filter by severity'}>
+                <select value={monitorDashboardAlertFilter} onChange={(e) => setMonitorDashboardAlertFilter(e.target.value as 'all' | 'critical' | 'major' | 'warning')} className="bg-white border border-black/10 rounded-lg px-2.5 py-1.5 text-xs outline-none" title={language === 'zh' ? '按级别筛选' : 'Filter by severity'}>
                   <option value="all">{language === 'zh' ? '全部级别' : 'All Severities'}</option>
                   <option value="critical">{language === 'zh' ? '仅严重' : 'Critical Only'}</option>
                   <option value="major">{language === 'zh' ? '仅主要' : 'Major Only'}</option>
+                  <option value="warning">{language === 'zh' ? '仅次要' : 'Minor Only'}</option>
                 </select>
               </div>
               <div className="space-y-2">
@@ -1033,10 +1124,11 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
             <p className="text-xs text-black/40">{language === 'zh' ? '包含触发与恢复，支持分页。' : 'Includes trigger and recover lifecycle with pagination.'}</p>
           </div>
           <div className="flex items-center gap-2">
-            <select title={language === 'zh' ? '按告警级别筛选' : 'Filter alerts by severity'} value={monitorAlertsSeverity} onChange={(e) => setMonitorAlertsSeverity(e.target.value)} className="bg-black/[0.02] border border-black/10 rounded-lg px-2.5 py-1.5 text-xs outline-none"><option value="all">{language === 'zh' ? '全部' : 'All'}</option><option value="critical">{language === 'zh' ? '严重' : 'Critical'}</option><option value="major">{language === 'zh' ? '主要' : 'Major'}</option><option value="minor">{language === 'zh' ? '次要' : 'Minor'}</option></select>
+            <select title={language === 'zh' ? '按告警级别筛选' : 'Filter alerts by severity'} value={monitorAlertsSeverity} onChange={(e) => setMonitorAlertsSeverity(e.target.value)} className="bg-black/[0.02] border border-black/10 rounded-lg px-2.5 py-1.5 text-xs outline-none"><option value="all">{language === 'zh' ? '全部' : 'All'}</option><option value="critical">{language === 'zh' ? '严重' : 'Critical'}</option><option value="major">{language === 'zh' ? '主要' : 'Major'}</option><option value="warning">{language === 'zh' ? '次要' : 'Minor'}</option></select>
+            <select title={language === 'zh' ? '按事件阶段筛选' : 'Filter by alert phase'} value={monitorAlertsPhase} onChange={(e) => setMonitorAlertsPhase(e.target.value)} className="bg-black/[0.02] border border-black/10 rounded-lg px-2.5 py-1.5 text-xs outline-none"><option value="all">{language === 'zh' ? '全部阶段' : 'All Phases'}</option><option value="active">{language === 'zh' ? '告警中' : 'Active'}</option><option value="recovered">{language === 'zh' ? '已恢复' : 'Recovered'}</option></select>
           </div>
         </div>
-        <div className="overflow-auto"><table className="w-full text-xs"><thead className="bg-black/[0.02]"><tr><th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-black/40">{language === 'zh' ? '时间' : 'Time'}</th><th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-black/40">{language === 'zh' ? '级别' : 'Severity'}</th><th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-black/40">{language === 'zh' ? '标题' : 'Title'}</th><th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-black/40">{language === 'zh' ? '内容' : 'Message'}</th><th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-black/40">{language === 'zh' ? '恢复时间' : 'Recovered'}</th></tr></thead><tbody className="divide-y divide-black/5">{monitorAlerts.map((a: any) => <tr key={a.id} className="hover:bg-black/[0.01]"><td className="px-4 py-2 text-black/50">{a.created_at ? formatTs(a.created_at, true) : '-'}</td><td className="px-4 py-2"><span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${String(a.severity).toLowerCase() === 'critical' ? 'bg-red-100 text-red-700' : String(a.severity).toLowerCase() === 'major' ? 'bg-orange-100 text-orange-700' : 'bg-black/5 text-black/55'}`}>{severityLabel(a.severity)}</span></td><td className="px-4 py-2 font-semibold text-black/75">{a.title}</td><td className="px-4 py-2 text-black/55">{a.message}</td><td className="px-4 py-2 text-black/55">{a.resolved_at ? formatTs(a.resolved_at, true) : '-'}</td></tr>)}{monitorAlerts.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-black/35">{language === 'zh' ? '当前无告警记录。' : 'No alert records found.'}</td></tr>}</tbody></table></div>
+        <div className="overflow-auto"><table className="w-full text-xs"><thead className="bg-black/[0.02]"><tr><th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-black/40">{language === 'zh' ? '时间' : 'Time'}</th><th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-black/40">{language === 'zh' ? '级别' : 'Severity'}</th><th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-black/40">{language === 'zh' ? '阶段' : 'Phase'}</th><th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-black/40">{language === 'zh' ? '标题' : 'Title'}</th><th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-black/40">{language === 'zh' ? '内容' : 'Message'}</th><th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-black/40">{language === 'zh' ? '恢复时间' : 'Recovered'}</th></tr></thead><tbody className="divide-y divide-black/5">{monitorAlerts.map((a: any) => <tr key={a.id} className="hover:bg-black/[0.01]"><td className="px-4 py-2 text-black/50">{a.created_at ? formatTs(a.created_at, true) : '-'}</td><td className="px-4 py-2"><span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${String(a.severity).toLowerCase() === 'critical' ? 'bg-red-100 text-red-700' : String(a.severity).toLowerCase() === 'major' ? 'bg-orange-100 text-orange-700' : 'bg-black/5 text-black/55'}`}>{severityLabel(a.severity)}</span></td><td className="px-4 py-2"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${a.resolved_at ? 'bg-emerald-100 text-emerald-700' : 'bg-sky-100 text-sky-700'}`}>{phaseLabel(a.resolved_at)}</span></td><td className="px-4 py-2 font-semibold text-black/75">{a.title}</td><td className="px-4 py-2 text-black/55">{a.message}</td><td className="px-4 py-2 text-black/55">{a.resolved_at ? formatTs(a.resolved_at, true) : '-'}</td></tr>)}{monitorAlerts.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-black/35">{language === 'zh' ? '当前无告警记录。' : 'No alert records found.'}</td></tr>}</tbody></table></div>
         <MonitoringPagination language={language} currentPage={monitorAlertsPage} totalItems={monitorAlertTotal} itemsPerPage={monitorAlertsPageSize} onPageChange={setMonitorAlertsPage} />
       </div>
     </div>
