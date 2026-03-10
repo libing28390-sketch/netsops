@@ -85,6 +85,12 @@ python -m pip install -r backend/requirements.txt
 npm install
 ```
 
+#### Environment Files and Git Ignore
+
+- Copy `.env.example` to `.env` and fill in your local values before production-like deployment.
+- Keep `.env.example` in the repository as a template so teammates know required environment variables.
+- Keep `.gitignore` in the repository to avoid committing sensitive files (for example `.env`) and local artifacts (`node_modules`, build output, caches, logs).
+
 #### Development
 
 ```bash
@@ -198,6 +204,12 @@ python -m pip install -r backend/requirements.txt
 # 安装前端依赖
 npm install
 ```
+
+#### 环境变量与 Git 忽略规则
+
+- 在接近生产的部署场景中，请先复制 `.env.example` 为 `.env`，并填写本地真实参数。
+- 建议保留仓库中的 `.env.example`，用于告知协作者项目所需的环境变量键名。
+- 建议保留仓库中的 `.gitignore`，用于避免提交敏感信息（如 `.env`）和本地产物（如 `node_modules`、构建产物、缓存、日志）。
 
 #### 开发启动
 
