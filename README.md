@@ -108,6 +108,16 @@ Default development endpoints:
 npm run build
 ```
 
+### CI (GitHub Actions)
+
+- Frontend workflow: `.github/workflows/frontend-build-check.yml`
+	- Runs on changes to frontend-related files in `main` push and pull requests
+	- Executes `npm ci`, `npm run lint`, and `npm run build`
+- Backend workflow: `.github/workflows/backend-pytest-check.yml`
+	- Runs on changes to backend-related files in `main` push and pull requests
+	- Installs `backend/requirements.txt` and runs `pytest`
+	- Strict policy: no tests or test failures both fail CI
+
 ### npm Scripts
 
 - `npm run dev`: Start backend and frontend together
@@ -227,6 +237,16 @@ npm run dev
 ```bash
 npm run build
 ```
+
+### CI（GitHub Actions）
+
+- 前端工作流：`.github/workflows/frontend-build-check.yml`
+	- 在 `main` 分支的 push / pull request 且涉及前端相关文件变更时触发
+	- 执行 `npm ci`、`npm run lint`、`npm run build`
+- 后端工作流：`.github/workflows/backend-pytest-check.yml`
+	- 在 `main` 分支的 push / pull request 且涉及后端相关文件变更时触发
+	- 安装 `backend/requirements.txt` 并执行 `pytest`
+	- 严格策略：无测试或测试失败都会导致 CI 失败
 
 ### 常用脚本
 
