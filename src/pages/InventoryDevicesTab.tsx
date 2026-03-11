@@ -20,8 +20,8 @@ const healthToneMap: Record<string, string> = {
 
 const healthLabelMap: Record<string, { zh: string; en: string }> = {
   healthy: { zh: '健康', en: 'Healthy' },
-  warning: { zh: '告警', en: 'Warning' },
-  critical: { zh: '严重', en: 'Critical' },
+  warning: { zh: '健康预警', en: 'Health Warning' },
+  critical: { zh: '健康严重', en: 'Health Critical' },
   unknown: { zh: '未知', en: 'Unknown' },
 };
 
@@ -299,8 +299,8 @@ const InventoryDevicesTab: React.FC<InventoryDevicesTabProps> = ({
                       <Sparkline data={device.memory_history || [60, 62, 65, 63, 68, 70, 65]} color="#10b981" />
                     </div>
                     <div className="flex items-center gap-2 text-[9px] font-bold uppercase text-black/35">
-                      <span>{language === 'zh' ? '告警' : 'Alerts'} {Number(device.open_alert_count || 0)}</span>
-                      <span>{language === 'zh' ? 'Down' : 'Down'} {Number(device.interface_down_count || 0)}</span>
+                      <span>{language === 'zh' ? '开放告警' : 'Open Alerts'} {Number(device.open_alert_count || 0)}</span>
+                      <span>{language === 'zh' ? 'Down接口' : 'Interfaces Down'} {Number(device.interface_down_count || 0)}</span>
                     </div>
                   </div>
                 </td>

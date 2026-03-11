@@ -43,6 +43,28 @@ HOST_RESOURCE_ALERT_RULES = {
 }
 
 
+def _get_host_resource_rule(metric_key: str | None) -> dict[str, Any] | None:
+    if not metric_key:
+        return None
+    return HOST_RESOURCE_ALERT_RULES.get(metric_key)
+
+
+def _get_host_resource_alert_title(metric_key: str | None, fallback_title: str | None = None) -> str:
+    if metric_key == "database_status":
+        return "数据库连接异常" if DEFAULT_UI_LANGUAGE == 'zh' else "Database connection unhealthy"
+    rule = _get_host_resource_rule(metric_key)
+    if rule:
+        return rule["title_zh"] if DEFAULT_UI_LANGUAGE == 'zh' else rule["title"]
+    return fallback_title or ("宿主机资源告警" if DEFAULT_UI_LANGUAGE == 'zh' else "Host resource alert")
+
+
+def _normalize_host_resource_alert_row(row: dict[str, Any]) -> dict[str, Any]:
+    metric_key = row.get("metric_key")
+    normalized = dict(row)
+    normalized["title"] = _get_host_resource_alert_title(metric_key, str(row.get("title") or ""))
+    return normalized
+
+
 def _get_db_health() -> tuple[bool, str]:
     db_ok = False
     db_status = "missing"
@@ -165,14 +187,34 @@ def _sync_host_resource_alerts(snapshot: dict[str, Any]) -> list[dict[str, Any]]
     conn = get_db_connection()
     try:
         open_rows = conn.execute(
-            "SELECT dedupe_key FROM alert_events WHERE source = ? AND resolved_at IS NULL",
+            "SELECT dedupe_key, severity, title, message, interface_name AS metric_key FROM alert_events WHERE source = ? AND resolved_at IS NULL",
             (HOST_RESOURCE_ALERT_SOURCE,),
         ).fetchall()
-        open_keys = {row["dedupe_key"] for row in open_rows}
+        open_map = {row["dedupe_key"]: dict(row) for row in open_rows}
+        open_keys = set(open_map)
         now_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
         for dedupe_key, alert in desired_map.items():
             if dedupe_key in open_keys:
+                existing = open_map[dedupe_key]
+                if (
+                    existing.get("severity") != alert["severity"]
+                    or existing.get("title") != alert["title"]
+                    or existing.get("message") != alert["message"]
+                    or existing.get("metric_key") != alert["metric_key"]
+                ):
+                    conn.execute(
+                        "UPDATE alert_events SET severity = ?, title = ?, message = ?, interface_name = ?, updated_at = ? WHERE dedupe_key = ? AND source = ? AND resolved_at IS NULL",
+                        (
+                            alert["severity"],
+                            alert["title"],
+                            alert["message"],
+                            alert["metric_key"],
+                            now_utc,
+                            dedupe_key,
+                            HOST_RESOURCE_ALERT_SOURCE,
+                        ),
+                    )
                 continue
             maintenance_window = alert_maintenance_service.find_active_window_for_alert({
                 'dedupe_key': dedupe_key,
@@ -277,7 +319,7 @@ def _load_recent_host_resource_alerts(range_hours: int) -> list[dict[str, Any]]:
             ''',
             (HOST_RESOURCE_ALERT_SOURCE, cutoff),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [_normalize_host_resource_alert_row(dict(row)) for row in rows]
     finally:
         conn.close()
 

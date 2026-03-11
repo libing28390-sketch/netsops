@@ -2,7 +2,7 @@
 import { motion } from 'motion/react';
 import { Routes, Route, useLocation, useNavigate, Navigate } from 'react-router-dom';
 import * as htmlToImage from 'html-to-image';
-import { Plus, Server, CheckCircle, CheckCircle2, XCircle, RotateCcw, Play, Activity, LayoutDashboard, Database, Zap, ShieldCheck, History, LogOut, Search, Bell, Settings, Download, Upload, FileText, ChevronLeft, ChevronRight, Filter, Globe, TrendingUp, PieChart as PieChartIcon, Clock, AlertTriangle, X, Edit2, AlertCircle, FolderOpen, Eye, EyeOff, Sun, Moon, User, ChevronDown, Copy, Menu, PanelLeftClose, Monitor, ExternalLink, Trash2, Wrench } from 'lucide-react';
+import { Plus, Server, CheckCircle, CheckCircle2, XCircle, RotateCcw, Play, Activity, LayoutDashboard, Database, Zap, ShieldCheck, History, LogOut, Search, Bell, Settings, Download, Upload, FileText, ChevronLeft, ChevronRight, Filter, Globe, TrendingUp, PieChart as PieChartIcon, Clock, AlertTriangle, X, Edit2, AlertCircle, FolderOpen, Eye, EyeOff, Sun, Moon, User, ChevronDown, Copy, Menu, PanelLeftClose, Monitor, ExternalLink, Trash2, Wrench, Maximize2, Minimize2 } from 'lucide-react';
 import { useI18n } from './i18n.tsx';
 import * as XLSX from 'xlsx';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from 'recharts';
@@ -95,22 +95,39 @@ const buildConnectionTestMessage = (detail: any, errorCode?: string): string => 
     : (detail && typeof detail === 'object' && 'message' in detail ? String(detail.message) : 'Connection failed');
 
   if (errorCode === LEGACY_SSH_ERROR_CODE) {
-    return normalizedDetail || '设备 SSH 算法较旧，平台已尝试兼容，但当前协商仍然失败。';
+    return '设备 SSH 算法较旧，兼容重试后仍未完成协商。';
   }
 
   if (errorCode === SSH_AUTH_ERROR_CODE) {
-    return normalizedDetail || '设备已可达，但 SSH 认证被拒绝，请检查账号密码或设备 AAA/VTY 配置。';
+    return '设备可达，但 SSH 认证被拒绝。请检查账号密码或 AAA/VTY 配置。';
   }
 
   if (errorCode === SSH_TIMEOUT_ERROR_CODE) {
-    return normalizedDetail || 'SSH 会话建立超时，请检查设备管理平面负载、VTY 状态或中间安全策略。';
+    return 'SSH 会话建立或读取超时，请检查设备负载、VTY 状态或中间策略。';
   }
 
   if (errorCode === SSH_TRANSPORT_ERROR_CODE) {
-    return normalizedDetail || 'SSH 传输层未建立，请检查 22 端口开放状态、设备 SSH 服务和 ACL/防火墙策略。';
+    return 'SSH 传输层未建立，请检查 22 端口、SSH 服务和 ACL/防火墙策略。';
   }
 
   return normalizedDetail || 'Connection failed';
+};
+
+const buildConnectionTestHint = (errorCode?: string, language: string = 'zh'): string | null => {
+  const isZh = language === 'zh';
+  if (errorCode === LEGACY_SSH_ERROR_CODE) {
+    return isZh ? '建议先核对设备 SSH 算法与镜像版本。' : 'Check device SSH algorithm support and software version.';
+  }
+  if (errorCode === SSH_AUTH_ERROR_CODE) {
+    return isZh ? '建议先用同一账号手工 SSH 登录，再检查 AAA、VTY、login local。' : 'Try a manual SSH login with the same account, then review AAA, VTY, and login local.';
+  }
+  if (errorCode === SSH_TIMEOUT_ERROR_CODE) {
+    return isZh ? '建议先检查设备 CPU、会话配额和中间安全设备。' : 'Check device CPU, session limits, and any inline security controls.';
+  }
+  if (errorCode === SSH_TRANSPORT_ERROR_CODE) {
+    return isZh ? '建议先确认 22 端口、SSH 服务和路径 ACL。' : 'Verify TCP/22, the SSH service, and path ACLs.';
+  }
+  return null;
 };
 
 const buildConnectionCheckStatus = (
@@ -610,6 +627,10 @@ const App: React.FC = () => {
   const [quickQueryOutput, setQuickQueryOutput] = useState<string>('');
   const [quickQueryRunning, setQuickQueryRunning] = useState(false);
   const [quickQueryLabel, setQuickQueryLabel] = useState('');
+  const [quickQueryStructured, setQuickQueryStructured] = useState<any | null>(null);
+  const [quickQueryView, setQuickQueryView] = useState<'terminal' | 'table'>('terminal');
+  const [quickQueryMaximized, setQuickQueryMaximized] = useState(false);
+  const [quickQueryCommands, setQuickQueryCommands] = useState<string[]>([]);
 
   // ---------- Config Center ----------
   const [retentionDays, setRetentionDays] = useState<number>(365);
@@ -723,7 +744,7 @@ const App: React.FC = () => {
   const [topologyDiscoveryRunning, setTopologyDiscoveryRunning] = useState(false);
   const topologyRef = React.useRef<HTMLDivElement>(null);
 
-  type TopologyOperationalState = 'up' | 'degraded' | 'down' | 'unknown';
+  type TopologyOperationalState = 'up' | 'degraded' | 'down' | 'stale' | 'unknown';
 
   type TopologyInterfaceSnapshot = {
     name: string;
@@ -751,6 +772,7 @@ const App: React.FC = () => {
     discovery_source?: string;
     evidence_count?: number;
     metadata_json?: string;
+    last_seen?: string;
     inferred?: boolean;
     status?: string;
     operational_state: TopologyOperationalState;
@@ -1526,6 +1548,10 @@ const App: React.FC = () => {
       setShowCmdPreviewModal(false);
       setQuickQueryOutput('');
       setQuickQueryLabel('');
+      setQuickQueryStructured(null);
+      setQuickQueryView('terminal');
+      setQuickQueryMaximized(false);
+      setQuickQueryCommands([]);
       return;
     }
 
@@ -1869,6 +1895,10 @@ const App: React.FC = () => {
     setQuickRiskConfirmed(false);
     setQuickQueryOutput('');
     setQuickQueryLabel('');
+    setQuickQueryStructured(null);
+    setQuickQueryView('terminal');
+    setQuickQueryMaximized(false);
+    setQuickQueryCommands([]);
     setCustomCommand(automationBridgeState.command || '');
     setCustomCommandMode(automationBridgeState.mode === 'query' ? 'query' : 'config');
     setScriptVars(automationBridgeState.variableValues || {});
@@ -2638,6 +2668,12 @@ const App: React.FC = () => {
           panel: 'border-rose-200/70 bg-rose-50',
           dot: 'bg-rose-500',
         };
+      case 'stale':
+        return {
+          badge: 'border-sky-200 bg-sky-100 text-sky-700',
+          panel: 'border-sky-200/70 bg-sky-50',
+          dot: 'bg-sky-500',
+        };
       default:
         return {
           badge: 'border-slate-200 bg-slate-100 text-slate-700',
@@ -2652,12 +2688,21 @@ const App: React.FC = () => {
       if (state === 'up') return '正常';
       if (state === 'degraded') return '退化';
       if (state === 'down') return '中断';
+      if (state === 'stale') return '陈旧';
       return '未知';
     }
     if (state === 'up') return 'Up';
     if (state === 'degraded') return 'Degraded';
     if (state === 'down') return 'Down';
+    if (state === 'stale') return 'Stale';
     return 'Unknown';
+  };
+
+  const formatTopologyLastSeen = (value?: string) => {
+    if (!value) return language === 'zh' ? '未知' : 'Unknown';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return language === 'zh' ? '未知' : 'Unknown';
+    return date.toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US', { hour12: false });
   };
 
   const evaluateTopologyInterfaceSnapshot = (device: Device | null | undefined, port?: string): TopologyInterfaceSnapshot | null => {
@@ -2711,6 +2756,9 @@ const App: React.FC = () => {
     const targetInterfaceSnapshot = evaluateTopologyInterfaceSnapshot(targetDevice, link.target_port_normalized || link.target_port);
     const sourceDeviceStatus = String(sourceDevice?.status || 'unknown').toLowerCase();
     const targetDeviceStatus = String(targetDevice?.status || 'unknown').toLowerCase();
+    const lastSeenTime = link.last_seen ? new Date(link.last_seen).getTime() : NaN;
+    const staleThresholdMs = 30 * 60 * 1000;
+    const isStale = Number.isFinite(lastSeenTime) && (Date.now() - lastSeenTime > staleThresholdMs);
 
     let operationalState: TopologyOperationalState = 'unknown';
     let operationalSummary = language === 'zh' ? '缺少接口遥测，链路状态未知。' : 'Link state is unknown because interface telemetry is unavailable.';
@@ -2721,6 +2769,9 @@ const App: React.FC = () => {
     } else if (sourceDeviceStatus === 'offline' || targetDeviceStatus === 'offline') {
       operationalState = 'down';
       operationalSummary = language === 'zh' ? '至少一端设备离线，链路视为中断。' : 'At least one endpoint device is offline, so the link is treated as down.';
+    } else if (isStale) {
+      operationalState = 'stale';
+      operationalSummary = language === 'zh' ? '这条链路在最近 30 分钟内没有被新的邻居发现刷新，建议重新触发发现确认当前连通性。' : 'This adjacency has not been refreshed by recent discovery within the last 30 minutes. Run discovery again to confirm current connectivity.';
     } else if (sourceInterfaceSnapshot?.operationalState === 'down' || targetInterfaceSnapshot?.operationalState === 'down') {
       operationalState = 'down';
       operationalSummary = language === 'zh' ? '本端或对端接口处于 down。' : 'One side of the adjacency reports the interface as down.';
@@ -2764,15 +2815,23 @@ const App: React.FC = () => {
     return segments.join(' · ') || (language === 'zh' ? '暂无接口遥测' : 'No interface telemetry');
   };
 
-  const topologySiteOptions = useMemo(
-    () => Array.from(new Set(devices.map((device) => String(device.site || '').trim()).filter(Boolean))).sort((left, right) => left.localeCompare(right)),
-    [devices],
-  );
+  const topologySiteOptions = useMemo(() => {
+    const siteValues: string[] = devices
+      .map((device) => String(device.site || '').trim())
+      .filter((value): value is string => Boolean(value));
+    const uniqueSites: string[] = [...new Set<string>(siteValues)];
+    uniqueSites.sort((left: string, right: string) => left.localeCompare(right));
+    return uniqueSites;
+  }, [devices]);
 
-  const topologyRoleOptions = useMemo(
-    () => Array.from(new Set(devices.map((device) => String(device.role || '').trim()).filter(Boolean))).sort((left, right) => left.localeCompare(right)),
-    [devices],
-  );
+  const topologyRoleOptions = useMemo(() => {
+    const roleValues: string[] = devices
+      .map((device) => String(device.role || '').trim())
+      .filter((value): value is string => Boolean(value));
+    const uniqueRoles: string[] = [...new Set<string>(roleValues)];
+    uniqueRoles.sort((left: string, right: string) => left.localeCompare(right));
+    return uniqueRoles;
+  }, [devices]);
 
   const topologyVisibleDevices = useMemo(() => {
     const query = topologySearch.trim().toLowerCase();
@@ -2791,7 +2850,10 @@ const App: React.FC = () => {
   );
 
   const topologyVisibleLinks = useMemo(() => {
-    const deviceMap = new Map(topologyVisibleDevices.map((device) => [device.id, device]));
+    const deviceMap = new Map<string, Device>();
+    topologyVisibleDevices.forEach((device) => {
+      deviceMap.set(device.id, device);
+    });
     return topologyLinks
       .filter((link) => topologyVisibleDeviceIds.has(link.source_device_id) && topologyVisibleDeviceIds.has(link.target_device_id))
       .map((link) => describeTopologyLink(link, deviceMap.get(link.source_device_id), deviceMap.get(link.target_device_id)));
@@ -2829,6 +2891,7 @@ const App: React.FC = () => {
     up: topologyVisibleLinks.filter((link: TopologyDecoratedLink) => link.operational_state === 'up').length,
     degraded: topologyVisibleLinks.filter((link: TopologyDecoratedLink) => link.operational_state === 'degraded').length,
     down: topologyVisibleLinks.filter((link: TopologyDecoratedLink) => link.operational_state === 'down').length,
+    stale: topologyVisibleLinks.filter((link: TopologyDecoratedLink) => link.operational_state === 'stale').length,
     multiSource: topologyVisibleLinks.filter((link: TopologyDecoratedLink) => link.evidence_sources.length > 1 || link.reverse_confirmed || Number(link.evidence_count || 0) > 1).length,
   }), [topologyVisibleLinks]);
 
@@ -3300,6 +3363,8 @@ const App: React.FC = () => {
   const [deviceTrendRangeHours, setDeviceTrendRangeHours] = useState(24);
   const [deviceHealthTrend, setDeviceHealthTrend] = useState<DeviceHealthTrendResponse | null>(null);
   const [deviceHealthTrendLoading, setDeviceHealthTrendLoading] = useState(false);
+  const [deviceOperationalData, setDeviceOperationalData] = useState<any | null>(null);
+  const [deviceOperationalDataLoading, setDeviceOperationalDataLoading] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
@@ -3359,6 +3424,7 @@ const App: React.FC = () => {
     setViewingDeviceAlerts([]);
     setDeviceTrendRangeHours(24);
     setDeviceHealthTrend(null);
+    setDeviceOperationalData(null);
     setShowDetailsModal(true);
     setDeviceDetailLoading(true);
 
@@ -3428,6 +3494,40 @@ const App: React.FC = () => {
   }, [deviceHealthTrend]);
 
   const viewingDeviceConnectionSummary = viewingDevice?.id ? deviceConnectionChecks[viewingDevice.id] : null;
+
+  const operationalCategoryLabelMap: Record<string, { zh: string; en: string }> = {
+    interfaces: { zh: '接口信息', en: 'Interfaces' },
+    neighbors: { zh: '邻居信息', en: 'Neighbors' },
+    arp: { zh: 'ARP', en: 'ARP' },
+    mac_table: { zh: 'MAC 地址表', en: 'MAC Table' },
+    routing_table: { zh: '路由表', en: 'Routing Table' },
+    bgp: { zh: 'BGP', en: 'BGP' },
+    ospf: { zh: 'OSPF', en: 'OSPF' },
+  };
+
+  const loadDeviceOperationalData = async (deviceId: string) => {
+    setDeviceOperationalDataLoading(true);
+    try {
+      const resp = await fetch(`/api/devices/${deviceId}/operational-data`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          categories: ['interfaces', 'neighbors', 'arp', 'mac_table', 'routing_table', 'bgp', 'ospf'],
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        throw new Error(data?.detail || 'Failed to collect operational data');
+      }
+      setDeviceOperationalData(data);
+      showToast(language === 'zh' ? '已完成设备运行数据采集' : 'Operational data collected', 'success');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to collect operational data';
+      showToast(language === 'zh' ? `采集失败：${message}` : message, 'error');
+    } finally {
+      setDeviceOperationalDataLoading(false);
+    }
+  };
 
   const handleRemediate = (device: Device) => {
     setRemediatingDevice(device);
@@ -3727,7 +3827,7 @@ const App: React.FC = () => {
   };
 
   const [showTestResult, setShowTestResult] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string; output?: string; errorCode?: string; checkMode?: string; stages?: Array<{ stage: string; ok: boolean; summary: string; detail: string; latency_ms?: number | null }> } | null>(null);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string; output?: string; rawError?: string; errorCode?: string; checkMode?: string; stages?: Array<{ stage: string; ok: boolean; summary: string; detail: string; latency_ms?: number | null }> } | null>(null);
 
   const handleTestConnection = async (deviceToTest: Device | null = selectedDevice, mode: 'quick' | 'deep' = 'quick') => {
     if (!deviceToTest) return;
@@ -3742,6 +3842,7 @@ const App: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          device_id: deviceToTest.id,
           hostname: deviceToTest.hostname,
           ip_address: deviceToTest.ip_address,
           username: deviceToTest.username,
@@ -3774,6 +3875,7 @@ const App: React.FC = () => {
           success: false,
           message: buildConnectionTestMessage(data.detail || data.error, data.error_code),
           output: data.output,
+          rawError: data.raw_error,
           errorCode: data.error_code,
           checkMode: data.check_mode,
           stages,
@@ -3846,7 +3948,7 @@ const App: React.FC = () => {
     try {
       const response = await fetch('/api/topology/discover', { method: 'POST' });
       if (response.ok) {
-        showToast(language === 'zh' ? '已启动拓扑发现，稍后自动刷新链路' : 'Topology discovery started. Links will refresh shortly.', 'success');
+        showToast(language === 'zh' ? '已启动一次手动拓扑刷新，稍后自动更新链路状态' : 'Manual topology refresh started. Link state will update shortly.', 'success');
         window.setTimeout(async () => {
           try {
             const linksResponse = await fetch('/api/topology/links');
@@ -4237,17 +4339,138 @@ const App: React.FC = () => {
     }
   };
 
+  const formatQuickQueryRawOutput = (payload: any, language: string) => {
+    const category = Array.isArray(payload?.categories) ? payload.categories[0] : null;
+    if (!category) {
+      return language === 'zh' ? '没有返回可展示的数据。' : 'No displayable data returned.';
+    }
+
+    if (category?.error) {
+      return `Error: ${category.error}`;
+    }
+
+    const rawOutputs = Array.isArray(category?.raw_outputs) ? category.raw_outputs : [];
+    if (rawOutputs.length > 0) {
+      const lines: string[] = [];
+      for (const item of rawOutputs) {
+        lines.push(`[${item.command}]`);
+        lines.push(String(item.output || ''));
+        lines.push('');
+      }
+      return lines.join('\n').trim();
+    }
+
+    return language === 'zh' ? '命令已执行，但没有返回原始回显。' : 'Command executed, but no raw output was returned.';
+  };
+
+  const sanitizeExportName = (value: string, fallback: string) => {
+    const normalized = String(value || fallback)
+      .trim()
+      .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+    return normalized || fallback;
+  };
+
+  const getQuickQueryCommands = (payload: any, fallbackCommands?: string): string[] => {
+    const category = Array.isArray(payload?.categories) ? payload.categories[0] : null;
+    const payloadCommands = Array.isArray(category?.commands)
+      ? category.commands.map((command: any) => String(command || '').trim()).filter(Boolean)
+      : [];
+    if (payloadCommands.length > 0) {
+      return payloadCommands;
+    }
+    return String(fallbackCommands || '')
+      .split('\n')
+      .map((command) => command.trim())
+      .filter(Boolean);
+  };
+
+  const getQuickQueryStructuredTable = (payload: any): {
+    category: any;
+    records: Record<string, any>[];
+    columns: string[];
+  } => {
+    const category = Array.isArray(payload?.categories) ? payload.categories[0] : null;
+    const records: Record<string, any>[] = Array.isArray(category?.records) ? category.records : [];
+    const columnSet = new Set<string>();
+    records.forEach((item) => {
+      Object.keys(item || {}).forEach((key) => columnSet.add(key));
+    });
+    const columns: string[] = Array.from(columnSet.values());
+    return { category, records, columns };
+  };
+
+  const quickQueryTable = getQuickQueryStructuredTable(quickQueryStructured);
+
+  const exportQuickQueryTable = (commands: string[]) => {
+    if (!quickQueryTable.records.length) {
+      showToast(language === 'zh' ? '当前没有可导出的表格记录' : 'No structured records to export', 'error');
+      return;
+    }
+
+    const dataSheet = XLSX.utils.json_to_sheet(quickQueryTable.records, { header: quickQueryTable.columns });
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, dataSheet, 'Data');
+
+    const metaRows = [
+      { key: language === 'zh' ? '查询名称' : 'Query', value: quickQueryLabel },
+      { key: language === 'zh' ? '设备' : 'Device', value: quickQueryStructured?.device?.hostname || '' },
+      { key: language === 'zh' ? '平台' : 'Platform', value: quickQueryStructured?.device?.platform || '' },
+      { key: language === 'zh' ? '采集时间' : 'Collected At', value: quickQueryStructured?.collected_at || '' },
+      { key: language === 'zh' ? '解析器' : 'Parser', value: quickQueryTable.category?.parser || 'ntc-templates' },
+      { key: language === 'zh' ? '记录数' : 'Records', value: String(quickQueryTable.records.length) },
+      { key: language === 'zh' ? '实际执行命令' : 'Executed Commands', value: commands.join('\n') },
+    ];
+    const metaSheet = XLSX.utils.json_to_sheet(metaRows);
+    XLSX.utils.book_append_sheet(workbook, metaSheet, 'Meta');
+
+    const deviceName = sanitizeExportName(quickQueryStructured?.device?.hostname || 'device', 'device');
+    const queryName = sanitizeExportName(quickQueryLabel || 'quick-query', 'quick-query');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    XLSX.writeFile(workbook, `${deviceName}_${queryName}_${timestamp}.xlsx`);
+    showToast(language === 'zh' ? '已导出 Excel' : 'Excel exported', 'success');
+  };
+
   // Quick query — read-only command, no history saved
-  const runQuickQuery = async (label: string, commands: string) => {
+  const runQuickQuery = async (label: string, commands: string, operationalCategory?: string) => {
     const device = selectedDevice || (batchMode && batchDeviceIds.length === 1 ? devices.find(d => d.id === batchDeviceIds[0]) : null);
     if (!device) {
       showToast(language === 'zh' ? '请先选择一台设备' : 'Select a device first', 'error');
       return;
     }
+    const fallbackCommands = commands
+      .split('\n')
+      .map((command) => command.trim())
+      .filter(Boolean);
     setQuickQueryLabel(label);
     setQuickQueryOutput('');
+    setQuickQueryStructured(null);
+    setQuickQueryView('terminal');
+    setQuickQueryCommands(fallbackCommands);
     setQuickQueryRunning(true);
     try {
+      if (operationalCategory) {
+        const resp = await fetch(`/api/devices/${device.id}/operational-data`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ categories: [operationalCategory] }),
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+          const firstCategory = Array.isArray(data?.categories) ? data.categories[0] : null;
+          const hasStructuredRecords = Array.isArray(firstCategory?.records) && firstCategory.records.length > 0;
+          setQuickQueryCommands(getQuickQueryCommands(data, commands));
+          setQuickQueryStructured(data);
+          setQuickQueryOutput(formatQuickQueryRawOutput(data, language));
+          setQuickQueryView(hasStructuredRecords ? 'table' : 'terminal');
+        } else {
+          setQuickQueryOutput(`Error: ${data.detail || data.error || 'Unknown error'}`);
+        }
+        return;
+      }
+
       const resp = await fetch('/api/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4263,12 +4486,59 @@ const App: React.FC = () => {
       });
       const data = await resp.json();
       if (resp.ok) {
+        setQuickQueryStructured(null);
         setQuickQueryOutput(data.output || 'No output');
       } else {
         setQuickQueryOutput(`Error: ${data.error || data.detail || 'Unknown error'}`);
       }
     } catch (e: any) {
       setQuickQueryOutput(`Error: ${e.message || e}`);
+    } finally {
+      setQuickQueryRunning(false);
+    }
+  };
+
+  const runParsedCustomCommand = async (label: string, command: string) => {
+    const device = selectedDevice || (batchMode && batchDeviceIds.length === 1 ? devices.find((item) => item.id === batchDeviceIds[0]) : null);
+    if (!device) {
+      showToast(language === 'zh' ? '请先选择一台设备' : 'Select a device first', 'error');
+      return false;
+    }
+
+    const commandList = command
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    setQuickQueryLabel(label);
+    setQuickQueryOutput('');
+    setQuickQueryStructured(null);
+    setQuickQueryView('terminal');
+    setQuickQueryCommands(commandList);
+    setQuickQueryRunning(true);
+
+    try {
+      const resp = await fetch(`/api/devices/${device.id}/parsed-command`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        showToast(data.detail || data.error || (language === 'zh' ? '执行失败' : 'Execution failed'), 'error');
+        return false;
+      }
+
+      const firstCategory = Array.isArray(data?.categories) ? data.categories[0] : null;
+      const hasStructuredRecords = Array.isArray(firstCategory?.records) && firstCategory.records.length > 0;
+      setQuickQueryCommands(getQuickQueryCommands(data, command));
+      setQuickQueryStructured(data);
+      setQuickQueryOutput(formatQuickQueryRawOutput(data, language));
+      setQuickQueryView(hasStructuredRecords ? 'table' : 'terminal');
+      return true;
+    } catch (error: any) {
+      showToast(error?.message || String(error), 'error');
+      return false;
     } finally {
       setQuickQueryRunning(false);
     }
@@ -4395,6 +4665,12 @@ const App: React.FC = () => {
 
     if (!selectedDevice) {
       showToast(language === 'zh' ? '请先选择目标设备' : 'Select a target device first', 'error');
+      return;
+    }
+
+    if (customCommandMode === 'query') {
+      const ok = await runParsedCustomCommand(language === 'zh' ? '自定义查询' : 'Custom Query', resolvedCommand);
+      if (ok) closeCustomCommandModal();
       return;
     }
 
@@ -6083,6 +6359,11 @@ const App: React.FC = () => {
                     tone: 'bg-rose-100 text-rose-700 border-rose-200',
                   },
                   {
+                    label: language === 'zh' ? '陈旧链路' : 'Stale Links',
+                    value: topologyLinkStats.stale,
+                    tone: 'bg-sky-100 text-sky-700 border-sky-200',
+                  },
+                  {
                     label: language === 'zh' ? '多源证据' : 'Multi-source',
                     value: topologyLinkStats.multiSource,
                     tone: 'bg-sky-100 text-sky-700 border-sky-200',
@@ -6150,8 +6431,8 @@ const App: React.FC = () => {
                       </h3>
                       <p className="text-xs text-black/45">
                         {language === 'zh'
-                          ? '点击节点查看邻接关系，双操作入口放在右侧面板。'
-                          : 'Click a node to inspect adjacency. Operational actions are kept in the right panel.'}
+                          ? '离线设备默认保留展示；陈旧链路表示最近 30 分钟未刷新。手动发现用于立即校验，不应作为唯一更新方式。'
+                          : 'Offline devices remain visible by default. Stale links mean discovery has not refreshed within the last 30 minutes. Manual discovery is for immediate validation, not the only update path.'}
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-black/45">
@@ -6166,6 +6447,10 @@ const App: React.FC = () => {
                       <span className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/90 px-3 py-1.5">
                         <span className="h-2 w-2 rounded-full bg-red-500" />
                         {language === 'zh' ? '节点离线 / 链路中断' : 'Node Offline / Link Down'}
+                      </span>
+                      <span className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/90 px-3 py-1.5">
+                        <span className="h-2 w-2 rounded-full bg-sky-500" />
+                        {language === 'zh' ? '链路陈旧' : 'Link Stale'}
                       </span>
                       <span className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/90 px-3 py-1.5">
                         <span className="h-2 w-2 rounded-full bg-slate-400" />
@@ -6217,7 +6502,7 @@ const App: React.FC = () => {
                   <div className="relative flex flex-wrap items-center gap-3 border-t border-black/5 px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-black/45">
                     <span>{language === 'zh' ? `当前展示 ${topologyStats.nodeCount} 个节点 / ${topologyStats.linkCount} 条链路` : `Showing ${topologyStats.nodeCount} nodes / ${topologyStats.linkCount} links`}</span>
                     <span className="h-3 w-px bg-black/10" />
-                    <span>{language === 'zh' ? `${topologyLinkStats.up} 正常 · ${topologyLinkStats.degraded} 退化 · ${topologyLinkStats.down} 中断` : `${topologyLinkStats.up} up · ${topologyLinkStats.degraded} degraded · ${topologyLinkStats.down} down`}</span>
+                    <span>{language === 'zh' ? `${topologyLinkStats.up} 正常 · ${topologyLinkStats.degraded} 退化 · ${topologyLinkStats.down} 中断 · ${topologyLinkStats.stale} 陈旧` : `${topologyLinkStats.up} up · ${topologyLinkStats.degraded} degraded · ${topologyLinkStats.down} down · ${topologyLinkStats.stale} stale`}</span>
                     <span className="h-3 w-px bg-black/10" />
                     <span>{language === 'zh' ? '虚线代表推断链路' : 'Dashed lines indicate inferred links'}</span>
                   </div>
@@ -6317,6 +6602,7 @@ const App: React.FC = () => {
                                       </div>
                                       <p className="mt-1 text-xs text-black/45">{language === 'zh' ? '本端接口' : 'Local'}: {localPort} · {localTelemetry}</p>
                                       <p className="text-xs text-black/45">{language === 'zh' ? '对端接口' : 'Remote'}: {remotePort} · {remoteTelemetry}</p>
+                                      <p className="text-xs text-black/35">{language === 'zh' ? '最近发现' : 'Last seen'}: {formatTopologyLastSeen(link.last_seen)}</p>
                                     </button>
                                     <div className="flex items-center gap-2">
                                       <div className="flex flex-wrap justify-end gap-1">
@@ -6368,6 +6654,7 @@ const App: React.FC = () => {
                               <p><span className="font-semibold">{selectedTopologyLink.source_hostname || selectedTopologyLink.source_hostname_resolved || selectedTopologyLink.source_device_id}</span> · {formatTopologyPort(selectedTopologyLink.source_port)}</p>
                               <p><span className="font-semibold">{selectedTopologyLink.target_hostname || selectedTopologyLink.target_hostname_resolved || selectedTopologyLink.target_device_id}</span> · {formatTopologyPort(selectedTopologyLink.target_port)}</p>
                             </div>
+                            <p className="mt-2 text-xs text-slate-500">{language === 'zh' ? '最近发现' : 'Last seen'}: {formatTopologyLastSeen(selectedTopologyLink.last_seen)}</p>
                             <p className="mt-2 text-xs text-slate-600">{selectedTopologyLink.operational_summary}</p>
                             <div className="mt-3 grid gap-2 md:grid-cols-2">
                               <div className="rounded-lg border border-white/70 bg-white/70 px-3 py-2">
@@ -6648,6 +6935,10 @@ const App: React.FC = () => {
                                       if (selectedDevice?.id !== device.id) {
                                         setQuickQueryOutput('');
                                         setQuickQueryLabel('');
+                                        setQuickQueryStructured(null);
+                                        setQuickQueryView('terminal');
+                                        setQuickQueryMaximized(false);
+                                        setQuickQueryCommands([]);
                                       }
                                       setSelectedDevice(device);
                                     }
@@ -6889,7 +7180,13 @@ const App: React.FC = () => {
                             </>
                           ) : (quickQueryRunning || quickQueryOutput) ? (
                             /* ── Terminal output in center panel ── */
-                            <div className="flex flex-1 flex-col overflow-hidden rounded-b-2xl bg-[linear-gradient(180deg,#0d1117_0%,#151b23_100%)]">
+                            <>
+                              {quickQueryMaximized && (
+                                <div className="fixed inset-0 z-[70] bg-[#020817]/72 backdrop-blur-sm" />
+                              )}
+                              <div className={quickQueryMaximized
+                                ? 'fixed left-1/2 top-1/2 z-[80] flex h-[84vh] w-[min(1280px,90vw)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-3xl border border-white/10 bg-[linear-gradient(180deg,#0d1117_0%,#151b23_100%)] shadow-[0_32px_120px_rgba(0,0,0,0.6)]'
+                                : 'flex flex-1 flex-col overflow-hidden rounded-b-2xl bg-[linear-gradient(180deg,#0d1117_0%,#151b23_100%)]'}>
                               {/* Terminal Title Bar */}
                               <div className="shrink-0 flex items-center justify-between border-b border-white/[0.06] bg-[linear-gradient(90deg,#1c2030_0%,#161b22_100%)] px-4 py-2.5">
                                 <div className="flex items-center gap-3 min-w-0">
@@ -6903,8 +7200,44 @@ const App: React.FC = () => {
                                     : <Monitor size={13} className="text-emerald-400 shrink-0" />}
                                   <span className="text-[12px] font-bold text-white/90 truncate">{quickQueryLabel}</span>
                                   <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-md bg-white/[0.06] text-white/35 font-mono border border-white/[0.04]">{selectedDevice?.hostname || devices.find(d => d.id === batchDeviceIds[0])?.hostname || ''}</span>
+                                  {!quickQueryRunning && quickQueryStructured && (
+                                    <div className="ml-2 flex items-center gap-1 rounded-lg border border-white/[0.08] bg-white/[0.04] p-1">
+                                      <button
+                                        onClick={() => setQuickQueryView('terminal')}
+                                        className={`rounded-md px-2 py-1 text-[10px] font-bold uppercase transition-all ${quickQueryView === 'terminal' ? 'bg-white/14 text-white' : 'text-white/45 hover:text-white/75'}`}
+                                        title={isZh ? '终端回显' : 'Terminal Output'}
+                                      >
+                                        {isZh ? '终端' : 'Terminal'}
+                                      </button>
+                                      <button
+                                        onClick={() => setQuickQueryView('table')}
+                                        className={`rounded-md px-2 py-1 text-[10px] font-bold uppercase transition-all ${quickQueryView === 'table' ? 'bg-white/14 text-white' : 'text-white/45 hover:text-white/75'}`}
+                                        title={isZh ? '结构化表格' : 'Structured Table'}
+                                      >
+                                        {isZh ? '表格' : 'Table'}
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
                                 <div className="flex items-center gap-0.5 shrink-0">
+                                  {!quickQueryRunning && quickQueryOutput && (
+                                    <button
+                                      onClick={() => setQuickQueryMaximized((current) => !current)}
+                                      className="text-white/25 hover:text-white/60 p-2 rounded-lg hover:bg-white/[0.06] transition-all"
+                                      title={quickQueryMaximized ? (isZh ? '还原' : 'Restore') : (isZh ? '放大' : 'Maximize')}
+                                    >
+                                      {quickQueryMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                                    </button>
+                                  )}
+                                  {!quickQueryRunning && quickQueryStructured && quickQueryTable.records.length > 0 && (
+                                    <button
+                                      onClick={() => exportQuickQueryTable(quickQueryCommands)}
+                                      className="text-white/25 hover:text-white/60 p-2 rounded-lg hover:bg-white/[0.06] transition-all"
+                                      title={isZh ? '导出 Excel' : 'Export Excel'}
+                                    >
+                                      <Download size={13} />
+                                    </button>
+                                  )}
                                   {!quickQueryRunning && quickQueryOutput && (
                                     <button
                                       onClick={async () => { const ok = await copyTextWithFallback(quickQueryOutput); showToast(ok ? (isZh ? '已复制' : 'Copied') : (isZh ? '复制失败' : 'Copy failed'), ok ? 'success' : 'error'); }}
@@ -6915,7 +7248,7 @@ const App: React.FC = () => {
                                     </button>
                                   )}
                                   <button
-                                    onClick={() => { setQuickQueryOutput(''); setQuickQueryLabel(''); }}
+                                    onClick={() => { setQuickQueryOutput(''); setQuickQueryLabel(''); setQuickQueryStructured(null); setQuickQueryView('terminal'); setQuickQueryMaximized(false); setQuickQueryCommands([]); }}
                                     className="text-white/25 hover:text-white/60 p-2 rounded-lg hover:bg-white/[0.06] transition-all"
                                     title={isZh ? '关闭' : 'Close'}
                                   >
@@ -6923,12 +7256,122 @@ const App: React.FC = () => {
                                   </button>
                                 </div>
                               </div>
+                              {!quickQueryRunning && quickQueryCommands.length > 0 && (
+                                <div className="shrink-0 border-b border-white/[0.05] bg-[linear-gradient(180deg,rgba(16,23,34,0.92)_0%,rgba(9,14,22,0.82)_100%)] px-4 py-3">
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex items-center gap-2">
+                                        <span className="inline-flex items-center rounded-full border border-cyan-400/18 bg-cyan-400/10 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.16em] text-cyan-100/90">
+                                          {isZh ? '实际执行命令' : 'Executed Commands'}
+                                        </span>
+                                        <span className="text-[10px] text-white/38">
+                                          {isZh ? `${quickQueryCommands.length} 条` : `${quickQueryCommands.length} command${quickQueryCommands.length > 1 ? 's' : ''}`}
+                                        </span>
+                                      </div>
+                                      <div className="mt-2 flex flex-col gap-1.5">
+                                        {quickQueryCommands.map((command, index) => (
+                                          <div
+                                            key={`${command}-${index}`}
+                                            className="overflow-hidden rounded-xl border border-cyan-400/14 bg-[linear-gradient(180deg,rgba(3,11,21,0.96)_0%,rgba(7,18,32,0.92)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                                          >
+                                            <div className="flex items-stretch">
+                                              <span className="w-1 shrink-0 bg-[linear-gradient(180deg,rgba(34,211,238,0.95)_0%,rgba(6,182,212,0.45)_100%)]" />
+                                              <div className="min-w-0 flex-1 px-3 py-2">
+                                                <div className="mb-1 flex items-center gap-2 text-[9px] font-bold uppercase tracking-[0.16em] text-cyan-200/55">
+                                                  <span>{isZh ? '命令' : 'Command'}</span>
+                                                  <span className="text-white/18">#{index + 1}</span>
+                                                </div>
+                                                <code className="block overflow-x-auto text-[11px] font-medium leading-relaxed text-[#F7FBFF]">
+                                                  {command}
+                                                </code>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                    <button
+                                      onClick={async () => {
+                                        const ok = await copyTextWithFallback(quickQueryCommands.join('\n'));
+                                        showToast(ok ? (isZh ? '命令已复制' : 'Commands copied') : (isZh ? '复制失败' : 'Copy failed'), ok ? 'success' : 'error');
+                                      }}
+                                      className="shrink-0 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-[10px] font-bold uppercase tracking-[0.12em] text-white/60 transition-all hover:bg-white/[0.08] hover:text-white"
+                                      title={isZh ? '复制命令' : 'Copy commands'}
+                                    >
+                                      {isZh ? '复制命令' : 'Copy'}
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
                               {/* Terminal Output — fills remaining space */}
                               <div className="flex-1 overflow-auto terminal-scroll">
                                 {quickQueryRunning ? (
                                   <div className="flex flex-col items-center justify-center py-16 gap-4">
                                     <div className="w-10 h-10 rounded-full border-2 border-[#00bceb]/20 border-t-[#00bceb] animate-spin" />
                                     <span className="text-xs text-white/25 font-mono">{isZh ? '正在查询...' : 'Querying...'}</span>
+                                  </div>
+                                ) : quickQueryStructured && quickQueryView === 'table' ? (
+                                  <div className="p-5 space-y-4">
+                                    <div className="flex items-center justify-between gap-3 border-b border-white/[0.04] pb-3">
+                                      <div>
+                                        <p className="text-[12px] font-bold text-white/90">{quickQueryLabel}</p>
+                                        <p className="mt-1 text-[10px] text-white/35">
+                                          {quickQueryTable.category?.parser || 'ntc-templates'} · {isZh ? '记录数' : 'Records'} {Number(quickQueryTable.category?.count || 0)}
+                                        </p>
+                                      </div>
+                                      {quickQueryTable.category?.parse_errors?.length > 0 && (
+                                        <span className="rounded-full bg-amber-500/12 px-2 py-1 text-[10px] font-bold uppercase text-amber-300">
+                                          {isZh ? '部分回退' : 'Partial Fallback'}
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {quickQueryTable.records.length > 0 ? (
+                                      <div className={quickQueryMaximized
+                                        ? 'overflow-auto rounded-xl border border-white/[0.06] bg-black/20 max-h-[calc(84vh-12rem)]'
+                                        : 'overflow-auto rounded-xl border border-white/[0.06] bg-black/20 min-h-[24rem] max-h-[58vh]'}>
+                                        <table className="min-w-full text-left text-[12px] text-[#d8e2eb]">
+                                          <thead className="sticky top-0 bg-[#101722]">
+                                            <tr className="border-b border-white/[0.06]">
+                                              {quickQueryTable.columns.map((column) => (
+                                                <th key={column} className="px-3 py-2 text-[10px] font-bold uppercase tracking-[0.14em] text-white/45 whitespace-nowrap">
+                                                  {column}
+                                                </th>
+                                              ))}
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {quickQueryTable.records.map((record: Record<string, any>, index: number) => (
+                                              <tr key={`quick-row-${index}`} className="border-b border-white/[0.04] last:border-b-0 hover:bg-white/[0.03]">
+                                                {quickQueryTable.columns.map((column) => {
+                                                  const value = record?.[column];
+                                                  return (
+                                                    <td key={`${index}-${column}`} className="px-3 py-2 align-top text-[11px] text-[#d8e2eb] whitespace-nowrap">
+                                                      {value == null || value === '' ? <span className="text-white/20">-</span> : String(value)}
+                                                    </td>
+                                                  );
+                                                })}
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    ) : (
+                                      <div className="rounded-xl border border-dashed border-white/[0.08] bg-white/[0.02] px-4 py-5 text-sm text-white/45">
+                                        {isZh ? '当前没有结构化记录，可切回终端查看原始回显。' : 'No structured records are available for this query. Switch back to Terminal for raw output.'}
+                                      </div>
+                                    )}
+
+                                    {quickQueryTable.category?.parse_errors?.length > 0 && (
+                                      <div className="rounded-xl border border-amber-400/20 bg-amber-400/8 px-4 py-3 text-xs text-amber-200">
+                                        <p className="font-bold uppercase tracking-[0.14em]">{isZh ? '解析提示' : 'Parsing Notes'}</p>
+                                        <div className="mt-2 space-y-1">
+                                          {quickQueryTable.category.parse_errors.map((item: any, index: number) => (
+                                            <div key={`parse-error-${index}`}>{item.command}: {item.error}</div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
                                   </div>
                                 ) : (
                                   <div className="p-5">
@@ -6940,7 +7383,8 @@ const App: React.FC = () => {
                                   </div>
                                 )}
                               </div>
-                            </div>
+                              </div>
+                            </>
                           ) : (
                             <div className="flex-1 flex flex-col items-center justify-center text-center gap-4 p-6">
                               <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-black/[0.03]">
@@ -7143,27 +7587,26 @@ const App: React.FC = () => {
                               const isCisco = plat.includes('cisco') || plat.includes('arista') || plat.includes('rgos');
                               const isHuawei = plat.includes('huawei') || plat.includes('h3c') || plat.includes('ce_');
                               const isJuniper = plat.includes('juniper') || plat.includes('junos');
-                              const presets: { icon: string; label: string; labelEn: string; cmds: string; group: string }[] = [
-                                { icon: '📡', label: '接口状态', labelEn: 'Interfaces', group: 'net', cmds: isCisco ? 'show ip interface brief' : isHuawei ? 'display interface brief' : isJuniper ? 'show interfaces terse' : 'show ip interface brief' },
-                                { icon: '📋', label: 'ARP表', labelEn: 'ARP Table', group: 'net', cmds: isCisco ? 'show arp' : isHuawei ? 'display arp' : isJuniper ? 'show arp' : 'show arp' },
-                                { icon: '🏷️', label: 'MAC表', labelEn: 'MAC Table', group: 'net', cmds: isCisco ? 'show mac address-table' : isHuawei ? 'display mac-address' : isJuniper ? 'show ethernet-switching table' : 'show mac address-table' },
+                              const presets: { icon: string; label: string; labelEn: string; cmds: string; group: string; operationalCategory?: string }[] = [
+                                { icon: '📡', label: '接口状态', labelEn: 'Interfaces', group: 'net', operationalCategory: 'interfaces', cmds: isCisco ? 'show ip interface brief' : isHuawei ? 'display interface brief' : isJuniper ? 'show interfaces terse' : 'show ip interface brief' },
+                                { icon: '📋', label: 'ARP表', labelEn: 'ARP Table', group: 'net', operationalCategory: 'arp', cmds: isCisco ? 'show arp' : isHuawei ? 'display arp' : isJuniper ? 'show arp' : 'show arp' },
+                                { icon: '🏷️', label: 'MAC表', labelEn: 'MAC Table', group: 'net', operationalCategory: 'mac_table', cmds: isCisco ? 'show mac address-table' : isHuawei ? 'display mac-address' : isJuniper ? 'show ethernet-switching table' : 'show mac address-table' },
                                 { icon: '📊', label: 'VLAN', labelEn: 'VLAN', group: 'net', cmds: isCisco ? 'show vlan brief' : isHuawei ? 'display vlan' : isJuniper ? 'show vlans' : 'show vlan brief' },
-                                { icon: '📌', label: 'LLDP邻居', labelEn: 'LLDP', group: 'net', cmds: isCisco ? 'show lldp neighbors' : isHuawei ? 'display lldp neighbor brief' : isJuniper ? 'show lldp neighbors' : 'show lldp neighbors' },
-                                { icon: '🗺️', label: '路由表', labelEn: 'Routes', group: 'route', cmds: isCisco ? 'show ip route' : isHuawei ? 'display ip routing-table' : isJuniper ? 'show route' : 'show ip route' },
-                                { icon: '🔗', label: 'BGP邻居', labelEn: 'BGP Peers', group: 'route', cmds: isCisco ? 'show bgp summary' : isHuawei ? 'display bgp peer' : isJuniper ? 'show bgp summary' : 'show bgp summary' },
-                                { icon: '🔍', label: 'OSPF邻居', labelEn: 'OSPF Nbrs', group: 'route', cmds: isCisco ? 'show ip ospf neighbor' : isHuawei ? 'display ospf peer brief' : isJuniper ? 'show ospf neighbor' : 'show ip ospf neighbor' },
+                                { icon: '📌', label: 'LLDP邻居', labelEn: 'LLDP', group: 'net', operationalCategory: 'neighbors', cmds: isCisco ? 'show lldp neighbors' : isHuawei ? 'display lldp neighbor brief' : isJuniper ? 'show lldp neighbors' : 'show lldp neighbors' },
+                                { icon: '🗺️', label: '路由表', labelEn: 'Routes', group: 'route', operationalCategory: 'routing_table', cmds: isCisco ? 'show ip route' : isHuawei ? 'display ip routing-table' : isJuniper ? 'show route' : 'show ip route' },
+                                { icon: '🔗', label: 'BGP邻居', labelEn: 'BGP Peers', group: 'route', operationalCategory: 'bgp', cmds: isCisco ? 'show bgp summary' : isHuawei ? 'display bgp peer' : isJuniper ? 'show bgp summary' : 'show bgp summary' },
+                                { icon: '🔍', label: 'OSPF邻居', labelEn: 'OSPF Nbrs', group: 'route', operationalCategory: 'ospf', cmds: isCisco ? 'show ip ospf neighbor' : isHuawei ? 'display ospf peer brief' : isJuniper ? 'show ospf neighbor' : 'show ip ospf neighbor' },
                                 { icon: '🏥', label: '设备信息', labelEn: 'Version', group: 'sys', cmds: isCisco ? 'show version' : isHuawei ? 'display version' : isJuniper ? 'show version' : 'show version' },
                                 { icon: '📝', label: '日志', labelEn: 'Logs', group: 'sys', cmds: isCisco ? 'show logging | tail 30' : isHuawei ? 'display logbuffer last 30' : isJuniper ? 'show log messages | last 30' : 'show logging | tail 30' },
                                 { icon: '⏱️', label: '运行时间', labelEn: 'Uptime', group: 'sys', cmds: isCisco ? 'show uptime' : isHuawei ? 'display clock\ndisplay version | include uptime' : isJuniper ? 'show system uptime' : 'show uptime' },
                                 { icon: '💾', label: '运行配置', labelEn: 'Running Config', group: 'sys', cmds: isCisco ? 'show running-config' : isHuawei ? 'display current-configuration' : isJuniper ? 'show configuration' : 'show running-config' },
                               ];
-                              const userSavedCmds: { icon: string; label: string; labelEn: string; cmds: string }[] = (() => {
+                              const userSavedCmds: { icon: string; label: string; labelEn: string; cmds: string; operationalCategory?: string }[] = (() => {
                                 try { return JSON.parse(localStorage.getItem('quickQuerySaved') || '[]'); } catch { return []; }
                               })();
                               const allCmds = [...presets, ...userSavedCmds.map(c => ({ ...c, group: 'custom' }))];
                               const hasDevice = !!(selectedDevice || (batchMode && batchDeviceIds.length === 1));
                               const deviceName = selectedDevice?.hostname || devices.find(d => d.id === batchDeviceIds[0])?.hostname || '';
-                              const activeCmd = allCmds.find(c => (isZh ? c.label : c.labelEn) === quickQueryLabel);
 
                               // ═══════════════════════════════════════════
                               // ── CATEGORIZED QUERY GRID MODE ──
@@ -7211,7 +7654,7 @@ const App: React.FC = () => {
                                               {items.map((cmd, i) => (
                                                 <button key={`${grp.key}-${i}`}
                                                   disabled={quickQueryRunning}
-                                                  onClick={() => runQuickQuery(isZh ? cmd.label : cmd.labelEn, cmd.cmds)}
+                                                  onClick={() => runQuickQuery(isZh ? cmd.label : cmd.labelEn, cmd.cmds, cmd.operationalCategory)}
                                                   title={cmd.cmds}
                                                   className="group relative flex flex-col items-center gap-1.5 px-2 py-3 rounded-xl border border-black/[0.05] bg-white hover:border-[#00bceb]/25 hover:shadow-lg hover:shadow-[#00bceb]/[0.06] hover:-translate-y-0.5 active:translate-y-0 transition-all duration-200 disabled:opacity-40 disabled:hover:translate-y-0"
                                                 >
@@ -10051,8 +10494,8 @@ const App: React.FC = () => {
                     }`}>
                       {customCommandMode === 'query'
                         ? (language === 'zh'
-                          ? '查看模式：命令在 Exec 模式下执行，适用于 show、display、ping、tracert 等只读命令。'
-                          : 'Query mode: commands run in exec mode. Use for show, display, ping, tracert — read-only, no config changes.')
+                          ? '查看模式：命令在 Exec 模式下执行，适用于 show、display、ping、tracert 等只读命令。若匹配到 ntc-templates，会自动生成表格；未匹配时默认保留原始终端输出。'
+                          : 'Query mode: commands run in exec mode. Use for show, display, ping, tracert — read-only, no config changes. When an ntc template matches, the result is structured automatically; otherwise the raw terminal output is preserved.')
                         : (language === 'zh'
                           ? <>配置模式——各平台自动进入配置视图：<br/>· Cisco：<code className="font-mono">configure terminal</code><br/>· Huawei / H3C：<code className="font-mono">system-view</code><br/>· Arista EOS：<code className="font-mono">configure session</code>（事务，失败自动回滚）<br/>· Juniper：<code className="font-mono">configure</code></>
                           : <><b>Config mode</b> — config view entered automatically per platform:<br/>· Cisco: <code className="font-mono">configure terminal</code><br/>· Huawei / H3C: <code className="font-mono">system-view</code><br/>· Arista EOS: <code className="font-mono">configure session</code> (transactional, auto-rollback on error)<br/>· Juniper: <code className="font-mono">configure</code></>)}
@@ -10718,8 +11161,8 @@ const App: React.FC = () => {
                     <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-blue-700">{language === 'zh' ? '检测模式' : 'Check Mode'}</p>
                     <p className="mt-2 text-sm text-blue-900">
                       {testResult?.checkMode === 'quick' || !testResult?.checkMode
-                        ? (language === 'zh' ? '当前默认执行快速连通性检测，只检查 ICMP 和目标管理端口，不执行 Netmiko 登录。' : 'The default check is a quick reachability probe that verifies ICMP and the management port only, without a Netmiko login.')
-                        : (language === 'zh' ? '当前结果包含深度 SSH 登录校验。' : 'This result includes deep SSH login validation.')}
+                        ? (language === 'zh' ? '当前结果只检查 ICMP 和管理端口。' : 'This result only checks ICMP and the management port.')
+                        : (language === 'zh' ? '当前结果已执行 SSH 登录校验。' : 'This result includes an SSH login validation.')}
                     </p>
                   </div>
 
@@ -10743,7 +11186,7 @@ const App: React.FC = () => {
                               </span>
                             </div>
                             <p className="mt-2 text-sm font-semibold">{stage.summary}</p>
-                            <p className="mt-1 text-xs opacity-80">{stage.detail}</p>
+                            <p className="mt-1 text-xs opacity-80 leading-5">{stage.detail}</p>
                             {typeof stage.latency_ms === 'number' && Number.isFinite(stage.latency_ms) && (
                               <p className="mt-2 text-[11px] font-medium opacity-80">{language === 'zh' ? '耗时' : 'Latency'} {stage.latency_ms} ms</p>
                             )}
@@ -10759,55 +11202,29 @@ const App: React.FC = () => {
                     <p className={`text-sm font-medium ${testResult?.success ? 'text-emerald-800' : 'text-red-800'}`}>
                       {testResult?.message}
                     </p>
+                    {!testResult?.success && buildConnectionTestHint(testResult?.errorCode, language) && (
+                      <p className="mt-2 text-xs leading-5 text-red-700/90">
+                        {buildConnectionTestHint(testResult?.errorCode, language)}
+                      </p>
+                    )}
                   </div>
-
-                  {testResult?.errorCode === LEGACY_SSH_ERROR_CODE && (
-                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
-                      <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-amber-700">Legacy SSH Compatibility</p>
-                      <p className="mt-2 text-sm text-amber-900">
-                        这通常不是账号密码错误，而是设备只支持较老的 SSH KEX、ssh-rsa、cipher 或 MAC 组合。平台已经按兼容模式重试过；如果还失败，优先检查设备镜像和 SSH 配置。
-                      </p>
-                    </div>
-                  )}
-
-                  {testResult?.errorCode === SSH_AUTH_ERROR_CODE && (
-                    <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3">
-                      <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-rose-700">SSH Authentication</p>
-                      <p className="mt-2 text-sm text-rose-900">
-                        当前不是算法协商失败，而是设备拒绝了登录认证。优先核对用户名、密码，以及设备上的 AAA、line vty、login local 配置是否允许这个账号通过 SSH 登录。
-                      </p>
-                    </div>
-                  )}
-
-                  {testResult?.errorCode === SSH_TIMEOUT_ERROR_CODE && (
-                    <div className="rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3">
-                      <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-orange-700">SSH Timeout</p>
-                      <p className="mt-2 text-sm text-orange-900">
-                        这不是单纯的端口不通，而是 SSH 会话在建立或读取阶段超时。优先检查设备 CPU、AAA/VTY 响应、会话配额，以及中间安全设备是否对管理流量做了限速或拦截。
-                      </p>
-                    </div>
-                  )}
-
-                  {testResult?.errorCode === SSH_TRANSPORT_ERROR_CODE && (
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                      <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-700">SSH Transport</p>
-                      <p className="mt-2 text-sm text-slate-900">
-                        当前更像是 SSH 传输层没建立起来。优先核对 22 端口是否开放、设备是否启用了 SSH、以及 ACL、防火墙或堡垒链路是否直接拒绝连接。
-                      </p>
-                    </div>
-                  )}
                   
                   {testResult?.output && (
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-bold uppercase tracking-widest text-black/30 ml-1">
-                        {testResult?.errorCode === LEGACY_SSH_ERROR_CODE || testResult?.errorCode === SSH_AUTH_ERROR_CODE || testResult?.errorCode === SSH_TIMEOUT_ERROR_CODE || testResult?.errorCode === SSH_TRANSPORT_ERROR_CODE ? 'Raw SSH Error' : 'Device Output'}
-                      </label>
-                      <div className="bg-[#00172D] p-4 rounded-xl overflow-auto max-h-[200px]">
+                    <details className="rounded-2xl border border-black/10 bg-black/[0.02] px-4 py-3">
+                      <summary className="cursor-pointer text-[11px] font-bold uppercase tracking-[0.18em] text-black/45">
+                        {language === 'zh' ? '展开原始日志' : 'Show raw log'}
+                      </summary>
+                      {testResult.rawError && (
+                        <p className="mt-3 text-xs leading-5 text-black/55">
+                          {language === 'zh' ? '原始错误：' : 'Raw error: '}{testResult.rawError}
+                        </p>
+                      )}
+                      <div className="mt-3 bg-[#00172D] p-4 rounded-xl overflow-auto max-h-[200px]">
                         <pre className="text-xs font-mono text-emerald-400/90 whitespace-pre-wrap">
                           {testResult.output}
                         </pre>
                       </div>
-                    </div>
+                    </details>
                   )}
 
                   <div className="flex gap-3 pt-2">
@@ -11971,6 +12388,105 @@ const App: React.FC = () => {
                 </div>
               </div>
 
+              </div>
+
+              <div className="px-5 pb-5 sm:px-6 xl:px-8">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-[10px] font-bold uppercase tracking-widest text-black/30">{language === 'zh' ? '运行数据视图' : 'Operational Data'}</h4>
+                    <p className="mt-1 text-xs text-black/40">
+                      {language === 'zh'
+                        ? '采集接口、邻居、ARP、MAC、路由表、BGP 和 OSPF 的结构化结果。'
+                        : 'Collect structured views for interfaces, neighbors, ARP, MAC, routing, BGP, and OSPF.'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => viewingDevice?.id && loadDeviceOperationalData(viewingDevice.id)}
+                    disabled={deviceOperationalDataLoading}
+                    className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white transition-all ${deviceOperationalDataLoading ? 'bg-slate-400' : 'bg-[#00172D] hover:bg-[#0b2849]'}`}
+                  >
+                    <RotateCcw size={15} className={deviceOperationalDataLoading ? 'animate-spin' : ''} />
+                    {deviceOperationalDataLoading
+                      ? (language === 'zh' ? '采集中...' : 'Collecting...')
+                      : (deviceOperationalData ? (language === 'zh' ? '重新采集' : 'Refresh') : (language === 'zh' ? '开始采集' : 'Collect'))}
+                  </button>
+                </div>
+
+                {!deviceOperationalData ? (
+                  <div className="rounded-2xl border border-dashed border-black/10 bg-black/[0.015] px-4 py-5 text-sm text-black/40">
+                    {language === 'zh'
+                      ? '点击“开始采集”后，会按平台命令模板抓取这 6 类运行数据，并用 ntc-templates 解析后展示。'
+                      : 'Click Collect to run platform-specific commands for these six categories and display ntc-templates parsing results.'}
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      <div className="rounded-xl border border-black/5 bg-white px-4 py-3 text-sm text-black/55">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-black/35">{language === 'zh' ? '成功分类' : 'Successful'}</p>
+                        <p className="mt-1 text-xl font-semibold text-[#00172D]">{Number(deviceOperationalData.summary?.successful_categories || 0)}</p>
+                      </div>
+                      <div className="rounded-xl border border-black/5 bg-white px-4 py-3 text-sm text-black/55">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-black/35">{language === 'zh' ? '失败分类' : 'Failed'}</p>
+                        <p className="mt-1 text-xl font-semibold text-[#00172D]">{Number(deviceOperationalData.summary?.failed_categories || 0)}</p>
+                      </div>
+                      <div className="rounded-xl border border-black/5 bg-white px-4 py-3 text-sm text-black/55">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-black/35">{language === 'zh' ? '结构化记录' : 'Records'}</p>
+                        <p className="mt-1 text-xl font-semibold text-[#00172D]">{Number(deviceOperationalData.summary?.total_records || 0)}</p>
+                      </div>
+                      <div className="rounded-xl border border-black/5 bg-white px-4 py-3 text-sm text-black/55">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-black/35">{language === 'zh' ? '采集时间' : 'Collected'}</p>
+                        <p className="mt-1 text-sm font-semibold text-[#00172D]">{new Date(String(deviceOperationalData.collected_at || '')).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US', { hour12: false })}</p>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      {(Array.isArray(deviceOperationalData.categories) ? deviceOperationalData.categories : []).map((category: any) => {
+                        const records = Array.isArray(category.records) ? category.records : [];
+                        const rawOutputs = Array.isArray(category.raw_outputs) ? category.raw_outputs : [];
+                        const toneClass = category.success ? 'border-emerald-100' : 'border-red-100';
+                        const label = operationalCategoryLabelMap[category.key]?.[language === 'zh' ? 'zh' : 'en'] || category.key;
+                        return (
+                          <div key={category.key} className={`rounded-2xl border bg-white ${toneClass} overflow-hidden`}>
+                            <div className="flex items-center justify-between gap-3 border-b border-black/5 bg-black/[0.02] px-4 py-3">
+                              <div>
+                                <p className="text-sm font-semibold text-[#00172D]">{label}</p>
+                                <p className="mt-1 text-[11px] text-black/40">{Array.isArray(category.commands) ? category.commands.join(' | ') : '-'}</p>
+                              </div>
+                              <div className="text-right">
+                                <span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase ${category.success ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                                  {category.success ? (language === 'zh' ? '成功' : 'OK') : (language === 'zh' ? '失败' : 'Fail')}
+                                </span>
+                                <p className="mt-1 text-[11px] font-medium text-black/45">{Number(category.count || 0)} {language === 'zh' ? '条' : 'rows'}</p>
+                              </div>
+                            </div>
+                            <div className="space-y-3 p-4">
+                              {category.error && (
+                                <div className="rounded-xl border border-red-100 bg-red-50/60 px-3 py-2 text-xs text-red-700">{category.error}</div>
+                              )}
+                              {records.length > 0 ? (
+                                <pre className="max-h-64 overflow-auto rounded-xl bg-black/[0.025] p-3 text-[11px] text-black/65 whitespace-pre-wrap">{JSON.stringify(records.slice(0, 12), null, 2)}</pre>
+                              ) : rawOutputs.length > 0 ? (
+                                <div className="space-y-2">
+                                  {rawOutputs.slice(0, 2).map((item: any, index: number) => (
+                                    <div key={`${category.key}-raw-${index}`} className="rounded-xl border border-black/5 bg-black/[0.015] p-3">
+                                      <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-black/35">{item.command}</p>
+                                      <pre className="max-h-40 overflow-auto text-[11px] text-black/60 whitespace-pre-wrap">{String(item.output || '').slice(0, 3000)}</pre>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="rounded-xl border border-dashed border-black/10 bg-black/[0.015] px-3 py-4 text-sm text-black/40">
+                                  {language === 'zh' ? '已执行命令，但没有得到可展示的结构化记录。' : 'Commands ran, but no displayable structured records were returned.'}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Interface Monitoring Table */}

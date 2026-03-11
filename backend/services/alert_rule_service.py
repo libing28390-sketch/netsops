@@ -7,12 +7,27 @@ import uuid
 from database import get_db_connection
 
 
-METRIC_TYPES = {'cpu', 'memory', 'interface_util', 'interface_down'}
-THRESHOLD_METRICS = {'cpu', 'memory', 'interface_util'}
+METRIC_TYPES = {
+    'cpu', 'memory', 'interface_util', 'interface_down', 'interconnect_down',
+    'temperature_high', 'snmp_unreachable', 'lldp_neighbor_lost', 'fan_failure', 'power_supply_failure',
+    'interface_error_rate_high', 'interface_flap',
+    'bgp_neighbor_down', 'ospf_neighbor_down', 'bfd_session_down',
+}
+THRESHOLD_METRICS = {'cpu', 'memory', 'interface_util', 'temperature_high', 'interface_error_rate_high'}
 SCOPE_TYPES = {'global', 'site', 'device', 'interface'}
 SCOPE_MATCH_MODES = {'exact', 'contains', 'prefix', 'glob'}
 SCOPE_PRIORITY = {'global': 0, 'site': 1, 'device': 2, 'interface': 3}
 ALLOWED_SEVERITIES = {'critical', 'major', 'warning'}
+
+
+def _default_severity_for_metric(metric_type: str) -> str:
+    if metric_type == 'interface_down':
+        return 'warning'
+    if metric_type in {'interconnect_down', 'snmp_unreachable', 'lldp_neighbor_lost', 'temperature_high', 'interface_error_rate_high', 'interface_flap'}:
+        return 'major'
+    if metric_type in {'fan_failure', 'power_supply_failure', 'bgp_neighbor_down', 'ospf_neighbor_down', 'bfd_session_down'}:
+        return 'critical'
+    return 'major'
 
 
 def _utc_now_iso() -> str:
@@ -32,7 +47,7 @@ def _normalize_rule_row(row) -> dict[str, Any]:
     item['scope_type'] = str(item.get('scope_type') or 'global').strip() or 'global'
     item['scope_match_mode'] = str(item.get('scope_match_mode') or 'exact').strip() or 'exact'
     item['scope_value'] = str(item.get('scope_value') or '').strip()
-    item['severity'] = str(item.get('severity') or 'major').strip().lower() or 'major'
+    item['severity'] = str(item.get('severity') or _default_severity_for_metric(item['metric_type'])).strip().lower() or _default_severity_for_metric(item['metric_type'])
     item['created_by'] = str(item.get('created_by') or 'system')
     item['created_at'] = str(item.get('created_at') or _utc_now_iso())
     item['updated_by'] = str(item.get('updated_by') or 'system')
@@ -87,7 +102,8 @@ def _validate_rule_payload(payload: dict[str, Any], existing: dict[str, Any] | N
     if scope_type != 'global' and not scope_value:
         raise ValueError('scope_value is required when scope_type is not global')
 
-    severity = str(payload.get('severity', base.get('severity') or 'major')).strip().lower() or 'major'
+    default_severity = _default_severity_for_metric(metric_type)
+    severity = str(payload.get('severity', base.get('severity') or default_severity)).strip().lower() or default_severity
     if severity not in ALLOWED_SEVERITIES:
         raise ValueError(f'severity must be one of {sorted(ALLOWED_SEVERITIES)}')
 

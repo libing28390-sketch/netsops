@@ -23,6 +23,41 @@ import {
 } from './alertManagementShared';
 
 const AlertRulesTab: React.FC<AlertPageCommonProps> = ({ language, currentUsername, showToast }) => {
+  const thresholdMetrics = new Set<AlertRuleSettings['metric_type']>(['cpu', 'memory', 'interface_util', 'temperature_high', 'interface_error_rate_high']);
+
+  const defaultSeverityForMetric = (metricType: AlertRuleSettings['metric_type']): AlertRuleSettings['severity'] => {
+    switch (metricType) {
+      case 'interface_down':
+        return 'warning';
+      case 'interconnect_down':
+      case 'snmp_unreachable':
+      case 'lldp_neighbor_lost':
+      case 'temperature_high':
+      case 'interface_error_rate_high':
+      case 'interface_flap':
+        return 'major';
+      case 'fan_failure':
+      case 'power_supply_failure':
+      case 'bgp_neighbor_down':
+      case 'ospf_neighbor_down':
+      case 'bfd_session_down':
+        return 'critical';
+      default:
+        return 'major';
+    }
+  };
+
+  const defaultThresholdForMetric = (metricType: AlertRuleSettings['metric_type']) => {
+    switch (metricType) {
+      case 'temperature_high':
+        return 75;
+      case 'interface_error_rate_high':
+        return 2;
+      default:
+        return 90;
+    }
+  };
+
   const [alertRules, setAlertRules] = useState<AlertRuleSettings[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -99,7 +134,8 @@ const AlertRulesTab: React.FC<AlertPageCommonProps> = ({ language, currentUserna
       if (!prev) return prev;
       const next = { ...prev, [key]: value } as AlertRuleSettings;
       if (key === 'metric_type') {
-        next.threshold = value === 'interface_down' ? null : (prev.threshold ?? 90);
+        next.threshold = thresholdMetrics.has(value) ? defaultThresholdForMetric(value) : null;
+        next.severity = defaultSeverityForMetric(value);
       }
       if (key === 'scope_type' && value === 'global') {
         next.scope_value = '';
@@ -354,6 +390,17 @@ const AlertRulesTab: React.FC<AlertPageCommonProps> = ({ language, currentUserna
                       <option value="memory">{metricTypeLabel('memory', language)}</option>
                       <option value="interface_util">{metricTypeLabel('interface_util', language)}</option>
                       <option value="interface_down">{metricTypeLabel('interface_down', language)}</option>
+                      <option value="interconnect_down">{metricTypeLabel('interconnect_down', language)}</option>
+                      <option value="snmp_unreachable">{metricTypeLabel('snmp_unreachable', language)}</option>
+                      <option value="lldp_neighbor_lost">{metricTypeLabel('lldp_neighbor_lost', language)}</option>
+                      <option value="temperature_high">{metricTypeLabel('temperature_high', language)}</option>
+                      <option value="fan_failure">{metricTypeLabel('fan_failure', language)}</option>
+                      <option value="power_supply_failure">{metricTypeLabel('power_supply_failure', language)}</option>
+                      <option value="interface_error_rate_high">{metricTypeLabel('interface_error_rate_high', language)}</option>
+                      <option value="interface_flap">{metricTypeLabel('interface_flap', language)}</option>
+                      <option value="bgp_neighbor_down">{metricTypeLabel('bgp_neighbor_down', language)}</option>
+                      <option value="ospf_neighbor_down">{metricTypeLabel('ospf_neighbor_down', language)}</option>
+                      <option value="bfd_session_down">{metricTypeLabel('bfd_session_down', language)}</option>
                     </select>
                   </label>
                 </div>
@@ -393,8 +440,8 @@ const AlertRulesTab: React.FC<AlertPageCommonProps> = ({ language, currentUserna
                     </select>
                   </label>
                   <label className="text-sm text-black/65">
-                    <span>{language === 'zh' ? '阈值 (%)' : 'Threshold (%)'}</span>
-                    <input type="number" min="0" max="100" value={ruleDraft.threshold ?? ''} onChange={(e) => updateRuleField('threshold', e.target.value === '' ? null : Number(e.target.value))} disabled={ruleDraft.metric_type === 'interface_down'} className={`${alertInputClass} mt-2 rounded-xl px-3 py-2 disabled:bg-black/[0.03]`} />
+                    <span>{language === 'zh' ? '阈值' : 'Threshold'}</span>
+                    <input type="number" min="0" value={ruleDraft.threshold ?? ''} onChange={(e) => updateRuleField('threshold', e.target.value === '' ? null : Number(e.target.value))} disabled={!thresholdMetrics.has(ruleDraft.metric_type)} className={`${alertInputClass} mt-2 rounded-xl px-3 py-2 disabled:bg-black/[0.03]`} />
                   </label>
                   <label className="text-sm text-black/65">
                     <span>{language === 'zh' ? '重复通知窗口(秒)' : 'Quiet Window (sec)'}</span>

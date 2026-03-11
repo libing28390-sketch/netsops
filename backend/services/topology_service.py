@@ -12,10 +12,12 @@ from scrapli.driver.core import AsyncEOSDriver, AsyncIOSXEDriver, AsyncJunosDriv
 from scrapli_community.hp.comware.async_driver import AsyncHPComwareDriver
 from scrapli_community.huawei.vrp.async_driver import AsyncHuaweiVRPDriver
 
+from core.textfsm import configure_ntc_templates
 from database import get_db_connection
 from drivers.ssh_compat import build_netmiko_compatibility_kwargs
 
 logger = logging.getLogger(__name__)
+configure_ntc_templates()
 
 PLATFORM_MAP = {
     'cisco_ios': 'cisco_ios',
@@ -361,6 +363,8 @@ def _replace_device_observations(device: dict[str, Any], observations: list[dict
 def rebuild_links_from_observations() -> int:
     conn = get_db_connection()
     try:
+        existing_rows = conn.execute('SELECT * FROM links').fetchall()
+        existing_by_key = {str(row['link_key'] or ''): dict(row) for row in existing_rows if row['link_key']}
         rows = conn.execute(
             '''
             SELECT * FROM topology_observations
@@ -382,9 +386,12 @@ def rebuild_links_from_observations() -> int:
 
         now = _utc_now_iso()
         conn.execute('DELETE FROM links')
+        active_link_keys: set[str] = set()
 
         for link_key, observations in grouped.items():
+            active_link_keys.add(link_key)
             first = observations[0]
+            existing = existing_by_key.get(link_key, {})
             reverse_seen = any(
                 obs['source_device_id'] == first['target_device_id'] and obs['target_device_id'] == first['source_device_id']
                 for obs in observations
@@ -436,14 +443,65 @@ def rebuild_links_from_observations() -> int:
                     0,
                     len(observations),
                     _safe_json({'protocols': protocols, 'reverse_seen': reverse_seen}),
-                    now,
+                    existing.get('created_at') or now,
                     now,
                     max(obs.get('updated_at') or now for obs in observations),
                 ),
             )
 
+        stale_retention_seconds = 24 * 60 * 60
+        for link_key, existing in existing_by_key.items():
+            if link_key in active_link_keys:
+                continue
+            last_seen = str(existing.get('last_seen') or '')
+            try:
+                age_seconds = (datetime.fromisoformat(now) - datetime.fromisoformat(last_seen)).total_seconds() if last_seen else stale_retention_seconds + 1
+            except Exception:
+                age_seconds = stale_retention_seconds + 1
+            if age_seconds > stale_retention_seconds:
+                continue
+
+            metadata = {}
+            try:
+                metadata = json.loads(existing.get('metadata_json') or '{}')
+            except Exception:
+                metadata = {}
+            metadata['stale_reason'] = 'missing_from_latest_discovery'
+
+            conn.execute(
+                '''
+                INSERT INTO links (
+                    id, link_key, source_device_id, source_hostname, source_port, source_port_normalized,
+                    target_device_id, target_hostname, target_port, target_port_normalized,
+                    discovery_source, confidence, status, is_inferred, evidence_count,
+                    metadata_json, created_at, updated_at, last_seen
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''',
+                (
+                    str(existing.get('id') or uuid.uuid4()),
+                    link_key,
+                    existing.get('source_device_id'),
+                    existing.get('source_hostname') or '',
+                    existing.get('source_port') or '',
+                    existing.get('source_port_normalized') or '',
+                    existing.get('target_device_id'),
+                    existing.get('target_hostname') or '',
+                    existing.get('target_port') or '',
+                    existing.get('target_port_normalized') or '',
+                    existing.get('discovery_source') or 'lldp',
+                    float(existing.get('confidence') or 0.0),
+                    'stale',
+                    int(existing.get('is_inferred') or 0),
+                    int(existing.get('evidence_count') or 1),
+                    _safe_json(metadata),
+                    existing.get('created_at') or now,
+                    now,
+                    existing.get('last_seen') or existing.get('updated_at') or now,
+                ),
+            )
+
         conn.commit()
-        return len(grouped)
+        return len(active_link_keys)
     finally:
         conn.close()
 

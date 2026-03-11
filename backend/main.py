@@ -3,6 +3,7 @@ from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from core.config import settings
+from core.textfsm import configure_ntc_templates
 from core.logging import setup_logging
 from api.health import router as health_router, record_host_resource_snapshot
 from api.devices import router as devices_router
@@ -53,6 +54,7 @@ init_db()
 async def lifespan(app: FastAPI):
     # ── startup ──
     logger.info(f"Starting up {settings.PROJECT_NAME} in {settings.ENVIRONMENT} mode...")
+    configure_ntc_templates()
     seed_data()
     asyncio.create_task(status_monitor())
     record_host_resource_snapshot(sync_alerts=True)
@@ -316,6 +318,8 @@ def _run_telemetry_maintenance():
 
 async def status_monitor():
     from services.snmp_service import collect_device_metrics, collect_interface_data, collect_device_info
+    from services.operational_data_service import collect_operational_data
+    from core.crypto import decrypt_credential
     import re as _re
     import time as _time
     # Polling cadence: 5s base cycle for near real-time interface monitoring.
@@ -337,6 +341,7 @@ async def status_monitor():
     sem = asyncio.Semaphore(monitor_concurrency)
     # Store previous interface octets for bandwidth calculation { device_id: { ifname: {in_octets, out_octets, ts} } }
     prev_intf_octets: dict = {}
+    snmp_failure_streak: dict[str, int] = {}
     # Flap detection: { "device_id:ifname": [timestamp_of_transition, ...] }
     intf_flap_history: dict = {}
     FLAP_WINDOW_SECS = 600   # 10-minute window
@@ -386,9 +391,240 @@ async def status_monitor():
             return 'memory'
         if dedupe_key.startswith('if_util:'):
             return 'interface_util'
+        if dedupe_key.startswith('temp_high:'):
+            return 'temperature_high'
+        if dedupe_key.startswith('snmp_unreachable:'):
+            return 'snmp_unreachable'
+        if dedupe_key.startswith('lldp_neighbor_lost:'):
+            return 'lldp_neighbor_lost'
+        if dedupe_key.startswith('fan_failure:'):
+            return 'fan_failure'
+        if dedupe_key.startswith('psu_failure:'):
+            return 'power_supply_failure'
+        if dedupe_key.startswith('if_error_rate:'):
+            return 'interface_error_rate_high'
+        if dedupe_key.startswith('if_flap:'):
+            return 'interface_flap'
+        if dedupe_key.startswith('bgp_neighbor_down:'):
+            return 'bgp_neighbor_down'
+        if dedupe_key.startswith('ospf_neighbor_down:'):
+            return 'ospf_neighbor_down'
+        if dedupe_key.startswith('bfd_session_down:'):
+            return 'bfd_session_down'
+        if dedupe_key.startswith('interconnect_down:'):
+            return 'interconnect_down'
         if dedupe_key.startswith('if_down:'):
             return 'interface_down'
         return None
+
+    def load_topology_ports(device_id: str) -> set[str]:
+        rows = _db_quick(
+            '''
+                        SELECT source_device_id, target_device_id, source_port_normalized, target_port_normalized
+            FROM links
+            WHERE (source_device_id = ? OR target_device_id = ?)
+              AND COALESCE(is_inferred, 0) = 0
+            ''',
+            (device_id, device_id),
+            fetchall=True,
+        ) or []
+        ports: set[str] = set()
+        for row in rows:
+            source_port = str(row['source_port_normalized'] or '').strip().lower()
+            target_port = str(row['target_port_normalized'] or '').strip().lower()
+            if str(row['source_device_id'] or '') == device_id and source_port:
+                ports.add(source_port)
+            if str(row['target_device_id'] or '') == device_id and target_port:
+                ports.add(target_port)
+        return ports
+
+    def sync_lldp_neighbor_alerts():
+        links = _db_quick(
+            '''
+            SELECT l.*, s.status AS source_status, t.status AS target_status
+            FROM links l
+            JOIN devices s ON l.source_device_id = s.id
+            JOIN devices t ON l.target_device_id = t.id
+            ''',
+            fetchall=True,
+        ) or []
+        active_keys: set[str] = set()
+
+        for row in links:
+            link = dict(row)
+            dedupe_key = f"lldp_neighbor_lost:{link.get('link_key') or link.get('id')}"
+            active_keys.add(dedupe_key)
+            source_online = str(link.get('source_status') or '').lower() == 'online'
+            target_online = str(link.get('target_status') or '').lower() == 'online'
+            is_lost = str(link.get('status') or '').lower() == 'stale' and source_online and target_online
+            interface_name = f"{link.get('source_port_normalized') or link.get('source_port') or ''}->{link.get('target_port_normalized') or link.get('target_port') or ''}"
+            rule = resolve_alert_rule('lldp_neighbor_lost', device_row={'id': link.get('source_device_id'), 'hostname': link.get('source_hostname') or '', 'site': '', 'ip_address': ''}, ip_address='', interface_name=interface_name)
+            set_alert_state(
+                dedupe_key,
+                is_lost,
+                (rule or {}).get('severity', 'major'),
+                'LLDP Neighbor Lost',
+                (
+                    f"链路 {link.get('source_hostname') or link.get('source_device_id')}:{link.get('source_port')} -> {link.get('target_hostname') or link.get('target_device_id')}:{link.get('target_port')} 未在最新邻居发现中出现"
+                    if is_lost else
+                    f"链路 {link.get('source_hostname') or link.get('source_device_id')}:{link.get('source_port')} -> {link.get('target_hostname') or link.get('target_device_id')}:{link.get('target_port')} 已重新被邻居发现"
+                ),
+                str(link.get('source_device_id') or ''),
+                interface_name,
+                ip_address='',
+                status='active' if is_lost else 'resolved',
+                rule=rule,
+            )
+
+        for dedupe_key in list(open_alerts.keys()):
+            if dedupe_key.startswith('lldp_neighbor_lost:') and dedupe_key not in active_keys:
+                set_alert_state(dedupe_key, False, 'major', 'LLDP Neighbor Lost', 'LLDP 邻居关系已恢复', '', None, status='resolved')
+
+    def _normalize_protocol_text(value) -> str:
+        return str(value or '').strip().lower()
+
+    def _record_value(record: dict, exact_keys: tuple[str, ...], fuzzy_tokens: tuple[str, ...] = ()) -> str:
+        lowered = {str(key).lower(): value for key, value in (record or {}).items()}
+        for key in exact_keys:
+            if key in lowered and str(lowered[key]).strip():
+                return str(lowered[key]).strip()
+        if fuzzy_tokens:
+            for key, value in lowered.items():
+                if any(token in key for token in fuzzy_tokens) and str(value).strip():
+                    return str(value).strip()
+        return ''
+
+    def _bgp_peer_state(record: dict) -> tuple[str, bool | None]:
+        peer = _record_value(record, ('neighbor', 'peer', 'peer_ip', 'neighbor_ip', 'remote_addr', 'remote_ip'), ('neighbor', 'peer', 'remote'))
+        state = _record_value(record, ('state_pfxrcd', 'state', 'status', 'session_state'), ('state', 'status'))
+        normalized_state = _normalize_protocol_text(state)
+        if not peer or not normalized_state:
+            return peer, None
+        if normalized_state.isdigit() or 'established' in normalized_state or normalized_state == 'up':
+            return peer, False
+        down_tokens = ('idle', 'active', 'connect', 'down', 'opensent', 'openconfirm', 'admin')
+        if any(token in normalized_state for token in down_tokens):
+            return peer, True
+        return peer, None
+
+    def _ospf_peer_state(record: dict) -> tuple[str, bool | None]:
+        peer = _record_value(record, ('neighbor_id', 'neighbor', 'router_id', 'address', 'ip_address'), ('neighbor', 'router', 'address'))
+        state = _record_value(record, ('state', 'adj_state', 'adjacency_state', 'status'), ('state', 'status'))
+        normalized_state = _normalize_protocol_text(state)
+        if not peer or not normalized_state:
+            return peer, None
+        if 'full' in normalized_state or '2way' in normalized_state:
+            return peer, False
+        down_tokens = ('down', 'init', 'exstart', 'exchange', 'attempt', 'loading')
+        if any(token in normalized_state for token in down_tokens):
+            return peer, True
+        return peer, None
+
+    def _bfd_peer_state(record: dict) -> tuple[str, str, bool | None]:
+        peer = _record_value(
+            record,
+            ('neighbor_addr', 'neighbor_address', 'peer', 'neighbor', 'peer_ip', 'neighbor_ip', 'address', 'dest_addr', 'remote_addr'),
+            ('neighbor', 'peer', 'address', 'remote'),
+        )
+        interface_name = _record_value(record, ('interface', 'intf', 'local_interface'), ('interface', 'intf'))
+        state = _record_value(record, ('state', 'status', 'session_state'), ('state', 'status'))
+        normalized_state = _normalize_protocol_text(state)
+        if not peer or not normalized_state:
+            return peer, interface_name, None
+        if normalized_state == 'up':
+            return peer, interface_name, False
+        down_tokens = ('down', 'admindown', 'admin-down', 'init', 'fail', 'failed')
+        if any(token in normalized_state for token in down_tokens):
+            return peer, interface_name, True
+        return peer, interface_name, None
+
+    async def _collect_protocol_neighbor_alerts(device_row: dict, ip_address: str):
+        username = str(device_row.get('username') or '').strip()
+        decrypted_password = decrypt_credential(device_row.get('password')) or ''
+        if not username or not decrypted_password:
+            return
+
+        device_info = dict(device_row)
+        device_info['password'] = decrypted_password
+        try:
+            payload = await asyncio.to_thread(collect_operational_data, device_info, ['bgp', 'ospf', 'bfd'])
+        except Exception as exc:
+            logger.debug(f"[Protocol Monitor] {ip_address} collection failed: {exc}")
+            return
+
+        categories = {str(item.get('key') or ''): item for item in (payload.get('categories') or []) if isinstance(item, dict)}
+        bgp_records = categories.get('bgp', {}).get('records') or []
+        ospf_records = categories.get('ospf', {}).get('records') or []
+        bfd_records = categories.get('bfd', {}).get('records') or []
+
+        for record in bgp_records:
+            if not isinstance(record, dict):
+                continue
+            peer, is_down = _bgp_peer_state(record)
+            if not peer or is_down is None:
+                continue
+            rule = resolve_alert_rule('bgp_neighbor_down', device_row=device_row, ip_address=ip_address, interface_name=peer)
+            if not rule:
+                continue
+            set_alert_state(
+                f"bgp_neighbor_down:{device_row['id']}:{peer}",
+                is_down,
+                rule.get('severity', 'critical'),
+                'BGP Neighbor Down',
+                f"BGP 邻居 {peer} {'状态异常' if is_down else '已恢复建立'}",
+                device_row['id'], peer,
+                ip_address=ip_address,
+                status='active' if is_down else 'resolved',
+                rule=rule,
+            )
+
+        for record in ospf_records:
+            if not isinstance(record, dict):
+                continue
+            peer, is_down = _ospf_peer_state(record)
+            if not peer or is_down is None:
+                continue
+            rule = resolve_alert_rule('ospf_neighbor_down', device_row=device_row, ip_address=ip_address, interface_name=peer)
+            if not rule:
+                continue
+            set_alert_state(
+                f"ospf_neighbor_down:{device_row['id']}:{peer}",
+                is_down,
+                rule.get('severity', 'critical'),
+                'OSPF Neighbor Down',
+                f"OSPF 邻居 {peer} {'邻接异常' if is_down else '已恢复正常'}",
+                device_row['id'], peer,
+                ip_address=ip_address,
+                status='active' if is_down else 'resolved',
+                rule=rule,
+            )
+
+        for record in bfd_records:
+            if not isinstance(record, dict):
+                continue
+            peer, interface_name, is_down = _bfd_peer_state(record)
+            if not peer or is_down is None:
+                continue
+            scoped_name = interface_name or peer
+            rule = resolve_alert_rule('bfd_session_down', device_row=device_row, ip_address=ip_address, interface_name=scoped_name)
+            if not rule:
+                continue
+            set_alert_state(
+                f"bfd_session_down:{device_row['id']}:{peer}",
+                is_down,
+                rule.get('severity', 'critical'),
+                'BFD Session Down',
+                (
+                    f"BFD 会话 {peer}{f' ({interface_name})' if interface_name else ''} 状态异常"
+                    if is_down else
+                    f"BFD 会话 {peer}{f' ({interface_name})' if interface_name else ''} 已恢复正常"
+                ),
+                device_row['id'],
+                scoped_name,
+                ip_address=ip_address,
+                status='active' if is_down else 'resolved',
+                rule=rule,
+            )
 
     def maybe_notify_webhook(dedupe_key: str, severity: str, title: str, message: str,
                                created_at: str, ip_address: str = '', object_name: str = '',
@@ -611,6 +847,7 @@ async def status_monitor():
             snmp_community = device['snmp_community'] or 'public'
             snmp_port = device['snmp_port'] or 161
             platform = device['platform'] or 'cisco_ios'
+            snmp_available = False
 
             # Try real SNMP collection (no DB lock held during await)
             cpu_usage = None
@@ -625,6 +862,7 @@ async def status_monitor():
                 temp = metrics.get('temp')
                 fan = metrics.get('fan_status')
                 psu = metrics.get('psu_status')
+                snmp_available = any(value is not None for value in (cpu_usage, memory_usage, temp, fan, psu))
             except Exception as snmp_err:
                 logger.debug(f"[SNMP] {ip} metrics failed: {snmp_err}")
 
@@ -676,10 +914,61 @@ async def status_monitor():
                         dev_id, ip_address=ip, status='resolved', rule=memory_rule,
                     )
 
+            if temp is not None:
+                temp_key = f"temp_high:{dev_id}"
+                temp_rule = resolve_alert_rule('temperature_high', device_row=device, ip_address=ip)
+                temp_threshold = float(temp_rule['threshold']) if temp_rule and temp_rule.get('threshold') is not None else None
+                temp_active = bool(temp_rule and temp_threshold is not None and float(temp) >= temp_threshold)
+                set_alert_state(
+                    temp_key,
+                    temp_active,
+                    (temp_rule or {}).get('severity', 'major'),
+                    'Temperature High',
+                    (f"{dev_label} 设备温度达到 {temp}°C，超过阈值 {temp_threshold}°C" if temp_active else f"{dev_label} 设备温度已恢复（当前 {temp}°C）"),
+                    dev_id,
+                    ip_address=ip,
+                    status='active' if temp_active else 'resolved',
+                    rule=temp_rule,
+                )
+
+            if fan is not None:
+                fan_key = f"fan_failure:{dev_id}"
+                fan_rule = resolve_alert_rule('fan_failure', device_row=device, ip_address=ip)
+                fan_failed = str(fan).strip().lower() == 'fail'
+                set_alert_state(
+                    fan_key,
+                    fan_failed,
+                    (fan_rule or {}).get('severity', 'critical'),
+                    'Fan Failure',
+                    (f"{dev_label} 风扇状态异常，请尽快检查散热组件" if fan_failed else f"{dev_label} 风扇状态已恢复正常"),
+                    dev_id,
+                    ip_address=ip,
+                    status='active' if fan_failed else 'resolved',
+                    rule=fan_rule,
+                )
+
+            if psu is not None:
+                psu_key = f"psu_failure:{dev_id}"
+                psu_rule = resolve_alert_rule('power_supply_failure', device_row=device, ip_address=ip)
+                psu_failed = str(psu).strip().lower() == 'fail'
+                set_alert_state(
+                    psu_key,
+                    psu_failed,
+                    (psu_rule or {}).get('severity', 'critical'),
+                    'Power Supply Failure',
+                    (f"{dev_label} 电源状态异常，请检查供电与冗余模块" if psu_failed else f"{dev_label} 电源状态已恢复正常"),
+                    dev_id,
+                    ip_address=ip,
+                    status='active' if psu_failed else 'resolved',
+                    rule=psu_rule,
+                )
+
             # 3. Device info collection (every ~10 minutes)
             if collect_info:
                 try:
                     dev_info = await collect_device_info(ip, snmp_community, snmp_port)
+                    if dev_info:
+                        snmp_available = True
                     updates = {}
                     if dev_info.get('sys_name'):
                         updates['sys_name'] = dev_info['sys_name']
@@ -706,6 +995,8 @@ async def status_monitor():
                 except Exception as info_err:
                     logger.debug(f"[SNMP] {ip} device info collection failed: {info_err}")
 
+                await _collect_protocol_neighbor_alerts(device, ip)
+
             # 4. Interface data collection
             if collect_intf:
                 try:
@@ -713,6 +1004,8 @@ async def status_monitor():
                     now_iso = _utc_now_iso()
                     intf_data = await collect_interface_data(ip, snmp_community, snmp_port)
                     if intf_data:
+                        snmp_available = True
+                        topology_ports = load_topology_ports(dev_id)
                         # Calculate real-time throughput and bandwidth utilization from previous snapshot.
                         prev = prev_intf_octets.get(dev_id, {})
                         cur_snapshot = {}
@@ -722,6 +1015,8 @@ async def status_monitor():
                             cur_snapshot[iname] = {
                                 'in_octets': iface['in_octets'],
                                 'out_octets': iface['out_octets'],
+                                'in_ucast_pkts': iface.get('in_ucast_pkts', 0),
+                                'out_ucast_pkts': iface.get('out_ucast_pkts', 0),
                                 'in_errors': iface.get('in_errors', 0),
                                 'out_errors': iface.get('out_errors', 0),
                                 'in_discards': iface.get('in_discards', 0),
@@ -743,8 +1038,9 @@ async def status_monitor():
                             hist[:] = [t for t in hist if t > cutoff]
                             iface['flapping'] = len(hist) >= FLAP_THRESHOLD
                             flap_alert_key = f"if_flap:{dev_id}:{iname}"
+                            flap_rule = resolve_alert_rule('interface_flap', device_row=device, ip_address=ip, interface_name=iname)
                             set_alert_state(
-                                flap_alert_key, iface['flapping'], 'major', 'Interface Flapping',
+                                flap_alert_key, iface['flapping'], (flap_rule or {}).get('severity', 'major'), 'Interface Flapping',
                                 (
                                     f"{iname} 接口震荡：10 分钟内状态翻转 {len(hist)} 次"
                                     if iface['flapping'] else
@@ -753,6 +1049,7 @@ async def status_monitor():
                                 dev_id, iname,
                                 ip_address=ip,
                                 status='active' if iface['flapping'] else 'resolved',
+                                rule=flap_rule,
                             )
 
                             if iname in prev:
@@ -781,6 +1078,15 @@ async def status_monitor():
                                         iface['bw_in_pct'] = min(bw_in, 100.0)
                                         iface['bw_out_pct'] = min(bw_out, 100.0)
 
+                                    delta_error_events = max(0, iface.get('in_errors', 0) - prev[iname].get('in_errors', 0))
+                                    delta_error_events += max(0, iface.get('out_errors', 0) - prev[iname].get('out_errors', 0))
+                                    delta_error_events += max(0, iface.get('in_discards', 0) - prev[iname].get('in_discards', 0))
+                                    delta_error_events += max(0, iface.get('out_discards', 0) - prev[iname].get('out_discards', 0))
+                                    delta_packets = max(0, iface.get('in_ucast_pkts', 0) - prev[iname].get('in_ucast_pkts', 0))
+                                    delta_packets += max(0, iface.get('out_ucast_pkts', 0) - prev[iname].get('out_ucast_pkts', 0))
+                                    if delta_packets > 0:
+                                        iface['error_rate_pct'] = round((delta_error_events / delta_packets) * 100, 3)
+
                             # Persist high-frequency telemetry for short-term tracing.
                             raw_rows.append((
                                 now_iso,
@@ -802,32 +1108,74 @@ async def status_monitor():
 
                             # Basic alert rules: interface down / high utilization.
                             # Requirement: only trigger DOWN alert on state transition UP -> DOWN.
-                            down_rule = resolve_alert_rule('interface_down', device_row=device, ip_address=ip, interface_name=iname)
-                            if down_rule and iface.get('speed_mbps', 0) > 0:
-                                prev_status = str(prev.get(iname, {}).get('status', '')).lower()
-                                curr_status = str(iface.get('status', '')).lower()
-                                down_key = f"if_down:{dev_id}:{iname}"
+                            normalized_iname = str(iname or '').strip().lower()
+                            is_topology_port = normalized_iname in topology_ports
+                            down_metric = 'interconnect_down' if is_topology_port else 'interface_down'
+                            down_title = 'Interconnect Down' if is_topology_port else 'Interface Down'
+                            down_message = (
+                                f"{iname} 互联口状态变更：UP → DOWN，请优先检查邻居关系、上联链路与对端接口"
+                                if is_topology_port else
+                                f"{iname} 状态变更：UP → DOWN，请检查端口连接和用线"
+                            )
+                            recover_message = (
+                                f"{iname} 互联口状态恢复：DOWN → UP"
+                                if is_topology_port else
+                                f"{iname} 状态恢复：DOWN → UP"
+                            )
+                            down_rule = resolve_alert_rule(down_metric, device_row=device, ip_address=ip, interface_name=iname)
+                            prev_status = str(prev.get(iname, {}).get('status', '')).lower()
+                            curr_status = str(iface.get('status', '')).lower()
+                            if down_rule:
+                                down_key = f"{'interconnect_down' if is_topology_port else 'if_down'}:{dev_id}:{iname}"
+                                alternate_key = f"{'if_down' if is_topology_port else 'interconnect_down'}:{dev_id}:{iname}"
                                 if prev_status == 'up' and curr_status == 'down':
                                     set_alert_state(
-                                        down_key, True, down_rule.get('severity', 'major'), 'Interface Down',
-                                        f"{iname} 状态变更：UP → DOWN，请检查端口连接和用线",
+                                        alternate_key, False, resolved_alert_severity(None, 'warning'), 'Interface Down',
+                                        f"{iname} 状态恢复：DOWN → UP",
+                                        dev_id, iname,
+                                        ip_address=ip, status='resolved',
+                                    )
+                                    set_alert_state(
+                                        down_key, True, down_rule.get('severity', 'major' if is_topology_port else 'warning'), down_title,
+                                        down_message,
                                         dev_id, iname,
                                         ip_address=ip, status='active', rule=down_rule,
                                     )
                                 elif prev_status == 'down' and curr_status == 'up':
                                     set_alert_state(
-                                        down_key, False, resolved_alert_severity(down_rule, 'major'), 'Interface Down',
-                                        f"{iname} 状态恢复：DOWN → UP",
+                                        down_key, False, resolved_alert_severity(down_rule, 'major' if is_topology_port else 'warning'), down_title,
+                                        recover_message,
                                         dev_id, iname,
                                         ip_address=ip, status='resolved', rule=down_rule,
                                     )
                             else:
                                 set_alert_state(
-                                    f"if_down:{dev_id}:{iname}", False, resolved_alert_severity(None, 'major'), 'Interface Down',
+                                    f"if_down:{dev_id}:{iname}", False, resolved_alert_severity(None, 'warning'), 'Interface Down',
                                     f"{iname} 状态恢复：DOWN → UP",
                                     dev_id, iname,
                                     ip_address=ip, status='resolved',
                                 )
+
+                            error_rate_rule = resolve_alert_rule('interface_error_rate_high', device_row=device, ip_address=ip, interface_name=iname)
+                            error_rate_threshold = float(error_rate_rule['threshold']) if error_rate_rule and error_rate_rule.get('threshold') is not None else None
+                            current_error_rate = float(iface.get('error_rate_pct') or 0)
+                            error_rate_active = bool(error_rate_rule and error_rate_threshold is not None and current_error_rate >= error_rate_threshold)
+                            set_alert_state(
+                                f"if_error_rate:{dev_id}:{iname}",
+                                error_rate_active,
+                                (error_rate_rule or {}).get('severity', 'major'),
+                                'Interface Error Rate High',
+                                (
+                                    f"{iname} 接口错误率达到 {current_error_rate:.3f}%，超过阈值 {error_rate_threshold}%"
+                                    if error_rate_active else
+                                    f"{iname} 接口错误率已恢复正常（当前 {current_error_rate:.3f}%）"
+                                ),
+                                dev_id,
+                                iname,
+                                ip_address=ip,
+                                status='active' if error_rate_active else 'resolved',
+                                rule=error_rate_rule,
+                            )
 
                             max_util = max(float(iface.get('bw_in_pct') or 0), float(iface.get('bw_out_pct') or 0))
                             util_rule = resolve_alert_rule('interface_util', device_row=device, ip_address=ip, interface_name=iname)
@@ -866,6 +1214,36 @@ async def status_monitor():
                                   (json.dumps(intf_data), dev_id))
                 except Exception as intf_err:
                     logger.debug(f"[SNMP] {ip} interface collection failed: {intf_err}")
+
+            snmp_rule = resolve_alert_rule('snmp_unreachable', device_row=device, ip_address=ip)
+            snmp_key = f"snmp_unreachable:{dev_id}"
+            if snmp_available:
+                snmp_failure_streak.pop(dev_id, None)
+                set_alert_state(
+                    snmp_key,
+                    False,
+                    resolved_alert_severity(snmp_rule, 'major'),
+                    'SNMP Unreachable',
+                    f"{dev_label} SNMP 采集已恢复正常",
+                    dev_id,
+                    ip_address=ip,
+                    status='resolved',
+                    rule=snmp_rule,
+                )
+            else:
+                snmp_failure_streak[dev_id] = snmp_failure_streak.get(dev_id, 0) + 1
+                snmp_active = snmp_failure_streak[dev_id] >= 2
+                set_alert_state(
+                    snmp_key,
+                    snmp_active,
+                    (snmp_rule or {}).get('severity', 'major'),
+                    'SNMP Unreachable',
+                    f"{dev_label} 设备在线，但连续 {snmp_failure_streak[dev_id]} 次 SNMP 采集失败",
+                    dev_id,
+                    ip_address=ip,
+                    status='active' if snmp_active else 'resolved',
+                    rule=snmp_rule,
+                )
 
     while True:
         try:
@@ -929,6 +1307,8 @@ async def status_monitor():
                     online_devices = _db_quick('SELECT id FROM devices WHERE status = "online"', fetchall=True)
                     for d in online_devices:
                         asyncio.create_task(discover_lldp_neighbors(d['id']))
+
+                sync_lldp_neighbor_alerts()
 
         except Exception as e:
             logger.error(f"[Status Monitor] Error: {e}")

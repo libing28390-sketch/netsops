@@ -176,6 +176,7 @@ const MonitoringPagination: React.FC<{
 const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
   const [refreshing, setRefreshing] = React.useState(false);
   const [hostResourceRange, setHostResourceRange] = React.useState<1 | 24 | 168>(24);
+  const [hostResourceAlertView, setHostResourceAlertView] = React.useState<'active' | 'history'>('active');
   const [hostResourceHistory, setHostResourceHistory] = React.useState<HostResourceHistoryPayload | null>(null);
   const [hostResourceHistoryLoading, setHostResourceHistoryLoading] = React.useState(false);
   const {
@@ -386,6 +387,14 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
     return resolvedAt ? 'Recovered' : 'Active';
   };
 
+  const hostAlertTitle = (metricKey?: string, fallbackTitle?: string) => {
+    if (metricKey === 'cpu_percent') return language === 'zh' ? '宿主机 CPU 使用率过高' : 'Host CPU usage high';
+    if (metricKey === 'memory_percent') return language === 'zh' ? '宿主机内存使用率过高' : 'Host memory usage high';
+    if (metricKey === 'disk_percent') return language === 'zh' ? '宿主机磁盘使用率过高' : 'Host disk usage high';
+    if (metricKey === 'database_status') return language === 'zh' ? '数据库连接异常' : 'Database connection unhealthy';
+    return fallbackTitle || (language === 'zh' ? '宿主机资源告警' : 'Host resource alert');
+  };
+
   const toNumOrNull = (value: any): number | null => {
     if (value == null || value === '') return null;
     const n = Number(value);
@@ -583,6 +592,21 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
     memory_percent: point.memory_percent,
     disk_percent: point.disk_percent,
   }));
+  const hostAlertHistory = Array.isArray(hostResourceHistory?.alerts) ? hostResourceHistory.alerts : [];
+  const currentHostActiveAlerts = ((hostResourceHistory?.current?.active_alerts || hostResources?.active_alerts || [])).map((alert, index) => {
+    const matchedOpenAlert = hostAlertHistory.find((item) => !item.resolved_at && item.metric_key === alert.metric_key);
+    return {
+      ...matchedOpenAlert,
+      ...alert,
+      id: matchedOpenAlert?.id || alert.id || `${alert.metric_key || 'host-alert'}-${index}`,
+      created_at: matchedOpenAlert?.created_at,
+      resolved_at: null,
+    };
+  });
+  const hostActiveAlerts = currentHostActiveAlerts.length > 0
+    ? currentHostActiveAlerts
+    : hostAlertHistory.filter((alert) => !alert.resolved_at);
+  const hostHistoricalAlerts = hostAlertHistory.slice(0, 10);
   const deviceHealthSummary = monitorOverview?.device_health_summary || null;
   const riskyDevices = Array.isArray(monitorOverview?.top_risky_devices) ? monitorOverview.top_risky_devices : [];
 
@@ -845,22 +869,65 @@ const MonitoringCenter: React.FC<MonitoringCenterProps> = (props) => {
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-3">
               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-red-600">{language === 'zh' ? '资源告警' : 'Resource Alerts'}</p>
-              <span className="text-[11px] text-black/40">{language === 'zh' ? '按阈值自动生成' : 'Threshold-driven'}</span>
+              <span className="text-[11px] text-black/40">{hostResourceAlertView === 'active'
+                ? (language === 'zh' ? `正在触发 ${hostActiveAlerts.length} 条` : `${hostActiveAlerts.length} active`)
+                : (language === 'zh' ? `最近记录 ${hostHistoricalAlerts.length} 条` : `${hostHistoricalAlerts.length} recent`)}</span>
             </div>
-            {(hostResourceHistory?.alerts || []).length > 0 ? (hostResourceHistory?.alerts || []).slice(0, 6).map((alert, index) => {
+            <div className="inline-flex rounded-xl border border-black/10 bg-black/[0.03] p-1">
+              <button
+                type="button"
+                onClick={() => setHostResourceAlertView('active')}
+                className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-all ${hostResourceAlertView === 'active' ? 'bg-white text-[#00172D] shadow-sm' : 'text-black/45 hover:text-black'}`}
+              >
+                {language === 'zh' ? '仅看活跃' : 'Active'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setHostResourceAlertView('history')}
+                className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-all ${hostResourceAlertView === 'history' ? 'bg-white text-[#00172D] shadow-sm' : 'text-black/45 hover:text-black'}`}
+              >
+                {language === 'zh' ? '查看历史' : 'History'}
+              </button>
+            </div>
+            {hostResourceAlertView === 'active' ? (
+              hostActiveAlerts.length > 0 ? hostActiveAlerts.slice(0, 6).map((alert, index) => {
               const severityTone = alert.severity === 'critical' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700';
               return (
                 <div key={alert.id || `${alert.metric_key}-${index}`} className="rounded-xl border border-black/8 px-3 py-3">
                   <div className="flex items-center justify-between gap-2">
-                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${severityTone}`}>{severityLabel(alert.severity)}</span>
-                    <span className="text-[11px] text-black/40">{alert.created_at ? formatTs(alert.created_at, true) : '--'}</span>
+                    <div className="flex items-center gap-2">
+                      <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${severityTone}`}>{severityLabel(alert.severity)}</span>
+                      <span className="rounded-full bg-red-50 px-2.5 py-1 text-[10px] font-bold uppercase text-red-700">{phaseLabel(alert.resolved_at)}</span>
+                    </div>
+                    <span className="text-[11px] text-black/40">{alert.created_at ? formatTs(alert.created_at, true) : (language === 'zh' ? '阈值触发中' : 'Threshold active')}</span>
                   </div>
-                  <p className="mt-2 text-sm font-semibold text-[#0b2340]">{alert.title}</p>
+                  <p className="mt-2 text-sm font-semibold text-[#0b2340]">{hostAlertTitle(alert.metric_key, alert.title)}</p>
                   <p className="mt-1 text-[11px] text-black/55">{alert.message}</p>
                 </div>
               );
-            }) : (
-              <div className="rounded-xl border border-dashed border-black/10 bg-black/[0.01] p-4 text-sm text-black/35">{language === 'zh' ? '当前没有宿主机资源告警。' : 'No active host resource alerts right now.'}</div>
+              }) : (
+              <div className="rounded-xl border border-dashed border-black/10 bg-black/[0.01] p-4 text-sm text-black/35">{language === 'zh' ? '当前没有宿主机资源活跃告警。' : 'No active host resource alerts right now.'}</div>
+              )
+            ) : (
+              hostHistoricalAlerts.length > 0 ? hostHistoricalAlerts.map((alert, index) => {
+                const severityTone = alert.severity === 'critical' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700';
+                const phaseTone = alert.resolved_at ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700';
+                return (
+                  <div key={alert.id || `${alert.metric_key}-history-${index}`} className="rounded-xl border border-black/8 bg-black/[0.015] px-3 py-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${severityTone}`}>{severityLabel(alert.severity)}</span>
+                        <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${phaseTone}`}>{phaseLabel(alert.resolved_at)}</span>
+                      </div>
+                      <span className="text-[11px] text-black/40">{alert.resolved_at ? formatTs(alert.resolved_at, true) : (alert.created_at ? formatTs(alert.created_at, true) : '--')}</span>
+                    </div>
+                    <p className="mt-2 text-sm font-semibold text-[#0b2340]">{hostAlertTitle(alert.metric_key, alert.title)}</p>
+                    <p className="mt-1 text-[11px] text-black/55">{alert.message}</p>
+                  </div>
+                );
+              }) : (
+                <div className="rounded-xl border border-dashed border-black/10 bg-black/[0.01] p-4 text-sm text-black/35">{language === 'zh' ? '最近没有宿主机资源历史告警。' : 'No recent host resource alert history.'}</div>
+              )
             )}
           </div>
         </div>

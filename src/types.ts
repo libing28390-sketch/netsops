@@ -348,7 +348,22 @@ export interface AlertMaintenanceCondition {
   value: string;
 }
 
-export type AlertRuleMetricType = 'cpu' | 'memory' | 'interface_util' | 'interface_down';
+export type AlertRuleMetricType =
+  | 'cpu'
+  | 'memory'
+  | 'interface_util'
+  | 'interface_down'
+  | 'interconnect_down'
+  | 'temperature_high'
+  | 'snmp_unreachable'
+  | 'lldp_neighbor_lost'
+  | 'fan_failure'
+  | 'power_supply_failure'
+  | 'interface_error_rate_high'
+  | 'interface_flap'
+  | 'bgp_neighbor_down'
+  | 'ospf_neighbor_down'
+  | 'bfd_session_down';
 
 export type AlertRuleScopeType = 'global' | 'site' | 'device' | 'interface';
 

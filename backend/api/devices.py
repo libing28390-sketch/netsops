@@ -9,6 +9,7 @@ from typing import Optional
 from database import get_db_connection
 from services.audit_service import log_audit_event
 from services.device_health_service import annotate_devices_with_health
+from services.operational_data_service import collect_operational_data, collect_custom_command_data
 from core.crypto import encrypt_credential, decrypt_credential
 from drivers.ssh_compat import build_ssh_error_guidance, get_ssh_error_code
 
@@ -35,6 +36,87 @@ def _build_probe_stage(stage: str, ok: bool, summary: str, detail: str, latency_
         'latency_ms': latency_ms,
     }
 
+
+def _sanitize_device_item(item: dict) -> dict:
+    sanitized = dict(item)
+    if 'password' in sanitized:
+        sanitized['password'] = ''
+    return sanitized
+
+
+def _build_ssh_failure_response(hostname: str | None, ip_address: str, error_text: str, probe_output: list[str], probe_stages: list[dict], status_code: int = 400) -> JSONResponse:
+    error_code = get_ssh_error_code(error_text)
+    device_label = hostname or ip_address
+    detail = f"SSH login failed for {device_label}: {error_text}"
+    stage_detail = error_text
+
+    if error_code == 'legacy_ssh_algorithms':
+        detail = '设备 SSH 算法较旧，兼容重试后仍未完成协商。'
+        stage_detail = 'SSH 协商失败，目标设备仅接受较旧的算法组合。'
+    elif error_code == 'ssh_authentication_failed':
+        detail = '设备可达，但 SSH 认证被拒绝。请核对账号密码或 AAA/VTY 配置。'
+        stage_detail = 'TCP/22 已通，认证请求已到达设备，但用户名或密码被拒绝。'
+    elif error_code == 'ssh_transport_timeout':
+        detail = '设备管理口可达，但 SSH 会话建立或读取超时。'
+        stage_detail = '传输层连接建立后响应超时，通常与设备负载或中间策略有关。'
+    elif error_code == 'ssh_transport_unreachable':
+        detail = '设备 IP 可达，但 SSH 传输层未正常建立。'
+        stage_detail = '目标主机未完成 SSH 会话建立，请检查端口、SSH 服务或安全策略。'
+
+    content = {
+        'detail': detail,
+        'raw_error': error_text,
+        'output': "\n".join(probe_output + [f"SSH login: failed ({error_text})"]),
+        'check_mode': 'deep',
+        'stages': probe_stages + [
+            _build_probe_stage('ssh', False, 'SSH login failed', stage_detail)
+        ],
+    }
+    if error_code:
+        content['error_code'] = error_code
+        content['guidance'] = build_ssh_error_guidance(error_text)
+    return JSONResponse(status_code=status_code, content=content)
+
+
+def _resolve_connection_target(payload: dict) -> dict:
+    device_id = payload.get('device_id')
+    resolved = {
+        'hostname': payload.get('hostname'),
+        'ip_address': payload.get('ip_address'),
+        'username': payload.get('username'),
+        'password': payload.get('password'),
+        'method': payload.get('method', 'ssh'),
+        'platform': payload.get('platform', 'cisco_ios'),
+        'check_mode': str(payload.get('check_mode') or 'quick').lower(),
+    }
+
+    if not device_id:
+        return resolved
+
+    conn = get_db_connection()
+    try:
+        row = conn.execute('SELECT * FROM devices WHERE id = ?', (device_id,)).fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail='Device not found')
+
+    stored = dict(row)
+    stored_password = decrypt_credential(stored.get('password')) or ''
+    payload_password = payload.get('password')
+
+    resolved['hostname'] = resolved['hostname'] or stored.get('hostname')
+    resolved['ip_address'] = resolved['ip_address'] or stored.get('ip_address')
+    resolved['username'] = resolved['username'] or stored.get('username') or ''
+    resolved['method'] = payload.get('method') or stored.get('connection_method') or 'ssh'
+    resolved['platform'] = payload.get('platform') or stored.get('platform') or 'cisco_ios'
+    if payload_password and not str(payload_password).startswith('enc:v1:'):
+        resolved['password'] = payload_password
+    else:
+        resolved['password'] = stored_password
+    return resolved
+
 def _normalize_device_row(row):
     item = dict(row)
     try:
@@ -57,7 +139,7 @@ def _normalize_device_row(row):
     except Exception:
         item['memory_history'] = []
 
-    return item
+    return _sanitize_device_item(item)
 
 
 @router.get("/devices")
@@ -119,7 +201,7 @@ def read_devices(
                 f'SELECT {select_clause} FROM devices {where_sql} ORDER BY {order_col} {order_dir} LIMIT 500',
                 tuple(params)
             ).fetchall()
-            items = [dict(d) for d in devices] if str(mode).lower() == 'light' else [_normalize_device_row(d) for d in devices]
+            items = [_sanitize_device_item(dict(d)) for d in devices] if str(mode).lower() == 'light' else [_normalize_device_row(d) for d in devices]
             return annotate_devices_with_health(conn, items)
 
         total_row = conn.execute(
@@ -134,7 +216,7 @@ def read_devices(
             tuple([*params, page_size, offset])
         ).fetchall()
 
-        items = [dict(d) for d in devices] if str(mode).lower() == 'light' else [_normalize_device_row(d) for d in devices]
+        items = [_sanitize_device_item(dict(d)) for d in devices] if str(mode).lower() == 'light' else [_normalize_device_row(d) for d in devices]
 
         return {
             'items': annotate_devices_with_health(conn, items),
@@ -188,7 +270,7 @@ def create_device(device: dict = Body(...)):
             device_id=device_id,
             details={'ip_address': device.get('ip_address'), 'platform': device.get('platform')},
         )
-        return dict(new_device)
+        return _sanitize_device_item(dict(new_device))
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
     finally:
@@ -296,14 +378,15 @@ def test_device_connection(payload: dict = Body(...)):
     from ping3 import ping
     import logging
     logger = logging.getLogger(__name__)
-    
-    hostname = payload.get('hostname')
-    ip_address = payload.get('ip_address')
-    username = payload.get('username')
-    password = payload.get('password')
-    method = payload.get('method', 'ssh')
-    platform = payload.get('platform', 'cisco_ios')
-    check_mode = str(payload.get('check_mode') or 'quick').lower()
+
+    resolved = _resolve_connection_target(payload)
+    hostname = resolved.get('hostname')
+    ip_address = resolved.get('ip_address')
+    username = resolved.get('username')
+    password = resolved.get('password')
+    method = resolved.get('method', 'ssh')
+    platform = resolved.get('platform', 'cisco_ios')
+    check_mode = resolved.get('check_mode', 'quick')
     
     if not ip_address:
         raise HTTPException(status_code=400, detail="IP address is required")
@@ -396,6 +479,18 @@ def test_device_connection(payload: dict = Body(...)):
             },
         )
 
+    if not username or not password:
+        return JSONResponse(
+            status_code=400,
+            content={
+                'detail': '设备缺少可用的 SSH 凭据，请先补充用户名和密码。',
+                'check_mode': 'deep',
+                'stages': probe_stages + [
+                    _build_probe_stage('ssh', False, 'SSH validation skipped', '未找到可用的用户名或密码，无法执行登录校验。')
+                ],
+            },
+        )
+
     logger.debug(f"Step 3: SSH authentication test")
     device_info = {
         'hostname': hostname,
@@ -428,31 +523,7 @@ def test_device_connection(payload: dict = Body(...)):
             }
         else:
             logger.warning(f"Failed to connect to {hostname or ip_address}: {error_msg}")
-            error_code = get_ssh_error_code(error_msg)
-            if error_code:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "detail": build_ssh_error_guidance(error_msg),
-                        "output": "\n".join(probe_output + [f"SSH login: failed ({error_msg})"]),
-                        "error_code": error_code,
-                        "check_mode": "deep",
-                        "stages": probe_stages + [
-                            _build_probe_stage('ssh', False, 'SSH login failed', error_msg)
-                        ],
-                    },
-                )
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "detail": f"Failed to connect to {hostname or ip_address}: {error_msg}",
-                    "output": "\n".join(probe_output + [f"SSH login: failed ({error_msg})"]),
-                    "check_mode": "deep",
-                    "stages": probe_stages + [
-                        _build_probe_stage('ssh', False, 'SSH login failed', error_msg)
-                    ],
-                },
-            )
+            return _build_ssh_failure_response(hostname, ip_address, error_msg, probe_output, probe_stages, status_code=400)
     except HTTPException:
         raise
     except Exception as e:
@@ -460,17 +531,7 @@ def test_device_connection(payload: dict = Body(...)):
         raw_error = str(e)
         error_code = get_ssh_error_code(raw_error)
         if error_code:
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "detail": build_ssh_error_guidance(raw_error),
-                    "output": raw_error,
-                    "error_code": error_code,
-                    "stages": probe_stages + [
-                        _build_probe_stage('ssh', False, 'SSH login failed', raw_error)
-                    ],
-                },
-            )
+            return _build_ssh_failure_response(hostname, ip_address, raw_error, probe_output, probe_stages, status_code=500)
         raise HTTPException(status_code=500, detail=f"Connection error: {raw_error}")
 
 @router.post("/devices/import")
@@ -643,3 +704,49 @@ async def snmp_test(device_id: str):
             results['sync_error'] = str(sync_err)
 
     return results
+
+
+@router.post("/devices/{device_id}/operational-data")
+def collect_device_operational_data(device_id: str, payload: dict = Body(default={})): 
+    conn = get_db_connection()
+    try:
+        row = conn.execute('SELECT * FROM devices WHERE id = ?', (device_id,)).fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail='Device not found')
+
+    device_info = dict(row)
+    device_info['password'] = decrypt_credential(device_info.get('password')) or ''
+    categories = payload.get('categories') if isinstance(payload, dict) else None
+
+    try:
+        return collect_operational_data(device_info, categories=categories)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f'Operational data collection failed: {exc}')
+
+
+@router.post("/devices/{device_id}/parsed-command")
+def collect_device_parsed_command(device_id: str, payload: dict = Body(default={})):
+    conn = get_db_connection()
+    try:
+        row = conn.execute('SELECT * FROM devices WHERE id = ?', (device_id,)).fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail='Device not found')
+
+    device_info = dict(row)
+    device_info['password'] = decrypt_credential(device_info.get('password')) or ''
+    command = payload.get('command') if isinstance(payload, dict) else None
+
+    try:
+        return collect_custom_command_data(device_info, command=command)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f'Parsed command execution failed: {exc}')

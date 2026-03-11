@@ -160,9 +160,8 @@ def evaluate_device_health(device: dict[str, Any], alert_stats: dict[str, int] |
             error_interfaces += 1
 
     if down_interfaces > 0:
-        penalty = min(24, 8 + down_interfaces * 3)
-        severity = 'critical' if down_interfaces >= 2 else 'warning'
-        penalize(f'{down_interfaces} interface(s) are down', severity, penalty)
+        penalty = min(16, 4 + down_interfaces * 2)
+        penalize(f'{down_interfaces} interface(s) are down', 'warning', penalty)
 
     if flapping_interfaces > 0:
         penalty = min(18, 6 + flapping_interfaces * 3)

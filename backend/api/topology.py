@@ -1,5 +1,8 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+import json
 
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request
+
+from api.users import validate_session_token
 from database import get_db_connection
 from services.topology_service import (
     create_discovery_run,
@@ -11,6 +14,15 @@ from services.topology_service import (
 )
 
 router = APIRouter()
+
+
+def _get_authenticated_session(request: Request) -> dict:
+    auth = request.headers.get('Authorization', '')
+    token = auth.replace('Bearer ', '') if auth.startswith('Bearer ') else ''
+    sess = validate_session_token(token)
+    if not sess:
+        raise HTTPException(status_code=401, detail='Not authenticated')
+    return sess
 
 
 @router.post('/topology/discover')
@@ -47,6 +59,55 @@ async def trigger_discovery(background_tasks: BackgroundTasks):
 @router.get('/topology/links')
 def get_links():
     return get_current_links()
+
+
+@router.get('/topology/layout')
+def get_topology_layout(request: Request):
+    sess = _get_authenticated_session(request)
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            'SELECT layout_json, updated_at FROM topology_layouts WHERE user_id = ?',
+            (sess['user_id'],),
+        ).fetchone()
+        if not row:
+            return {'layout': {}, 'updated_at': None}
+        try:
+            layout = json.loads(row['layout_json'] or '{}')
+        except Exception:
+            layout = {}
+        return {'layout': layout, 'updated_at': row['updated_at']}
+    finally:
+        conn.close()
+
+
+@router.put('/topology/layout')
+def save_topology_layout(request: Request, payload: dict = Body(...)):
+    sess = _get_authenticated_session(request)
+    layout = payload.get('layout') if isinstance(payload, dict) else None
+    if layout is None:
+        raise HTTPException(status_code=400, detail='layout is required')
+
+    try:
+        serialized = json.dumps(layout)
+    except TypeError as exc:
+        raise HTTPException(status_code=400, detail=f'layout is not JSON serializable: {exc}')
+
+    conn = get_db_connection()
+    try:
+        updated_at = conn.execute("SELECT datetime('now')").fetchone()[0]
+        conn.execute(
+            '''
+            INSERT INTO topology_layouts (user_id, layout_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET layout_json = excluded.layout_json, updated_at = excluded.updated_at
+            ''',
+            (sess['user_id'], serialized, updated_at),
+        )
+        conn.commit()
+        return {'success': True, 'updated_at': updated_at}
+    finally:
+        conn.close()
 
 
 @router.get('/topology/discovery-runs')

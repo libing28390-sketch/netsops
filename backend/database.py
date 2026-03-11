@@ -253,6 +253,16 @@ def init_db():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_topology_run_devices_device_id ON topology_discovery_run_devices(device_id)')
 
         cursor.execute('''
+        CREATE TABLE IF NOT EXISTS topology_layouts (
+            user_id TEXT PRIMARY KEY,
+            layout_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_topology_layouts_updated_at ON topology_layouts(updated_at)')
+
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS topology_observations (
             id TEXT PRIMARY KEY,
             source_device_id TEXT NOT NULL,
@@ -812,88 +822,83 @@ def init_db():
             '''
         ).fetchone()
         alert_rules_count = cursor.execute('SELECT COUNT(*) FROM alert_rules').fetchone()[0]
+        seeded_at = _utc_now_iso()
+        legacy_updated_at = legacy_rules['updated_at'] if legacy_rules and legacy_rules['updated_at'] else seeded_at
+        legacy_updated_by = legacy_rules['updated_by'] if legacy_rules and legacy_rules['updated_by'] else 'system'
+        legacy_aggregation_mode = legacy_rules['aggregation_mode'] if legacy_rules and legacy_rules['aggregation_mode'] else 'dedupe_key'
+        legacy_repeat_window = int(legacy_rules['notification_repeat_window_seconds']) if legacy_rules and legacy_rules['notification_repeat_window_seconds'] is not None else 120
+        legacy_notify_on_active = int(legacy_rules['notify_on_active']) if legacy_rules and legacy_rules['notify_on_active'] is not None else 1
+        legacy_notify_on_recovery = int(legacy_rules['notify_on_recovery']) if legacy_rules and legacy_rules['notify_on_recovery'] is not None else 1
+        legacy_notify_on_reopen = int(legacy_rules['notify_on_reopen_after_maintenance']) if legacy_rules and legacy_rules['notify_on_reopen_after_maintenance'] is not None else 1
+        seed_rules = [
+            ('builtin-cpu', 'CPU Usage High', 'cpu', 'major', float(legacy_rules['cpu_threshold']) if legacy_rules and legacy_rules['cpu_threshold'] is not None else 90.0, 1),
+            ('builtin-memory', 'Memory Usage High', 'memory', 'major', float(legacy_rules['memory_threshold']) if legacy_rules and legacy_rules['memory_threshold'] is not None else 90.0, 1),
+            ('builtin-if-util', 'Interface Utilization High', 'interface_util', 'warning', float(legacy_rules['interface_util_threshold']) if legacy_rules and legacy_rules['interface_util_threshold'] is not None else 85.0, 1),
+            ('builtin-if-down', 'Interface Down', 'interface_down', 'warning', None, int(legacy_rules['interface_down_enabled']) if legacy_rules and legacy_rules['interface_down_enabled'] is not None else 1),
+            ('builtin-interconnect-down', 'Interconnect Down', 'interconnect_down', 'major', None, 1),
+            ('builtin-temp-high', 'Temperature High', 'temperature_high', 'major', 75.0, 1),
+            ('builtin-snmp-unreachable', 'SNMP Unreachable', 'snmp_unreachable', 'major', None, 1),
+            ('builtin-lldp-neighbor-lost', 'LLDP Neighbor Lost', 'lldp_neighbor_lost', 'major', None, 1),
+            ('builtin-fan-failure', 'Fan Failure', 'fan_failure', 'critical', None, 1),
+            ('builtin-psu-failure', 'Power Supply Failure', 'power_supply_failure', 'critical', None, 1),
+            ('builtin-if-error-rate', 'Interface Error Rate High', 'interface_error_rate_high', 'major', 2.0, 1),
+            ('builtin-if-flap', 'Interface Flapping', 'interface_flap', 'major', None, 1),
+            ('builtin-bgp-neighbor-down', 'BGP Neighbor Down', 'bgp_neighbor_down', 'critical', None, 1),
+            ('builtin-ospf-neighbor-down', 'OSPF Neighbor Down', 'ospf_neighbor_down', 'critical', None, 1),
+            ('builtin-bfd-session-down', 'BFD Session Down', 'bfd_session_down', 'critical', None, 1),
+        ]
+
+        def _insert_seed_rule(rule_id, name, metric_type, severity, threshold, enabled, created_at):
+            cursor.execute(
+                '''
+                INSERT OR IGNORE INTO alert_rules (
+                    id, name, metric_type, scope_type, scope_match_mode, scope_value, severity, threshold, enabled,
+                    aggregation_mode, notification_repeat_window_seconds,
+                    notify_on_active, notify_on_recovery, notify_on_reopen_after_maintenance,
+                    created_by, created_at, updated_by, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''',
+                (
+                    rule_id,
+                    name,
+                    metric_type,
+                    'global',
+                    'exact',
+                    '',
+                    severity,
+                    threshold,
+                    enabled,
+                    legacy_aggregation_mode,
+                    legacy_repeat_window,
+                    legacy_notify_on_active,
+                    legacy_notify_on_recovery,
+                    legacy_notify_on_reopen,
+                    legacy_updated_by,
+                    created_at,
+                    legacy_updated_by,
+                    created_at,
+                ),
+            )
+
         if alert_rules_count == 0:
-            seeded_at = _utc_now_iso()
-            legacy_updated_at = legacy_rules['updated_at'] if legacy_rules and legacy_rules['updated_at'] else seeded_at
-            legacy_updated_by = legacy_rules['updated_by'] if legacy_rules and legacy_rules['updated_by'] else 'system'
-            legacy_aggregation_mode = legacy_rules['aggregation_mode'] if legacy_rules and legacy_rules['aggregation_mode'] else 'dedupe_key'
-            legacy_repeat_window = int(legacy_rules['notification_repeat_window_seconds']) if legacy_rules and legacy_rules['notification_repeat_window_seconds'] is not None else 120
-            legacy_notify_on_active = int(legacy_rules['notify_on_active']) if legacy_rules and legacy_rules['notify_on_active'] is not None else 1
-            legacy_notify_on_recovery = int(legacy_rules['notify_on_recovery']) if legacy_rules and legacy_rules['notify_on_recovery'] is not None else 1
-            legacy_notify_on_reopen = int(legacy_rules['notify_on_reopen_after_maintenance']) if legacy_rules and legacy_rules['notify_on_reopen_after_maintenance'] is not None else 1
-            seed_rules = [
-                (
-                    'builtin-cpu',
-                    'CPU Usage High',
-                    'cpu',
-                    'global',
-                    '',
-                    'major',
-                    float(legacy_rules['cpu_threshold']) if legacy_rules and legacy_rules['cpu_threshold'] is not None else 90.0,
-                    1,
-                ),
-                (
-                    'builtin-memory',
-                    'Memory Usage High',
-                    'memory',
-                    'global',
-                    '',
-                    'major',
-                    float(legacy_rules['memory_threshold']) if legacy_rules and legacy_rules['memory_threshold'] is not None else 90.0,
-                    1,
-                ),
-                (
-                    'builtin-if-util',
-                    'Interface Utilization High',
-                    'interface_util',
-                    'global',
-                    '',
-                    'warning',
-                    float(legacy_rules['interface_util_threshold']) if legacy_rules and legacy_rules['interface_util_threshold'] is not None else 85.0,
-                    1,
-                ),
-                (
-                    'builtin-if-down',
-                    'Interface Down',
-                    'interface_down',
-                    'global',
-                    '',
-                    'major',
-                    None,
-                    int(legacy_rules['interface_down_enabled']) if legacy_rules and legacy_rules['interface_down_enabled'] is not None else 1,
-                ),
-            ]
             for rule in seed_rules:
-                cursor.execute(
-                    '''
-                    INSERT INTO alert_rules (
-                        id, name, metric_type, scope_type, scope_match_mode, scope_value, severity, threshold, enabled,
-                        aggregation_mode, notification_repeat_window_seconds,
-                        notify_on_active, notify_on_recovery, notify_on_reopen_after_maintenance,
-                        created_by, created_at, updated_by, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''',
-                    (
-                        rule[0],
-                        rule[1],
-                        rule[2],
-                        rule[3],
-                        'exact',
-                        rule[4],
-                        rule[5],
-                        rule[6],
-                        rule[7],
-                        legacy_aggregation_mode,
-                        legacy_repeat_window,
-                        legacy_notify_on_active,
-                        legacy_notify_on_recovery,
-                        legacy_notify_on_reopen,
-                        legacy_updated_by,
-                        legacy_updated_at,
-                        legacy_updated_by,
-                        legacy_updated_at,
-                    ),
-                )
+                _insert_seed_rule(*rule, legacy_updated_at)
+
+        cursor.execute(
+            '''
+            UPDATE alert_rules
+            SET severity = 'warning', updated_at = ?
+            WHERE metric_type = 'interface_down'
+              AND (
+                id = 'builtin-if-down'
+                OR (name = 'Interface Down' AND created_by = 'system' AND severity = 'major')
+              )
+            ''',
+            (_utc_now_iso(),),
+        )
+
+        for rule in seed_rules:
+            _insert_seed_rule(*rule, seeded_at)
         if 'temp' not in columns:
             cursor.execute('ALTER TABLE devices ADD COLUMN temp INTEGER DEFAULT 35')
         if 'fan_status' not in columns:

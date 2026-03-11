@@ -226,6 +226,17 @@ export const metricTypeLabel = (metricType: AlertRuleSettings['metric_type'], la
     case 'memory': return language === 'zh' ? '内存利用率' : 'Memory Usage';
     case 'interface_util': return language === 'zh' ? '接口利用率' : 'Interface Utilization';
     case 'interface_down': return language === 'zh' ? '接口 DOWN' : 'Interface Down';
+    case 'interconnect_down': return language === 'zh' ? '互联口 DOWN' : 'Interconnect Down';
+    case 'temperature_high': return language === 'zh' ? '设备温度过高' : 'Temperature High';
+    case 'snmp_unreachable': return language === 'zh' ? 'SNMP 不可达' : 'SNMP Unreachable';
+    case 'lldp_neighbor_lost': return language === 'zh' ? 'LLDP 邻居丢失' : 'LLDP Neighbor Lost';
+    case 'fan_failure': return language === 'zh' ? '风扇故障' : 'Fan Failure';
+    case 'power_supply_failure': return language === 'zh' ? '电源故障' : 'Power Supply Failure';
+    case 'interface_error_rate_high': return language === 'zh' ? '接口错误率过高' : 'Interface Error Rate High';
+    case 'interface_flap': return language === 'zh' ? '接口震荡' : 'Interface Flapping';
+    case 'bgp_neighbor_down': return language === 'zh' ? 'BGP 邻居 DOWN' : 'BGP Neighbor Down';
+    case 'ospf_neighbor_down': return language === 'zh' ? 'OSPF 邻居异常' : 'OSPF Neighbor Down';
+    case 'bfd_session_down': return language === 'zh' ? 'BFD 会话 DOWN' : 'BFD Session Down';
     default: return metricType;
   }
 };

@@ -1,5 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
+import switchIcon from '../assets/topology-icons/switch.svg';
+import routerIcon from '../assets/topology-icons/router.svg';
+import firewallIcon from '../assets/topology-icons/firewall.svg';
 
 interface Device {
   id: string;
@@ -7,6 +10,8 @@ interface Device {
   ip_address: string;
   status: string;
   role: string;
+  platform?: string;
+  model?: string;
   site?: string;
   health_status?: string;
   open_alert_count?: number;
@@ -23,7 +28,7 @@ interface Link {
   inferred?: boolean;
   source_hostname?: string;
   target_hostname?: string;
-  operational_state?: 'up' | 'degraded' | 'down' | 'unknown';
+  operational_state?: 'up' | 'degraded' | 'down' | 'stale' | 'unknown';
   evidence_count?: number;
 }
 
@@ -58,9 +63,51 @@ const getRoleBucket = (role?: string) => {
   return 'other';
 };
 
-const getRoleInitial = (role?: string) => {
-  const normalizedRole = String(role || '').trim();
-  return normalizedRole ? normalizedRole.charAt(0).toUpperCase() : 'D';
+type DeviceGlyphKind = 'switch' | 'firewall' | 'router' | 'generic';
+
+const getDeviceGlyphKind = (device: Device): DeviceGlyphKind => {
+  const fingerprint = [device.role, device.hostname, device.platform, device.model]
+    .map((value) => String(value || '').toLowerCase())
+    .join(' ');
+
+  if (/(firewall| fortigate|forti|palo|pan-|checkpoint|srx|asa|ftd|fw\b)/.test(fingerprint)) return 'firewall';
+  if (/(router|gateway|wan|edge router|isr|asr|mx\b)/.test(fingerprint)) return 'router';
+  if (/(switch|core|distribution|access|leaf|spine|nexus|catalyst)/.test(fingerprint)) return 'switch';
+  return 'generic';
+};
+
+const getDeviceIconHref = (kind: DeviceGlyphKind) => {
+  switch (kind) {
+    case 'switch':
+      return switchIcon;
+    case 'router':
+      return routerIcon;
+    case 'firewall':
+      return firewallIcon;
+    default:
+      return null;
+  }
+};
+
+const hasDeviceIconAsset = (device: Device) => Boolean(getDeviceIconHref(getDeviceGlyphKind(device)));
+
+const appendDeviceGlyph = (selection: d3.Selection<SVGGElement, any, any, any>, device: Device) => {
+  const glyphKind = getDeviceGlyphKind(device);
+  const iconHref = getDeviceIconHref(glyphKind);
+
+  if (!iconHref) return;
+
+  const dimensions = glyphKind === 'firewall'
+    ? { width: 38, height: 46, x: -19, y: -23 }
+    : { width: 40, height: 40, x: -20, y: -20 };
+  selection.append('image').attr('href', iconHref).attr('x', dimensions.x).attr('y', dimensions.y).attr('width', dimensions.width).attr('height', dimensions.height).attr('preserveAspectRatio', 'xMidYMid meet').attr('pointer-events', 'none');
+};
+
+const shouldRenderDeviceGlyph = (device: Device) => hasDeviceIconAsset(device);
+
+const getSiteKey = (site?: string) => {
+  const normalizedSite = String(site || '').trim();
+  return normalizedSite || 'Unassigned';
 };
 
 const getNodeTone = (device: Device) => {
@@ -84,9 +131,49 @@ const getLinkTone = (link: Link) => {
       return { stroke: '#f59e0b', muted: 'rgba(245,158,11,0.24)', labelFill: 'rgba(255,251,235,0.96)', labelStroke: 'rgba(245,158,11,0.34)' };
     case 'down':
       return { stroke: '#ef4444', muted: 'rgba(239,68,68,0.24)', labelFill: 'rgba(254,242,242,0.96)', labelStroke: 'rgba(239,68,68,0.34)' };
+    case 'stale':
+      return { stroke: '#0ea5e9', muted: 'rgba(14,165,233,0.24)', labelFill: 'rgba(240,249,255,0.96)', labelStroke: 'rgba(14,165,233,0.34)' };
     default:
       return { stroke: '#64748b', muted: 'rgba(100,116,139,0.22)', labelFill: 'rgba(255,255,255,0.94)', labelStroke: 'rgba(148,163,184,0.35)' };
   }
+};
+
+const buildSiteAnchors = (devices: Device[], width: number) => {
+  const siteMap = new Map<string, { key: string; label: string; count: number }>();
+
+  devices.forEach((device) => {
+    const key = getSiteKey(device.site);
+    const current = siteMap.get(key);
+    if (current) {
+      current.count += 1;
+      return;
+    }
+    siteMap.set(key, {
+      key,
+      label: key,
+      count: 1,
+    });
+  });
+
+  const sites = Array.from(siteMap.values()).sort((left, right) => {
+    if (left.key === 'Unassigned') return 1;
+    if (right.key === 'Unassigned') return -1;
+    return left.label.localeCompare(right.label);
+  });
+
+  const margin = Math.min(110, width * 0.12);
+  const usableWidth = Math.max(width - margin * 2, 0);
+  const anchors = sites.map((site, index) => {
+    const x = sites.length <= 1
+      ? width / 2
+      : margin + (usableWidth * index) / Math.max(sites.length - 1, 1);
+    return {
+      ...site,
+      x,
+    };
+  });
+
+  return anchors;
 };
 
 const buildSeedPositions = (devices: Device[], width: number, height: number) => {
@@ -109,26 +196,272 @@ const buildSeedPositions = (devices: Device[], width: number, height: number) =>
     other: height * 0.84,
   };
   const positions: Record<string, { x: number; y: number }> = {};
+  const siteAnchors = buildSiteAnchors(devices, width);
+  const siteAnchorMap = new Map(siteAnchors.map((site) => [site.key, site]));
 
   rowOrder.forEach((bucketName) => {
     const bucket = buckets[bucketName];
-    bucket.forEach((device, index) => {
-      const x = ((index + 1) * width) / (bucket.length + 1);
-      const jitter = bucketName === 'other' ? ((index % 2 === 0 ? 1 : -1) * 24) : ((index % 2 === 0 ? 1 : -1) * 12);
-      positions[device.id] = {
-        x,
-        y: rowY[bucketName] + jitter,
-      };
+    const groupedBySite = new Map<string, Device[]>();
+
+    bucket.forEach((device) => {
+      const siteKey = getSiteKey(device.site);
+      if (!groupedBySite.has(siteKey)) groupedBySite.set(siteKey, []);
+      groupedBySite.get(siteKey)?.push(device);
+    });
+
+    const orderedGroups = Array.from(groupedBySite.entries()).sort((left, right) => {
+      const leftAnchor = siteAnchorMap.get(left[0]);
+      const rightAnchor = siteAnchorMap.get(right[0]);
+      return (leftAnchor?.x || 0) - (rightAnchor?.x || 0);
+    });
+
+    orderedGroups.forEach(([siteKey, siteDevices]) => {
+      const anchorX = siteAnchorMap.get(siteKey)?.x ?? width / 2;
+      const clusterSpacing = Math.min(68, Math.max(42, width / Math.max(devices.length, 8)));
+
+      siteDevices.forEach((device, index) => {
+        const centeredOffset = (index - (siteDevices.length - 1) / 2) * clusterSpacing;
+        const fanOffset = siteDevices.length > 1 ? (((index % 2 === 0 ? 1 : -1) * Math.ceil(index / 2)) * 8) : 0;
+        const jitter = bucketName === 'other' ? fanOffset * 1.3 : fanOffset;
+
+        positions[device.id] = {
+          x: anchorX + centeredOffset,
+          y: rowY[bucketName] + jitter,
+        };
+      });
     });
   });
 
-  return positions;
+  return { positions, siteAnchors };
+};
+
+const clampPosition = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const TOPOLOGY_LAYOUT_STORAGE_KEY = 'netpilot.topology.layout.v1';
+
+type PersistedTopologyLayout = {
+  positions?: Record<string, { x: number; y: number }>;
+  transform?: { x: number; y: number; k: number };
+};
+
+type MinimapSnapshot = {
+  nodes: Array<{ id: string; x: number; y: number; fill: string; selected: boolean }>;
+  links: Array<{ id: string; sourceX: number; sourceY: number; targetX: number; targetY: number }>;
+  viewport: { x: number; y: number; width: number; height: number };
+  bounds: { minX: number; minY: number; scale: number; offsetX: number; offsetY: number; width: number; height: number };
+  panel: { width: number; height: number };
+};
+
+const readPersistedLayout = (): PersistedTopologyLayout => {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(TOPOLOGY_LAYOUT_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as PersistedTopologyLayout;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const writePersistedLayout = (layout: PersistedTopologyLayout) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(TOPOLOGY_LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+  } catch {
+    // Ignore storage failures to keep the interaction path stable.
+  }
+};
+
+const createDefaultTransform = (width: number, height: number) => d3.zoomIdentity
+  .translate(Math.max(width * 0.08, 44), Math.max(height * 0.08, 36))
+  .scale(0.9);
+
+const layerMeta = (height: number) => ([
+  { key: 'core', label: 'Core', y: height * 0.2, tone: 'rgba(219, 234, 254, 0.82)', stroke: 'rgba(59, 130, 246, 0.30)', accent: '#2563eb' },
+  { key: 'distribution', label: 'Distribution', y: height * 0.42, tone: 'rgba(220, 252, 231, 0.76)', stroke: 'rgba(16, 185, 129, 0.28)', accent: '#059669' },
+  { key: 'access', label: 'Access', y: height * 0.68, tone: 'rgba(255, 237, 213, 0.78)', stroke: 'rgba(249, 115, 22, 0.28)', accent: '#ea580c' },
+  { key: 'other', label: 'Other', y: height * 0.84, tone: 'rgba(241, 245, 249, 0.92)', stroke: 'rgba(100, 116, 139, 0.24)', accent: '#64748b' },
+]);
+
+const getOrthogonalRoute = (source: { x: number; y: number }, target: { x: number; y: number }) => {
+  const deltaX = target.x - source.x;
+  const deltaY = target.y - source.y;
+
+  if (Math.abs(deltaY) <= 14) {
+    return {
+      path: `M ${source.x} ${source.y} L ${target.x} ${target.y}`,
+      labelX: source.x + deltaX / 2,
+      labelY: source.y + deltaY / 2,
+    };
+  }
+
+  if (Math.abs(deltaX) < 48 || Math.abs(deltaY) < 40) {
+    const midX = source.x + deltaX / 2;
+    return {
+      path: `M ${source.x} ${source.y} L ${midX} ${source.y} L ${midX} ${target.y} L ${target.x} ${target.y}`,
+      labelX: midX,
+      labelY: source.y + deltaY / 2,
+    };
+  }
+
+  const midY = source.y + deltaY / 2;
+  return {
+    path: `M ${source.x} ${source.y} L ${source.x} ${midY} L ${target.x} ${midY} L ${target.x} ${target.y}`,
+    labelX: source.x + deltaX / 2,
+    labelY: midY,
+  };
+};
+
+const buildMinimapSnapshot = (
+  nodes: Array<any>,
+  links: Array<any>,
+  transform: d3.ZoomTransform,
+  viewportWidth: number,
+  viewportHeight: number,
+  selectedNodeId?: string | null,
+): MinimapSnapshot | null => {
+  if (!nodes.length || viewportWidth === 0 || viewportHeight === 0) return null;
+
+  const panel = { width: 188, height: 132 };
+  const padding = 14;
+  const xs = nodes.map((node) => Number(node.x || 0));
+  const ys = nodes.map((node) => Number(node.y || 0));
+  const minX = Math.min(...xs) - 70;
+  const maxX = Math.max(...xs) + 70;
+  const minY = Math.min(...ys) - 70;
+  const maxY = Math.max(...ys) + 70;
+  const contentWidth = Math.max(maxX - minX, 1);
+  const contentHeight = Math.max(maxY - minY, 1);
+  const scale = Math.min((panel.width - padding * 2) / contentWidth, (panel.height - padding * 2) / contentHeight);
+  const offsetX = (panel.width - contentWidth * scale) / 2;
+  const offsetY = (panel.height - contentHeight * scale) / 2;
+
+  const toMiniX = (value: number) => offsetX + (value - minX) * scale;
+  const toMiniY = (value: number) => offsetY + (value - minY) * scale;
+
+  const worldLeft = (-transform.x) / transform.k;
+  const worldTop = (-transform.y) / transform.k;
+  const worldWidth = viewportWidth / transform.k;
+  const worldHeight = viewportHeight / transform.k;
+
+  return {
+    nodes: nodes.map((node) => ({
+      id: node.id,
+      x: toMiniX(node.x || 0),
+      y: toMiniY(node.y || 0),
+      fill: getNodeTone(node).fill,
+      selected: node.id === selectedNodeId,
+    })),
+    links: links.map((link, index) => ({
+      id: String(link.link_key || link.id || index),
+      sourceX: toMiniX(link.source.x || 0),
+      sourceY: toMiniY(link.source.y || 0),
+      targetX: toMiniX(link.target.x || 0),
+      targetY: toMiniY(link.target.y || 0),
+    })),
+    viewport: {
+      x: toMiniX(worldLeft),
+      y: toMiniY(worldTop),
+      width: Math.max(worldWidth * scale, 18),
+      height: Math.max(worldHeight * scale, 14),
+    },
+    bounds: { minX, minY, scale, offsetX, offsetY, width: contentWidth, height: contentHeight },
+    panel,
+  };
 };
 
 const TopologyGraph: React.FC<TopologyGraphProps> = ({ devices, links, onNodeClick, selectedNodeId, selectedLinkKey, onLinkClick }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const persistedPositionsRef = useRef<Record<string, { x: number; y: number }>>({});
+  const zoomBehaviorRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const svgSelectionRef = useRef<d3.Selection<SVGSVGElement, unknown, null, undefined> | null>(null);
+  const zoomTransformRef = useRef<d3.ZoomTransform | null>(null);
+  const persistTimerRef = useRef<number | null>(null);
+  const suppressPersistRef = useRef(false);
+  const hydrationCompleteRef = useRef(false);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
+  const [zoomPercent, setZoomPercent] = useState(90);
+  const [layoutVersion, setLayoutVersion] = useState(0);
+  const [minimapSnapshot, setMinimapSnapshot] = useState<MinimapSnapshot | null>(null);
+
+  const syncLayoutToBackend = (layout: PersistedTopologyLayout) => {
+    if (typeof window === 'undefined') return;
+    const token = window.localStorage.getItem('netops_token');
+    if (!token) return;
+    void fetch('/api/topology/layout', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ layout }),
+    }).catch(() => {
+      // Keep local persistence even if remote sync is temporarily unavailable.
+    });
+  };
+
+  const persistCurrentLayout = () => {
+    if (!hydrationCompleteRef.current) return;
+    const transform = zoomTransformRef.current;
+    const layout = {
+      positions: persistedPositionsRef.current,
+      transform: transform ? { x: transform.x, y: transform.y, k: transform.k } : undefined,
+    };
+    writePersistedLayout(layout);
+    if (persistTimerRef.current) {
+      window.clearTimeout(persistTimerRef.current);
+    }
+    persistTimerRef.current = window.setTimeout(() => {
+      syncLayoutToBackend(layout);
+    }, 240);
+  };
+
+  const applyTransform = (transform: d3.ZoomTransform) => {
+    if (!svgSelectionRef.current || !zoomBehaviorRef.current) return;
+    svgSelectionRef.current.call(zoomBehaviorRef.current.transform as any, transform);
+  };
+
+  const zoomAroundViewportCenter = (factor: number) => {
+    if (viewport.width === 0 || viewport.height === 0) return;
+    const baseTransform = zoomTransformRef.current || createDefaultTransform(viewport.width, viewport.height);
+    const nextScale = clampPosition(baseTransform.k * factor, 0.35, 3.2);
+    const centerX = viewport.width / 2;
+    const centerY = viewport.height / 2;
+    const worldX = (centerX - baseTransform.x) / baseTransform.k;
+    const worldY = (centerY - baseTransform.y) / baseTransform.k;
+    const nextTransform = d3.zoomIdentity
+      .translate(centerX - worldX * nextScale, centerY - worldY * nextScale)
+      .scale(nextScale);
+    applyTransform(nextTransform);
+  };
+
+  const fitViewport = () => {
+    if (viewport.width === 0 || viewport.height === 0) return;
+    applyTransform(createDefaultTransform(viewport.width, viewport.height));
+  };
+
+  const resetLayout = () => {
+    persistedPositionsRef.current = {};
+    zoomTransformRef.current = null;
+    writePersistedLayout({});
+    syncLayoutToBackend({});
+    setLayoutVersion((value) => value + 1);
+  };
+
+  const handleMinimapClick = (event: React.MouseEvent<SVGSVGElement>) => {
+    if (!minimapSnapshot || viewport.width === 0 || viewport.height === 0) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const localX = event.clientX - bounds.left;
+    const localY = event.clientY - bounds.top;
+    const worldX = minimapSnapshot.bounds.minX + (localX - minimapSnapshot.bounds.offsetX) / minimapSnapshot.bounds.scale;
+    const worldY = minimapSnapshot.bounds.minY + (localY - minimapSnapshot.bounds.offsetY) / minimapSnapshot.bounds.scale;
+    const currentTransform = zoomTransformRef.current || createDefaultTransform(viewport.width, viewport.height);
+    const nextTransform = d3.zoomIdentity
+      .translate(viewport.width / 2 - worldX * currentTransform.k, viewport.height / 2 - worldY * currentTransform.k)
+      .scale(currentTransform.k);
+    applyTransform(nextTransform);
+  };
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -153,30 +486,100 @@ const TopologyGraph: React.FC<TopologyGraphProps> = ({ devices, links, onNodeCli
   }, []);
 
   useEffect(() => {
+    const persistedLayout = readPersistedLayout();
+    persistedPositionsRef.current = persistedLayout.positions || {};
+    if (persistedLayout.transform) {
+      zoomTransformRef.current = d3.zoomIdentity
+        .translate(persistedLayout.transform.x, persistedLayout.transform.y)
+        .scale(persistedLayout.transform.k);
+      setZoomPercent(Math.round(persistedLayout.transform.k * 100));
+    }
+
+    const token = typeof window === 'undefined' ? '' : (window.localStorage.getItem('netops_token') || '');
+    if (!token) {
+      hydrationCompleteRef.current = true;
+      return;
+    }
+
+    void fetch('/api/topology/layout', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return response.json();
+      })
+      .then((payload) => {
+        const layout = payload?.layout;
+        if (!layout || typeof layout !== 'object') return;
+        persistedPositionsRef.current = layout.positions || {};
+        if (layout.transform) {
+          zoomTransformRef.current = d3.zoomIdentity
+            .translate(Number(layout.transform.x || 0), Number(layout.transform.y || 0))
+            .scale(Number(layout.transform.k || 1));
+          setZoomPercent(Math.round(Number(layout.transform.k || 1) * 100));
+        } else {
+          zoomTransformRef.current = null;
+          setZoomPercent(90);
+        }
+        writePersistedLayout(layout);
+        setLayoutVersion((value) => value + 1);
+      })
+      .finally(() => {
+        hydrationCompleteRef.current = true;
+      });
+  }, []);
+
+  useEffect(() => () => {
+    if (persistTimerRef.current) {
+      window.clearTimeout(persistTimerRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
     if (!svgRef.current || !containerRef.current || devices.length === 0 || viewport.width === 0 || viewport.height === 0) return;
 
     const width = viewport.width;
     const height = viewport.height;
 
     const svg = d3.select(svgRef.current);
+    svgSelectionRef.current = svg;
     svg.selectAll('*').remove();
     svg.attr('viewBox', `0 0 ${width} ${height}`);
 
     const g = svg.append('g');
+    let syncMinimap = (_transform?: d3.ZoomTransform) => {};
 
     const zoom = d3.zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.1, 4])
+      .scaleExtent([0.35, 3.2])
       .on('zoom', (event) => {
+        zoomTransformRef.current = event.transform;
+        setZoomPercent(Math.round(event.transform.k * 100));
         g.attr('transform', event.transform.toString());
+        syncMinimap(event.transform);
+      })
+      .on('end', () => {
+        if (suppressPersistRef.current) {
+          suppressPersistRef.current = false;
+          return;
+        }
+        persistCurrentLayout();
       });
+    zoomBehaviorRef.current = zoom;
     svg.call(zoom as any);
-    svg.call(zoom.transform as any, d3.zoomIdentity.translate(width * 0.04, height * 0.04).scale(0.92));
 
-    const seededPositions = buildSeedPositions(devices, width, height);
+    const activeDeviceIds = new Set(devices.map((device) => device.id));
+    Object.keys(persistedPositionsRef.current).forEach((deviceId) => {
+      if (!activeDeviceIds.has(deviceId)) {
+        delete persistedPositionsRef.current[deviceId];
+      }
+    });
+
+    const { positions: seededPositions, siteAnchors } = buildSeedPositions(devices, width, height);
+    const roleLayers = layerMeta(height);
     const nodes = devices.map((device) => ({
       ...device,
-      x: seededPositions[device.id]?.x ?? width / 2,
-      y: seededPositions[device.id]?.y ?? height / 2,
+      x: persistedPositionsRef.current[device.id]?.x ?? seededPositions[device.id]?.x ?? width / 2,
+      y: persistedPositionsRef.current[device.id]?.y ?? seededPositions[device.id]?.y ?? height / 2,
     }));
     const nodeMap = new Map(nodes.map((node) => [node.id, node]));
 
@@ -227,6 +630,32 @@ const TopologyGraph: React.FC<TopologyGraphProps> = ({ devices, links, onNodeCli
         .filter((link) => link.source && link.target && link.source.id !== link.target.id);
     }
 
+    const shouldAutoArrange = Object.keys(persistedPositionsRef.current).length === 0;
+    let layoutSimulation: d3.Simulation<any, undefined> | null = null;
+
+    if (shouldAutoArrange) {
+      layoutSimulation = d3.forceSimulation(nodes as any)
+        .force('link', d3.forceLink(d3Links as any).id((d: any) => d.id).distance((link: any) => (link.inferred ? 140 : 110)).strength((link: any) => (link.inferred ? 0.24 : 0.88)))
+        .force('charge', d3.forceManyBody().strength(-620))
+        .force('center', d3.forceCenter(width / 2, height / 2))
+        .force('collide', d3.forceCollide().radius(50))
+        .force('x', d3.forceX((node: any) => seededPositions[node.id]?.x ?? width / 2).strength(0.24))
+        .force('y', d3.forceY((node: any) => seededPositions[node.id]?.y ?? height / 2).strength(0.3))
+        .stop();
+
+      const settleTicks = Math.max(120, Math.min(260, nodes.length * 18));
+      for (let index = 0; index < settleTicks; index += 1) {
+        layoutSimulation.tick();
+      }
+      layoutSimulation.stop();
+    }
+
+    nodes.forEach((node: any) => {
+      node.x = clampPosition(node.x || width / 2, 48, width - 48);
+      node.y = clampPosition(node.y || height / 2, 56, height - 56);
+      persistedPositionsRef.current[node.id] = { x: node.x, y: node.y };
+    });
+
     const neighborMap = new Map<string, Set<string>>();
     d3Links.forEach((link: any) => {
       const sourceId = link.source.id;
@@ -240,21 +669,77 @@ const TopologyGraph: React.FC<TopologyGraphProps> = ({ devices, links, onNodeCli
     const selectedNeighbors = selectedNodeId ? (neighborMap.get(selectedNodeId) || new Set<string>()) : new Set<string>();
     const hasFocus = Boolean(selectedNodeId);
 
-    const simulation = d3.forceSimulation(nodes as any)
-      .force('link', d3.forceLink(d3Links as any).id((d: any) => d.id).distance((link: any) => (link.inferred ? 140 : 110)).strength((link: any) => (link.inferred ? 0.25 : 0.9)))
-      .force('charge', d3.forceManyBody().strength(-680))
-      .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collide', d3.forceCollide().radius(48))
-      .force('x', d3.forceX((node: any) => seededPositions[node.id]?.x ?? width / 2).strength(0.18))
-      .force('y', d3.forceY((node: any) => seededPositions[node.id]?.y ?? height / 2).strength(0.24));
+    const layerGuide = g.append('g').attr('pointer-events', 'none');
+    const siteGuide = g.append('g').attr('pointer-events', 'none');
+
+    siteAnchors.forEach((site) => {
+      siteGuide.append('line')
+        .attr('x1', site.x)
+        .attr('y1', 34)
+        .attr('x2', site.x)
+        .attr('y2', height - 28)
+        .attr('stroke', 'rgba(71,85,105,0.18)')
+        .attr('stroke-dasharray', '2,8');
+
+      const labelGroup = siteGuide.append('g').attr('transform', `translate(${site.x},18)`);
+      labelGroup.append('rect')
+        .attr('x', -48)
+        .attr('y', -10)
+        .attr('width', 96)
+        .attr('height', 20)
+        .attr('rx', 10)
+        .attr('fill', 'rgba(255,255,255,0.96)')
+        .attr('stroke', 'rgba(148,163,184,0.30)');
+
+      labelGroup.append('text')
+        .attr('text-anchor', 'middle')
+        .attr('dominant-baseline', 'middle')
+        .attr('fill', '#334155')
+        .attr('font-family', 'ui-sans-serif, system-ui, sans-serif')
+        .attr('font-size', '10px')
+        .attr('font-weight', 700)
+        .text(site.label.length > 12 ? `${site.label.slice(0, 12)}...` : site.label);
+    });
+
+    roleLayers.forEach((layer, index) => {
+      const bandHeight = index === roleLayers.length - 1 ? height * 0.16 : height * 0.18;
+      layerGuide.append('rect')
+        .attr('x', 14)
+        .attr('y', layer.y - bandHeight / 2)
+        .attr('width', Math.max(width - 28, 0))
+        .attr('height', bandHeight)
+        .attr('rx', 20)
+        .attr('fill', layer.tone)
+        .attr('stroke', layer.stroke);
+
+      layerGuide.append('rect')
+        .attr('x', 18)
+        .attr('y', layer.y - bandHeight / 2 + 10)
+        .attr('width', 4)
+        .attr('height', Math.max(bandHeight - 20, 0))
+        .attr('rx', 2)
+        .attr('fill', layer.accent)
+        .attr('opacity', 0.9);
+
+      layerGuide.append('text')
+        .attr('x', 34)
+        .attr('y', layer.y - bandHeight / 2 + 18)
+        .attr('fill', layer.accent)
+        .attr('font-family', 'ui-sans-serif, system-ui, sans-serif')
+        .attr('font-size', '10px')
+        .attr('font-weight', 700)
+        .attr('letter-spacing', '0.16em')
+        .text(layer.label.toUpperCase());
+    });
 
     const linkLayer = g.append('g').attr('stroke-linecap', 'round');
 
     const linkHitArea = linkLayer
-      .selectAll('line.link-hit')
+      .selectAll('path.link-hit')
       .data(d3Links)
-      .join('line')
+      .join('path')
       .attr('class', 'link-hit')
+      .attr('fill', 'none')
       .attr('stroke', 'transparent')
       .attr('stroke-width', 18)
       .style('cursor', (item: any) => (item.inferred ? 'default' : 'pointer'))
@@ -264,10 +749,11 @@ const TopologyGraph: React.FC<TopologyGraphProps> = ({ devices, links, onNodeCli
       });
 
     const link = linkLayer
-      .selectAll('line.link-visible')
+      .selectAll('path.link-visible')
       .data(d3Links)
-      .join('line')
+      .join('path')
       .attr('class', 'link-visible')
+      .attr('fill', 'none')
       .attr('stroke', (item: any) => {
         const tone = getLinkTone(item as Link);
         const isSelected = Boolean(selectedLinkKey && (item.link_key === selectedLinkKey || item.id === selectedLinkKey));
@@ -344,26 +830,46 @@ const TopologyGraph: React.FC<TopologyGraphProps> = ({ devices, links, onNodeCli
     node.append('circle')
       .attr('r', 31)
       .attr('fill', (d: any) => {
+        if (shouldRenderDeviceGlyph(d as Device)) return 'transparent';
         const tone = getNodeTone(d);
         return selectedNodeId === d.id ? tone.halo : 'rgba(148,163,184,0.08)';
       })
-      .attr('stroke', (d: any) => (selectedNodeId === d.id ? '#0f172a' : 'rgba(148,163,184,0.18)'))
-      .attr('stroke-width', (d: any) => (selectedNodeId === d.id ? 2.5 : 1))
+      .attr('stroke', (d: any) => (shouldRenderDeviceGlyph(d as Device) ? 'none' : (selectedNodeId === d.id ? '#0f172a' : 'rgba(148,163,184,0.18)')))
+      .attr('stroke-width', (d: any) => (shouldRenderDeviceGlyph(d as Device) ? 0 : (selectedNodeId === d.id ? 2.5 : 1)))
       .attr('opacity', (d: any) => {
         if (!hasFocus) return 1;
         return d.id === selectedNodeId || selectedNeighbors.has(d.id) ? 1 : 0.25;
       });
 
+    node.append('circle')
+      .attr('r', (d: any) => (shouldRenderDeviceGlyph(d as Device) ? 24 : 0))
+      .attr('fill', 'transparent')
+      .attr('stroke', 'none')
+      .style('cursor', 'pointer');
+
     node.append("circle")
-      .attr("r", 24)
-      .attr('fill', (d: any) => getNodeTone(d).fill)
-      .attr('stroke', (d: any) => getNodeTone(d).stroke)
+      .attr("r", (d: any) => (shouldRenderDeviceGlyph(d as Device) ? 0 : 24))
+      .attr('fill', (d: any) => {
+        if (shouldRenderDeviceGlyph(d as Device)) return 'rgba(255,255,255,0.96)';
+        return getNodeTone(d).fill;
+      })
+      .attr('stroke', (d: any) => {
+        const tone = getNodeTone(d);
+        return hasDeviceIconAsset(d as Device) ? tone.stroke : tone.stroke;
+      })
       .attr('stroke-width', (d: any) => (selectedNodeId === d.id ? 3 : 2))
       .style('cursor', 'pointer')
       .attr('opacity', (d: any) => {
         if (!hasFocus) return 1;
         return d.id === selectedNodeId || selectedNeighbors.has(d.id) ? 1 : 0.35;
       });
+
+    node.append('circle')
+      .attr('r', 0)
+      .attr('fill', 'rgba(248,250,252,0.96)')
+      .attr('stroke', (d: any) => getNodeTone(d).stroke)
+      .attr('stroke-width', 1.2)
+      .attr('opacity', 0);
 
     node.append('circle')
       .attr('r', (d: any) => ((d.open_alert_count || 0) > 0 ? 6.5 : 0))
@@ -374,61 +880,67 @@ const TopologyGraph: React.FC<TopologyGraphProps> = ({ devices, links, onNodeCli
       .attr('stroke-width', 1.5)
       .attr('opacity', (d: any) => ((d.open_alert_count || 0) > 0 ? 1 : 0));
 
-    node.append('text')
-      .attr('text-anchor', 'middle')
-      .attr('dy', '.34em')
-      .attr('fill', 'white')
-      .attr('font-family', 'ui-sans-serif, system-ui, sans-serif')
-      .attr('font-size', '12px')
-      .attr('font-weight', 700)
-      .style('pointer-events', 'none')
-      .text((d: any) => getRoleInitial(d.role));
+    const nodeGlyph = node.append('g')
+      .attr('opacity', (d: any) => {
+        if (!hasFocus) return 1;
+        return d.id === selectedNodeId || selectedNeighbors.has(d.id) ? 1 : 0.35;
+      });
 
-    node.append('text')
-      .attr('dy', 42)
+    nodeGlyph.each(function (d: any) {
+      appendDeviceGlyph(d3.select(this), d as Device);
+    });
+
+    const nodeLabelGroup = node.append('g')
+      .attr('transform', 'translate(0,38)')
+      .attr('opacity', (d: any) => {
+        if (!hasFocus) return 1;
+        return d.id === selectedNodeId || selectedNeighbors.has(d.id) ? 1 : 0.35;
+      });
+
+    const nodeLabelBg = nodeLabelGroup.append('rect')
+      .attr('x', -10)
+      .attr('y', -2)
+      .attr('rx', 12)
+      .attr('ry', 12)
+      .attr('fill', 'rgba(255,255,255,0.9)')
+      .attr('stroke', 'rgba(148,163,184,0.24)')
+      .attr('stroke-width', 1);
+
+    const nodeHostnameText = nodeLabelGroup.append('text')
+      .attr('y', 10)
       .attr('text-anchor', 'middle')
       .attr('fill', '#0f172a')
       .attr('font-family', 'ui-sans-serif, system-ui, sans-serif')
       .attr('font-size', '12px')
-      .attr('font-weight', '600')
-      .attr('opacity', (d: any) => {
-        if (!hasFocus) return 1;
-        return d.id === selectedNodeId || selectedNeighbors.has(d.id) ? 1 : 0.35;
-      })
+      .attr('font-weight', '700')
       .text((d: any) => d.hostname);
 
-    node.append('text')
-      .attr('dy', 57)
+    const nodeMetaText = nodeLabelGroup.append('text')
+      .attr('y', 25)
       .attr('text-anchor', 'middle')
       .attr('fill', '#64748b')
       .attr('font-family', 'ui-sans-serif, system-ui, sans-serif')
       .attr('font-size', '10px')
-      .attr('opacity', (d: any) => {
-        if (!hasFocus) return 0.95;
-        return d.id === selectedNodeId || selectedNeighbors.has(d.id) ? 0.95 : 0.28;
-      })
+      .attr('font-weight', '600')
       .text((d: any) => d.site || d.ip_address);
 
-    simulation.on('tick', () => {
+    const renderGraph = () => {
       nodes.forEach((node: any) => {
-        node.x = Math.max(48, Math.min(width - 48, node.x || width / 2));
-        node.y = Math.max(56, Math.min(height - 56, node.y || height / 2));
+        node.x = clampPosition(node.x || width / 2, 48, width - 48);
+        node.y = clampPosition(node.y || height / 2, 56, height - 56);
       });
 
       link
-        .attr("x1", (d: any) => d.source.x)
-        .attr("y1", (d: any) => d.source.y)
-        .attr("x2", (d: any) => d.target.x)
-        .attr("y2", (d: any) => d.target.y);
+        .attr('d', (d: any) => getOrthogonalRoute(d.source, d.target).path);
 
       linkHitArea
-        .attr('x1', (d: any) => d.source.x)
-        .attr('y1', (d: any) => d.source.y)
-        .attr('x2', (d: any) => d.target.x)
-        .attr('y2', (d: any) => d.target.y);
+        .attr('d', (d: any) => getOrthogonalRoute(d.source, d.target).path);
 
       linkLabelGroup
-        .attr('transform', (d: any) => `translate(${(d.source.x + d.target.x) / 2},${(d.source.y + d.target.y) / 2 - 6})`)
+        .attr('transform', (d: any) => {
+          const route = getOrthogonalRoute(d.source, d.target);
+          return `translate(${route.labelX},${route.labelY - 6})`;
+        })
         .attr('opacity', (item: any) => {
           const isSelected = Boolean(selectedLinkKey && (item.link_key === selectedLinkKey || item.id === selectedLinkKey));
           if (isSelected) return 1;
@@ -447,40 +959,157 @@ const TopologyGraph: React.FC<TopologyGraphProps> = ({ devices, links, onNodeCli
           .attr('height', bbox.height + 8);
       });
 
+      nodeLabelBg.each(function (_item: any, index: number) {
+        const hostnameNode = nodeHostnameText.nodes()[index];
+        const metaNode = nodeMetaText.nodes()[index];
+        if (!hostnameNode || !metaNode) return;
+        const hostBox = hostnameNode.getBBox();
+        const metaBox = metaNode.getBBox();
+        const left = Math.min(hostBox.x, metaBox.x) - 10;
+        const top = Math.min(hostBox.y, metaBox.y) - 6;
+        const right = Math.max(hostBox.x + hostBox.width, metaBox.x + metaBox.width) + 10;
+        const bottom = Math.max(hostBox.y + hostBox.height, metaBox.y + metaBox.height) + 6;
+        d3.select(this)
+          .attr('x', left)
+          .attr('y', top)
+          .attr('width', right - left)
+          .attr('height', bottom - top);
+      });
+
       node
         .attr("transform", (d: any) => `translate(${d.x},${d.y})`);
-    });
+
+      syncMinimap();
+    };
+
+    syncMinimap = (transform = zoomTransformRef.current || createDefaultTransform(width, height)) => {
+      setMinimapSnapshot(buildMinimapSnapshot(nodes, d3Links, transform, width, height, selectedNodeId));
+    };
+
+    renderGraph();
+
+    const initialTransform = zoomTransformRef.current || createDefaultTransform(width, height);
+  suppressPersistRef.current = true;
+    svg.call(zoom.transform as any, initialTransform);
 
     function dragstarted(event: any) {
-      if (!event.active) simulation.alphaTarget(0.3).restart();
       event.subject.fx = event.subject.x;
       event.subject.fy = event.subject.y;
     }
 
     function dragged(event: any) {
-      event.subject.fx = event.x;
-      event.subject.fy = event.y;
+      event.subject.x = clampPosition(event.x, 48, width - 48);
+      event.subject.y = clampPosition(event.y, 56, height - 56);
+      event.subject.fx = event.subject.x;
+      event.subject.fy = event.subject.y;
+      persistedPositionsRef.current[event.subject.id] = { x: event.subject.x, y: event.subject.y };
+      renderGraph();
     }
 
     function dragended(event: any) {
-      if (!event.active) simulation.alphaTarget(0);
       event.subject.fx = null;
       event.subject.fy = null;
+      persistedPositionsRef.current[event.subject.id] = { x: event.subject.x, y: event.subject.y };
+      persistCurrentLayout();
     }
 
     return () => {
-      simulation.stop();
+      if (layoutSimulation) layoutSimulation.stop();
     };
-  }, [devices, links, onLinkClick, onNodeClick, selectedLinkKey, selectedNodeId, viewport.height, viewport.width]);
+  }, [devices, links, onLinkClick, onNodeClick, selectedLinkKey, selectedNodeId, viewport.height, viewport.width, layoutVersion]);
 
   return (
-    <div ref={containerRef} className="w-full h-full relative">
+    <div ref={containerRef} className="w-full h-full relative overflow-hidden rounded-[28px] bg-[linear-gradient(180deg,rgba(248,250,252,0.98)_0%,rgba(241,245,249,0.92)_100%)]">
       {devices.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center text-sm text-slate-500">
           No topology data available.
         </div>
       )}
-      <svg ref={svgRef} className="w-full h-full" />
+      <div className="absolute right-4 top-4 z-10 flex items-center gap-2 rounded-2xl border border-slate-200/90 bg-white/92 px-3 py-2 shadow-[0_12px_30px_rgba(15,23,42,0.08)] backdrop-blur-sm">
+        <button
+          type="button"
+          onClick={() => zoomAroundViewportCenter(0.88)}
+          className="h-8 w-8 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 transition-all hover:border-slate-300 hover:bg-slate-50"
+          aria-label="Zoom out"
+        >
+          -
+        </button>
+        <span className="min-w-[52px] text-center text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
+          {zoomPercent}%
+        </span>
+        <button
+          type="button"
+          onClick={() => zoomAroundViewportCenter(1.14)}
+          className="h-8 w-8 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 transition-all hover:border-slate-300 hover:bg-slate-50"
+          aria-label="Zoom in"
+        >
+          +
+        </button>
+        <button
+          type="button"
+          onClick={fitViewport}
+          className="rounded-xl border border-slate-200 px-3 py-2 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-600 transition-all hover:border-slate-300 hover:bg-slate-50"
+        >
+          Fit
+        </button>
+        <button
+          type="button"
+          onClick={resetLayout}
+          className="rounded-xl border border-slate-200 px-3 py-2 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-600 transition-all hover:border-slate-300 hover:bg-slate-50"
+        >
+          Reset
+        </button>
+      </div>
+      {minimapSnapshot && (
+        <div className="absolute bottom-4 right-4 z-10 overflow-hidden rounded-[22px] border border-slate-200/90 bg-white/94 p-3 shadow-[0_18px_42px_rgba(15,23,42,0.12)] backdrop-blur-sm">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Navigator</span>
+            <span className="text-[10px] font-semibold text-slate-400">Click to recenter</span>
+          </div>
+          <svg
+            width={minimapSnapshot.panel.width}
+            height={minimapSnapshot.panel.height}
+            viewBox={`0 0 ${minimapSnapshot.panel.width} ${minimapSnapshot.panel.height}`}
+            className="cursor-pointer rounded-2xl bg-[linear-gradient(180deg,#f8fafc_0%,#eef2f7_100%)]"
+            onClick={handleMinimapClick}
+          >
+            <rect x="0" y="0" width={minimapSnapshot.panel.width} height={minimapSnapshot.panel.height} rx="18" fill="transparent" />
+            {minimapSnapshot.links.map((link) => (
+              <line
+                key={link.id}
+                x1={link.sourceX}
+                y1={link.sourceY}
+                x2={link.targetX}
+                y2={link.targetY}
+                stroke="rgba(100,116,139,0.42)"
+                strokeWidth="1.25"
+              />
+            ))}
+            {minimapSnapshot.nodes.map((node) => (
+              <circle
+                key={node.id}
+                cx={node.x}
+                cy={node.y}
+                r={node.selected ? 4.6 : 3.3}
+                fill={node.fill}
+                stroke={node.selected ? '#0f172a' : 'rgba(255,255,255,0.95)'}
+                strokeWidth={node.selected ? 1.5 : 1}
+              />
+            ))}
+            <rect
+              x={minimapSnapshot.viewport.x}
+              y={minimapSnapshot.viewport.y}
+              width={Math.min(minimapSnapshot.viewport.width, minimapSnapshot.panel.width)}
+              height={Math.min(minimapSnapshot.viewport.height, minimapSnapshot.panel.height)}
+              rx="8"
+              fill="rgba(14,165,233,0.08)"
+              stroke="rgba(2,132,199,0.9)"
+              strokeWidth="1.5"
+            />
+          </svg>
+        </div>
+      )}
+      <svg ref={svgRef} className="h-full w-full" />
     </div>
   );
 };
