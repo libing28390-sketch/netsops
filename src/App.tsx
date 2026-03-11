@@ -714,8 +714,53 @@ const App: React.FC = () => {
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [topologyLinks, setTopologyLinks] = useState<any[]>([]);
-  const [nodePositions, setNodePositions] = useState<Record<string, { x: number, y: number }>>({});
+  const [topologySearch, setTopologySearch] = useState('');
+  const [topologyStatusFilter, setTopologyStatusFilter] = useState<'all' | 'online' | 'offline' | 'pending'>('all');
+  const [topologyRoleFilter, setTopologyRoleFilter] = useState('all');
+  const [topologySiteFilter, setTopologySiteFilter] = useState('all');
+  const [selectedTopologyDeviceId, setSelectedTopologyDeviceId] = useState<string | null>(null);
+  const [selectedTopologyLinkKey, setSelectedTopologyLinkKey] = useState<string | null>(null);
+  const [topologyDiscoveryRunning, setTopologyDiscoveryRunning] = useState(false);
   const topologyRef = React.useRef<HTMLDivElement>(null);
+
+  type TopologyOperationalState = 'up' | 'degraded' | 'down' | 'unknown';
+
+  type TopologyInterfaceSnapshot = {
+    name: string;
+    status: string;
+    maxUtilizationPct: number | null;
+    errorCount: number;
+    discardCount: number;
+    flapping: boolean;
+    operationalState: TopologyOperationalState;
+  };
+
+  type TopologyDecoratedLink = {
+    id?: string;
+    link_key?: string;
+    source_device_id: string;
+    target_device_id: string;
+    source_port?: string;
+    source_port_normalized?: string;
+    target_port?: string;
+    target_port_normalized?: string;
+    source_hostname?: string;
+    target_hostname?: string;
+    source_hostname_resolved?: string;
+    target_hostname_resolved?: string;
+    discovery_source?: string;
+    evidence_count?: number;
+    metadata_json?: string;
+    inferred?: boolean;
+    status?: string;
+    operational_state: TopologyOperationalState;
+    operational_summary: string;
+    evidence_sources: string[];
+    reverse_confirmed: boolean;
+    source_interface_snapshot: TopologyInterfaceSnapshot | null;
+    target_interface_snapshot: TopologyInterfaceSnapshot | null;
+  };
+
   const activeTab = location.pathname.split('/')[1] || 'dashboard';
   const configPage = location.pathname.split('/')[2] || 'backup';
   const automationPage = location.pathname.split('/')[2] || 'execute';
@@ -1623,36 +1668,6 @@ const App: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, configPage, configCenterDevice?.id]);
 
-  useEffect(() => {
-    if (devices.length > 0 && Object.keys(nodePositions).length === 0) {
-      const coreDevices = devices.filter(d => d.role?.toLowerCase() === 'core');
-      const edgeDevices = devices.filter(d => d.role?.toLowerCase() === 'edge');
-      const accessDevices = devices.filter(d => d.role?.toLowerCase() === 'access');
-      const otherDevices = devices.filter(d => !['core', 'edge', 'access'].includes(d.role?.toLowerCase() || ''));
-
-      const getPos = (index: number, total: number, role: string) => {
-        const width = 800;
-        const height = 500;
-        if (role === 'core') {
-          return { x: width / 2 + (index - (total - 1) / 2) * 100, y: height / 2 };
-        } else if (role === 'edge') {
-          return { x: (index + 1) * (width / (total + 1)), y: 100 };
-        } else if (role === 'access') {
-          return { x: (index + 1) * (width / (total + 1)), y: height - 100 };
-        } else {
-          return { x: 50, y: (index + 1) * (height / (total + 1)) };
-        }
-      };
-
-      const initialPositions: Record<string, { x: number, y: number }> = {};
-      coreDevices.forEach((d, i) => initialPositions[d.id] = getPos(i, coreDevices.length, 'core'));
-      edgeDevices.forEach((d, i) => initialPositions[d.id] = getPos(i, edgeDevices.length, 'edge'));
-      accessDevices.forEach((d, i) => initialPositions[d.id] = getPos(i, accessDevices.length, 'access'));
-      otherDevices.forEach((d, i) => initialPositions[d.id] = getPos(i, otherDevices.length, 'other'));
-      setNodePositions(initialPositions);
-    }
-  }, [devices]);
-
   const handleExportMap = async () => {
     if (!topologyRef.current) return;
     showToast('Preparing topology map for export...', 'info');
@@ -2019,6 +2034,7 @@ const App: React.FC = () => {
     if (activeTab === 'inventory') return 'full';
     if (activeTab === 'automation') return 'full';
     if (activeTab === 'config') return 'full';
+    if (activeTab === 'topology') return 'full';
     return 'light';
   }, [activeTab]);
 
@@ -2563,6 +2579,327 @@ const App: React.FC = () => {
   const hostResourceSummary = hostResources
     ? `CPU ${formatResourcePercent(hostResources.cpu_percent)} · MEM ${formatResourcePercent(hostResources.memory_percent)} · DISK ${formatResourcePercent(hostResources.disk_percent)}`
     : (language === 'zh' ? '等待资源数据' : 'Waiting for resource data');
+
+  const formatTopologyPort = (value?: string) => {
+    const raw = String(value || '').trim();
+    if (!raw) return language === 'zh' ? '未识别接口' : 'Unknown Port';
+    return raw
+      .replace(/^GigabitEthernet/i, 'Gi')
+      .replace(/^TenGigabitEthernet/i, 'Te')
+      .replace(/^TwentyFiveGigE/i, 'Tw')
+      .replace(/^FortyGigabitEthernet/i, 'Fo')
+      .replace(/^HundredGigabitEthernet/i, 'Hu')
+      .replace(/^Ethernet/i, 'Eth')
+      .replace(/^Port-channel/i, 'Po')
+      .replace(/^Loopback/i, 'Lo');
+  };
+
+  const normalizeTopologyPort = (value?: string) => String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/^gigabitethernet/, 'gi')
+    .replace(/^tengigabitethernet/, 'te')
+    .replace(/^twentyfivegige/, 'tw')
+    .replace(/^fortygigabitethernet/, 'fo')
+    .replace(/^hundredgigabitethernet/, 'hu')
+    .replace(/^ethernet/, 'eth')
+    .replace(/^port-channel/, 'po')
+    .replace(/^loopback/, 'lo');
+
+  const formatTopologyEvidenceLabel = (value: string) => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized) return language === 'zh' ? '未知来源' : 'Unknown Source';
+    if (normalized === 'lldp') return 'LLDP';
+    if (normalized === 'cdp') return 'CDP';
+    if (normalized === 'snmp') return 'SNMP';
+    if (normalized === 'arp') return 'ARP';
+    if (normalized === 'mac') return 'MAC';
+    return normalized.toUpperCase();
+  };
+
+  const getTopologyOperationalTone = (state?: TopologyOperationalState) => {
+    switch (state) {
+      case 'up':
+        return {
+          badge: 'border-emerald-200 bg-emerald-100 text-emerald-700',
+          panel: 'border-emerald-200/70 bg-emerald-50',
+          dot: 'bg-emerald-500',
+        };
+      case 'degraded':
+        return {
+          badge: 'border-amber-200 bg-amber-100 text-amber-700',
+          panel: 'border-amber-200/70 bg-amber-50',
+          dot: 'bg-amber-500',
+        };
+      case 'down':
+        return {
+          badge: 'border-rose-200 bg-rose-100 text-rose-700',
+          panel: 'border-rose-200/70 bg-rose-50',
+          dot: 'bg-rose-500',
+        };
+      default:
+        return {
+          badge: 'border-slate-200 bg-slate-100 text-slate-700',
+          panel: 'border-slate-200/70 bg-slate-50',
+          dot: 'bg-slate-400',
+        };
+    }
+  };
+
+  const formatTopologyOperationalState = (state?: TopologyOperationalState) => {
+    if (language === 'zh') {
+      if (state === 'up') return '正常';
+      if (state === 'degraded') return '退化';
+      if (state === 'down') return '中断';
+      return '未知';
+    }
+    if (state === 'up') return 'Up';
+    if (state === 'degraded') return 'Degraded';
+    if (state === 'down') return 'Down';
+    return 'Unknown';
+  };
+
+  const evaluateTopologyInterfaceSnapshot = (device: Device | null | undefined, port?: string): TopologyInterfaceSnapshot | null => {
+    if (!device || !port) return null;
+    const normalizedPort = normalizeTopologyPort(port);
+    if (!normalizedPort) return null;
+
+    const match = (device.interface_data || []).find((item) => {
+      const names = [item?.name, item?.description].map((entry) => normalizeTopologyPort(entry));
+      return names.includes(normalizedPort);
+    });
+    if (!match) return null;
+
+    const maxUtilizationPct = [match.bw_in_pct, match.bw_out_pct]
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+      .reduce<number | null>((current, next) => (current == null ? next : Math.max(current, next)), null);
+
+    const errorCount = Number(match.in_errors || 0) + Number(match.out_errors || 0);
+    const discardCount = Number(match.in_discards || 0) + Number(match.out_discards || 0);
+    const status = String(match.status || 'unknown').toLowerCase();
+
+    let operationalState: TopologyOperationalState = 'unknown';
+    if (status === 'down') {
+      operationalState = 'down';
+    } else if (match.flapping || errorCount > 0 || discardCount > 0 || (maxUtilizationPct != null && maxUtilizationPct >= 85)) {
+      operationalState = 'degraded';
+    } else if (status === 'up') {
+      operationalState = 'up';
+    }
+
+    return {
+      name: String(match.name || port),
+      status,
+      maxUtilizationPct,
+      errorCount,
+      discardCount,
+      flapping: Boolean(match.flapping),
+      operationalState,
+    };
+  };
+
+  const describeTopologyLink = (link: any, sourceDevice?: Device, targetDevice?: Device): TopologyDecoratedLink => {
+    const metadata = parseJsonObject(link.metadata_json);
+    const metadataProtocols = Array.isArray(metadata.protocols) ? metadata.protocols : [];
+    const discoverySources = String(link.discovery_source || '')
+      .split('+')
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean);
+    const evidenceSources = Array.from(new Set([...metadataProtocols, ...discoverySources]));
+    const sourceInterfaceSnapshot = evaluateTopologyInterfaceSnapshot(sourceDevice, link.source_port_normalized || link.source_port);
+    const targetInterfaceSnapshot = evaluateTopologyInterfaceSnapshot(targetDevice, link.target_port_normalized || link.target_port);
+    const sourceDeviceStatus = String(sourceDevice?.status || 'unknown').toLowerCase();
+    const targetDeviceStatus = String(targetDevice?.status || 'unknown').toLowerCase();
+
+    let operationalState: TopologyOperationalState = 'unknown';
+    let operationalSummary = language === 'zh' ? '缺少接口遥测，链路状态未知。' : 'Link state is unknown because interface telemetry is unavailable.';
+
+    if (link.inferred) {
+      operationalState = 'unknown';
+      operationalSummary = language === 'zh' ? '这是推断链路，需要等待真实邻居证据确认。' : 'This is an inferred adjacency and needs direct neighbor evidence.';
+    } else if (sourceDeviceStatus === 'offline' || targetDeviceStatus === 'offline') {
+      operationalState = 'down';
+      operationalSummary = language === 'zh' ? '至少一端设备离线，链路视为中断。' : 'At least one endpoint device is offline, so the link is treated as down.';
+    } else if (sourceInterfaceSnapshot?.operationalState === 'down' || targetInterfaceSnapshot?.operationalState === 'down') {
+      operationalState = 'down';
+      operationalSummary = language === 'zh' ? '本端或对端接口处于 down。' : 'One side of the adjacency reports the interface as down.';
+    } else if (
+      sourceDeviceStatus === 'pending'
+      || targetDeviceStatus === 'pending'
+      || sourceInterfaceSnapshot?.operationalState === 'degraded'
+      || targetInterfaceSnapshot?.operationalState === 'degraded'
+    ) {
+      operationalState = 'degraded';
+      operationalSummary = language === 'zh' ? '链路可达，但接口存在高利用率、抖动或错误计数。' : 'The link is reachable but shows utilization, flapping, or error signals.';
+    } else if (
+      sourceInterfaceSnapshot?.operationalState === 'up'
+      && targetInterfaceSnapshot?.operationalState === 'up'
+      && sourceDeviceStatus === 'online'
+      && targetDeviceStatus === 'online'
+    ) {
+      operationalState = 'up';
+      operationalSummary = language === 'zh' ? '双端接口均为 up，且未发现明显退化信号。' : 'Both interfaces are up and no degradation signals were detected.';
+    }
+
+    return {
+      ...link,
+      operational_state: operationalState,
+      operational_summary: operationalSummary,
+      evidence_sources: evidenceSources,
+      reverse_confirmed: Boolean(metadata.reverse_seen),
+      source_interface_snapshot: sourceInterfaceSnapshot,
+      target_interface_snapshot: targetInterfaceSnapshot,
+    };
+  };
+
+  const formatTopologyInterfaceTelemetry = (snapshot: TopologyInterfaceSnapshot | null) => {
+    if (!snapshot) return language === 'zh' ? '暂无接口遥测' : 'No interface telemetry';
+    const segments: string[] = [];
+    if (snapshot.status) segments.push(snapshot.status.toUpperCase());
+    if (snapshot.maxUtilizationPct != null) segments.push(`${language === 'zh' ? '利用率' : 'Util'} ${Math.round(snapshot.maxUtilizationPct)}%`);
+    if (snapshot.errorCount > 0) segments.push(`${language === 'zh' ? '错误' : 'Err'} ${snapshot.errorCount}`);
+    if (snapshot.discardCount > 0) segments.push(`${language === 'zh' ? '丢弃' : 'Drop'} ${snapshot.discardCount}`);
+    if (snapshot.flapping) segments.push(language === 'zh' ? '抖动' : 'Flap');
+    return segments.join(' · ') || (language === 'zh' ? '暂无接口遥测' : 'No interface telemetry');
+  };
+
+  const topologySiteOptions = useMemo(
+    () => Array.from(new Set(devices.map((device) => String(device.site || '').trim()).filter(Boolean))).sort((left, right) => left.localeCompare(right)),
+    [devices],
+  );
+
+  const topologyRoleOptions = useMemo(
+    () => Array.from(new Set(devices.map((device) => String(device.role || '').trim()).filter(Boolean))).sort((left, right) => left.localeCompare(right)),
+    [devices],
+  );
+
+  const topologyVisibleDevices = useMemo(() => {
+    const query = topologySearch.trim().toLowerCase();
+    return devices.filter((device) => {
+      const matchesQuery = !query || [device.hostname, device.ip_address, device.site, device.role].some((value) => String(value || '').toLowerCase().includes(query));
+      const matchesStatus = topologyStatusFilter === 'all' || device.status === topologyStatusFilter;
+      const matchesRole = topologyRoleFilter === 'all' || String(device.role || '') === topologyRoleFilter;
+      const matchesSite = topologySiteFilter === 'all' || String(device.site || '') === topologySiteFilter;
+      return matchesQuery && matchesStatus && matchesRole && matchesSite;
+    });
+  }, [devices, topologyRoleFilter, topologySearch, topologySiteFilter, topologyStatusFilter]);
+
+  const topologyVisibleDeviceIds = useMemo(
+    () => new Set(topologyVisibleDevices.map((device) => device.id)),
+    [topologyVisibleDevices],
+  );
+
+  const topologyVisibleLinks = useMemo(() => {
+    const deviceMap = new Map(topologyVisibleDevices.map((device) => [device.id, device]));
+    return topologyLinks
+      .filter((link) => topologyVisibleDeviceIds.has(link.source_device_id) && topologyVisibleDeviceIds.has(link.target_device_id))
+      .map((link) => describeTopologyLink(link, deviceMap.get(link.source_device_id), deviceMap.get(link.target_device_id)));
+  }, [describeTopologyLink, topologyLinks, topologyVisibleDeviceIds, topologyVisibleDevices]);
+
+  const topologyDeviceLinks = useMemo(() => {
+    if (!selectedTopologyDeviceId) return [] as any[];
+    return topologyVisibleLinks
+      .filter((link) => link.source_device_id === selectedTopologyDeviceId || link.target_device_id === selectedTopologyDeviceId)
+      .sort((left, right) => {
+        const leftPeer = left.source_device_id === selectedTopologyDeviceId ? String(left.target_hostname || '') : String(left.source_hostname || '');
+        const rightPeer = right.source_device_id === selectedTopologyDeviceId ? String(right.target_hostname || '') : String(right.source_hostname || '');
+        return leftPeer.localeCompare(rightPeer);
+      });
+  }, [selectedTopologyDeviceId, topologyVisibleLinks]);
+
+  const topologyConnectedDeviceIds = useMemo(() => {
+    const connected = new Set<string>();
+    topologyVisibleLinks.forEach((link) => {
+      if (link.source_device_id) connected.add(link.source_device_id);
+      if (link.target_device_id) connected.add(link.target_device_id);
+    });
+    return connected;
+  }, [topologyVisibleLinks]);
+
+  const topologyStats = useMemo(() => ({
+    nodeCount: topologyVisibleDevices.length,
+    linkCount: topologyVisibleLinks.length,
+    siteCount: new Set(topologyVisibleDevices.map((device) => String(device.site || '').trim()).filter(Boolean)).size,
+    atRiskCount: topologyVisibleDevices.filter((device) => device.status !== 'online' || device.health_status === 'critical' || (device.open_alert_count || 0) > 0).length,
+    orphanCount: topologyVisibleDevices.filter((device) => !topologyConnectedDeviceIds.has(device.id)).length,
+  }), [topologyConnectedDeviceIds, topologyVisibleDevices, topologyVisibleLinks.length]);
+
+  const topologyLinkStats = useMemo(() => ({
+    up: topologyVisibleLinks.filter((link: TopologyDecoratedLink) => link.operational_state === 'up').length,
+    degraded: topologyVisibleLinks.filter((link: TopologyDecoratedLink) => link.operational_state === 'degraded').length,
+    down: topologyVisibleLinks.filter((link: TopologyDecoratedLink) => link.operational_state === 'down').length,
+    multiSource: topologyVisibleLinks.filter((link: TopologyDecoratedLink) => link.evidence_sources.length > 1 || link.reverse_confirmed || Number(link.evidence_count || 0) > 1).length,
+  }), [topologyVisibleLinks]);
+
+  const selectedTopologyDevice = useMemo(
+    () => topologyVisibleDevices.find((device) => device.id === selectedTopologyDeviceId) || null,
+    [selectedTopologyDeviceId, topologyVisibleDevices],
+  );
+
+  const selectedTopologyLink = useMemo<TopologyDecoratedLink | null>(
+    () => topologyVisibleLinks.find((link) => (link.link_key || link.id) === selectedTopologyLinkKey) || null,
+    [selectedTopologyLinkKey, topologyVisibleLinks],
+  );
+
+  const topologyNeighborIds = useMemo(() => {
+    if (!selectedTopologyDeviceId) return new Set<string>();
+    const neighbors = new Set<string>();
+    topologyVisibleLinks.forEach((link) => {
+      if (link.source_device_id === selectedTopologyDeviceId && link.target_device_id) neighbors.add(link.target_device_id);
+      if (link.target_device_id === selectedTopologyDeviceId && link.source_device_id) neighbors.add(link.source_device_id);
+    });
+    return neighbors;
+  }, [selectedTopologyDeviceId, topologyVisibleLinks]);
+
+  const topologyNeighborDevices = useMemo(
+    () => topologyVisibleDevices.filter((device) => topologyNeighborIds.has(device.id)).sort((left, right) => left.hostname.localeCompare(right.hostname)),
+    [topologyNeighborIds, topologyVisibleDevices],
+  );
+
+  const topologyOrphanDevices = useMemo(
+    () => topologyVisibleDevices.filter((device) => !topologyConnectedDeviceIds.has(device.id)).sort((left, right) => left.hostname.localeCompare(right.hostname)),
+    [topologyConnectedDeviceIds, topologyVisibleDevices],
+  );
+
+  const topologyPriorityDevices = useMemo(
+    () => [...topologyVisibleDevices]
+      .sort((left, right) => {
+        const leftScore = (left.status !== 'online' ? 100 : 0) + (left.critical_open_alerts || 0) * 10 + (left.open_alert_count || 0);
+        const rightScore = (right.status !== 'online' ? 100 : 0) + (right.critical_open_alerts || 0) * 10 + (right.open_alert_count || 0);
+        return rightScore - leftScore;
+      })
+      .slice(0, 5),
+    [topologyVisibleDevices],
+  );
+
+  useEffect(() => {
+    if (topologyVisibleDevices.length === 0) {
+      if (selectedTopologyDeviceId !== null) setSelectedTopologyDeviceId(null);
+      if (selectedTopologyLinkKey !== null) setSelectedTopologyLinkKey(null);
+      return;
+    }
+
+    if (!selectedTopologyDeviceId || !topologyVisibleDevices.some((device) => device.id === selectedTopologyDeviceId)) {
+      setSelectedTopologyDeviceId(topologyVisibleDevices[0].id);
+    }
+  }, [selectedTopologyDeviceId, selectedTopologyLinkKey, topologyVisibleDevices]);
+
+  useEffect(() => {
+    if (!selectedTopologyDeviceId) {
+      if (selectedTopologyLinkKey !== null) setSelectedTopologyLinkKey(null);
+      return;
+    }
+
+    if (topologyDeviceLinks.length === 0) {
+      if (selectedTopologyLinkKey !== null) setSelectedTopologyLinkKey(null);
+      return;
+    }
+
+    if (!selectedTopologyLinkKey || !topologyDeviceLinks.some((link) => (link.link_key || link.id) === selectedTopologyLinkKey)) {
+      setSelectedTopologyLinkKey(topologyDeviceLinks[0].link_key || topologyDeviceLinks[0].id || null);
+    }
+  }, [selectedTopologyDeviceId, selectedTopologyLinkKey, topologyDeviceLinks]);
 
   useEffect(() => {
     setMonitorAlertsPage(1);
@@ -3505,15 +3842,29 @@ const App: React.FC = () => {
   };
 
   const handleTriggerDiscovery = async () => {
+    setTopologyDiscoveryRunning(true);
     try {
       const response = await fetch('/api/topology/discover', { method: 'POST' });
       if (response.ok) {
-        showToast('Topology discovery started', 'success');
+        showToast(language === 'zh' ? '已启动拓扑发现，稍后自动刷新链路' : 'Topology discovery started. Links will refresh shortly.', 'success');
+        window.setTimeout(async () => {
+          try {
+            const linksResponse = await fetch('/api/topology/links');
+            if (linksResponse.ok) {
+              const nextLinks = await linksResponse.json();
+              setTopologyLinks(Array.isArray(nextLinks) ? nextLinks : []);
+            }
+          } catch {
+            // Ignore delayed refresh errors. The next shared data refresh will reconcile state.
+          }
+        }, 2500);
       } else {
-        showToast('Failed to start discovery', 'error');
+        showToast(language === 'zh' ? '拓扑发现启动失败' : 'Failed to start topology discovery', 'error');
       }
     } catch (error) {
-      showToast('Connection error', 'error');
+      showToast(language === 'zh' ? '连接失败，无法触发拓扑发现' : 'Connection error', 'error');
+    } finally {
+      setTopologyDiscoveryRunning(false);
     }
   };
 
@@ -4380,8 +4731,8 @@ const App: React.FC = () => {
           {[
             { id: 'dashboard', icon: LayoutDashboard, label: t('dashboard') },
             { id: 'monitoring', icon: TrendingUp, label: language === 'zh' ? '监控中心' : 'Monitoring' },
-            { id: 'health', icon: Activity, label: language === 'zh' ? '健康检测' : 'Health Detection' },
             { id: 'topology', icon: Globe, label: 'Topology' },
+            { id: 'health', icon: Activity, label: language === 'zh' ? '健康检测' : 'Health Detection' },
           ].map(item => (
             <button
               key={item.id}
@@ -4390,7 +4741,7 @@ const App: React.FC = () => {
                 activeTab === item.id
                   ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
                   : 'text-white/60 hover:bg-white/5 hover:text-white'
-              } ${item.id === 'dashboard' ? 'order-10' : item.id === 'monitoring' ? 'order-20' : item.id === 'health' ? 'order-25' : 'order-40'}`}
+              } ${item.id === 'dashboard' ? 'order-10' : item.id === 'monitoring' ? 'order-20' : item.id === 'topology' ? 'order-40' : 'order-50'}`}
             >
               <item.icon size={17} className="shrink-0" />
               <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{item.label}</span>
@@ -4462,7 +4813,7 @@ const App: React.FC = () => {
           </div>
 
           {/* ── Inventory collapsible group ── */}
-          <div className="order-50">
+          <div className="order-60">
             <button
               onClick={() => {
                 const next = !inventoryGroupOpen;
@@ -4515,7 +4866,7 @@ const App: React.FC = () => {
           </div>
 
           {/* ── Automation collapsible group ── */}
-          <div className="pt-2 order-70">
+          <div className="pt-2 order-80">
             <button
               onClick={() => {
                 const next = !automationGroupOpen;
@@ -4569,7 +4920,7 @@ const App: React.FC = () => {
           </div>
 
           {/* ── Config Center collapsible group ── */}
-          <div className="pt-2 order-60">
+          <div className="pt-2 order-70">
             <button
               onClick={() => {
                 const next = !configGroupOpen;
@@ -4638,7 +4989,7 @@ const App: React.FC = () => {
                 activeTab === item.id
                   ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
                   : 'text-white/60 hover:bg-white/5 hover:text-white'
-              } ${item.id === 'compliance' ? 'order-80' : item.id === 'history' ? 'order-90' : item.id === 'configuration' ? 'order-100' : 'order-110'}`}
+              } ${item.id === 'compliance' ? 'order-90' : item.id === 'history' ? 'order-100' : item.id === 'configuration' ? 'order-110' : 'order-120'}`}
             >
               <item.icon size={17} />
               {item.label}
@@ -5661,58 +6012,477 @@ const App: React.FC = () => {
             <div className="h-full flex flex-col space-y-6">
               <div className={sectionHeaderRowClass}>
                 <div>
-                  <h2 className="text-2xl font-medium tracking-tight">Network Topology</h2>
-                  <p className="text-sm text-black/40">Visualizing device interconnections via LLDP/CDP neighbor discovery</p>
+                  <h2 className="text-2xl font-medium tracking-tight">{language === 'zh' ? '网络拓扑' : 'Network Topology'}</h2>
+                  <p className="text-sm text-black/40">
+                    {language === 'zh'
+                      ? '基于 LLDP 邻居发现展示网络连接关系，按站点、角色和状态快速缩小故障域。'
+                      : 'Visualize LLDP-based network adjacency and reduce the fault domain by site, role, and health state.'}
+                  </p>
                 </div>
                 <div className="flex gap-3">
                   <button 
                     onClick={handleTriggerDiscovery}
                     className={secondaryActionBtnClass}
+                    disabled={topologyDiscoveryRunning}
                   >
                     <RotateCcw size={16} />
-                    Refresh Discovery
+                    {topologyDiscoveryRunning
+                      ? (language === 'zh' ? '发现中...' : 'Discovering...')
+                      : (language === 'zh' ? '刷新发现' : 'Refresh Discovery')}
                   </button>
                   <button 
                     onClick={handleExportMap}
                     className={darkActionBtnClass}
                   >
                     <Download size={16} />
-                    Export Map
+                    {language === 'zh' ? '导出拓扑图' : 'Export Map'}
                   </button>
                 </div>
               </div>
-              
-              <div className="relative flex flex-1 items-center justify-center overflow-hidden rounded-2xl border border-black/5 bg-white shadow-sm" ref={topologyRef}>
-                <div className="absolute inset-0 bg-[radial-gradient(#000_1px,transparent_1px)] bg-[length:20px_20px] opacity-[0.03]" />
-                
-                {/* Simulated Topology Graph */}
-                <div className="relative w-full h-full flex items-center justify-center">
-                    <motion.div 
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      className="relative w-full h-full"
-                    >
-                      {/* Dynamic Topology Graph */}
-                      <Suspense fallback={lazyPanelFallback}>
-                        <TopologyGraph 
-                          devices={devices} 
-                          links={topologyLinks} 
-                          onNodeClick={handleShowDetails} 
-                        />
-                      </Suspense>
-                    </motion.div>
 
-                  <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-black/5 backdrop-blur-md border border-black/5 px-4 py-2 rounded-full flex items-center gap-4">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
-                      <span className="text-[10px] font-bold uppercase text-black/40">Online</span>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
+                {[
+                  {
+                    label: language === 'zh' ? '可视节点' : 'Visible Nodes',
+                    value: topologyStats.nodeCount,
+                    tone: 'bg-[#00bceb]/10 text-[#007ea0] border-[#00bceb]/20',
+                  },
+                  {
+                    label: language === 'zh' ? '链路关系' : 'Adjacencies',
+                    value: topologyStats.linkCount,
+                    tone: 'bg-slate-100 text-slate-700 border-slate-200',
+                  },
+                  {
+                    label: language === 'zh' ? '覆盖站点' : 'Sites',
+                    value: topologyStats.siteCount,
+                    tone: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+                  },
+                  {
+                    label: language === 'zh' ? '风险节点' : 'At Risk',
+                    value: topologyStats.atRiskCount,
+                    tone: 'bg-amber-100 text-amber-700 border-amber-200',
+                  },
+                  {
+                    label: language === 'zh' ? '孤立节点' : 'Orphans',
+                    value: topologyStats.orphanCount,
+                    tone: 'bg-rose-100 text-rose-700 border-rose-200',
+                  },
+                  {
+                    label: language === 'zh' ? '健康链路' : 'Healthy Links',
+                    value: topologyLinkStats.up,
+                    tone: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+                  },
+                  {
+                    label: language === 'zh' ? '退化链路' : 'Degraded Links',
+                    value: topologyLinkStats.degraded,
+                    tone: 'bg-amber-100 text-amber-700 border-amber-200',
+                  },
+                  {
+                    label: language === 'zh' ? '中断链路' : 'Down Links',
+                    value: topologyLinkStats.down,
+                    tone: 'bg-rose-100 text-rose-700 border-rose-200',
+                  },
+                  {
+                    label: language === 'zh' ? '多源证据' : 'Multi-source',
+                    value: topologyLinkStats.multiSource,
+                    tone: 'bg-sky-100 text-sky-700 border-sky-200',
+                  },
+                ].map((item) => (
+                  <div key={item.label} className="rounded-2xl border border-black/5 bg-white p-4 shadow-sm">
+                    <div className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-[0.14em] ${item.tone}`}>
+                      {item.label}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-                      <span className="text-[10px] font-bold uppercase text-black/40">Critical</span>
+                    <div className="mt-3 text-3xl font-semibold tracking-tight text-[#0f172a]">{item.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="rounded-2xl border border-black/5 bg-white p-4 shadow-sm">
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_repeat(3,minmax(0,0.8fr))]">
+                  <label className="flex items-center gap-2 rounded-xl border border-black/10 px-3 py-2">
+                    <Search size={15} className="text-black/35" />
+                    <input
+                      value={topologySearch}
+                      onChange={(e) => setTopologySearch(e.target.value)}
+                      placeholder={language === 'zh' ? '搜索主机名、IP、站点、角色' : 'Search hostname, IP, site, role'}
+                      className="w-full bg-transparent text-sm outline-none placeholder:text-black/30"
+                    />
+                  </label>
+                  <select
+                    value={topologySiteFilter}
+                    onChange={(e) => setTopologySiteFilter(e.target.value)}
+                    title={language === 'zh' ? '按站点筛选拓扑' : 'Filter topology by site'}
+                    className="rounded-xl border border-black/10 px-3 py-2 text-sm outline-none"
+                  >
+                    <option value="all">{language === 'zh' ? '全部站点' : 'All Sites'}</option>
+                    {topologySiteOptions.map((site) => <option key={site} value={site}>{site}</option>)}
+                  </select>
+                  <select
+                    value={topologyRoleFilter}
+                    onChange={(e) => setTopologyRoleFilter(e.target.value)}
+                    title={language === 'zh' ? '按角色筛选拓扑' : 'Filter topology by role'}
+                    className="rounded-xl border border-black/10 px-3 py-2 text-sm outline-none"
+                  >
+                    <option value="all">{language === 'zh' ? '全部角色' : 'All Roles'}</option>
+                    {topologyRoleOptions.map((role) => <option key={role} value={role}>{role}</option>)}
+                  </select>
+                  <select
+                    value={topologyStatusFilter}
+                    onChange={(e) => setTopologyStatusFilter(e.target.value as 'all' | 'online' | 'offline' | 'pending')}
+                    title={language === 'zh' ? '按状态筛选拓扑' : 'Filter topology by status'}
+                    className="rounded-xl border border-black/10 px-3 py-2 text-sm outline-none"
+                  >
+                    <option value="all">{language === 'zh' ? '全部状态' : 'All Status'}</option>
+                    <option value="online">{language === 'zh' ? '在线' : 'Online'}</option>
+                    <option value="offline">{language === 'zh' ? '离线' : 'Offline'}</option>
+                    <option value="pending">{language === 'zh' ? '待确认' : 'Pending'}</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,2.2fr)_minmax(320px,0.95fr)]">
+                <div className="relative flex min-h-[620px] flex-col overflow-hidden rounded-2xl border border-black/5 bg-white shadow-sm" ref={topologyRef}>
+                  <div className="absolute inset-0 bg-[radial-gradient(#000_1px,transparent_1px)] bg-[length:20px_20px] opacity-[0.03]" />
+                  <div className="relative flex items-center justify-between border-b border-black/5 px-5 py-4">
+                    <div>
+                      <h3 className="text-lg font-semibold tracking-tight text-[#0f172a]">
+                        {language === 'zh' ? '拓扑画布' : 'Topology Canvas'}
+                      </h3>
+                      <p className="text-xs text-black/45">
+                        {language === 'zh'
+                          ? '点击节点查看邻接关系，双操作入口放在右侧面板。'
+                          : 'Click a node to inspect adjacency. Operational actions are kept in the right panel.'}
+                      </p>
                     </div>
-                    <div className="w-px h-3 bg-black/10"></div>
-                    <span className="text-[10px] font-bold uppercase text-black/60">{devices.length} Nodes Discovered</span>
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-black/45">
+                      <span className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/90 px-3 py-1.5">
+                        <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                        {language === 'zh' ? '节点在线 / 链路正常' : 'Node Online / Link Up'}
+                      </span>
+                      <span className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/90 px-3 py-1.5">
+                        <span className="h-2 w-2 rounded-full bg-amber-500" />
+                        {language === 'zh' ? '节点告警 / 链路退化' : 'Node Alert / Link Degraded'}
+                      </span>
+                      <span className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/90 px-3 py-1.5">
+                        <span className="h-2 w-2 rounded-full bg-red-500" />
+                        {language === 'zh' ? '节点离线 / 链路中断' : 'Node Offline / Link Down'}
+                      </span>
+                      <span className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/90 px-3 py-1.5">
+                        <span className="h-2 w-2 rounded-full bg-slate-400" />
+                        {language === 'zh' ? '链路未知' : 'Link Unknown'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="relative flex-1">
+                    {topologyVisibleDevices.length === 0 ? (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
+                        <div className="rounded-full border border-black/10 bg-slate-50 p-4 text-slate-500">
+                          <Globe size={26} />
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold text-slate-700">
+                            {language === 'zh' ? '当前筛选条件下没有可展示的设备' : 'No devices match the current topology filter'}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {language === 'zh' ? '清空搜索或放宽站点、角色、状态筛选后重试。' : 'Clear the search or relax the site, role, or status filters.'}
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <motion.div 
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        className="relative h-full w-full"
+                      >
+                        <Suspense fallback={lazyPanelFallback}>
+                          <TopologyGraph 
+                            devices={topologyVisibleDevices}
+                            links={topologyVisibleLinks}
+                            selectedNodeId={selectedTopologyDeviceId}
+                            selectedLinkKey={selectedTopologyLinkKey}
+                            onNodeClick={(device) => {
+                              setSelectedTopologyDeviceId(device.id);
+                            }}
+                            onLinkClick={(link) => {
+                              setSelectedTopologyDeviceId(link.source_device_id);
+                              setSelectedTopologyLinkKey(link.link_key || link.id || null);
+                            }}
+                          />
+                        </Suspense>
+                      </motion.div>
+                    )}
+                  </div>
+
+                  <div className="relative flex flex-wrap items-center gap-3 border-t border-black/5 px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-black/45">
+                    <span>{language === 'zh' ? `当前展示 ${topologyStats.nodeCount} 个节点 / ${topologyStats.linkCount} 条链路` : `Showing ${topologyStats.nodeCount} nodes / ${topologyStats.linkCount} links`}</span>
+                    <span className="h-3 w-px bg-black/10" />
+                    <span>{language === 'zh' ? `${topologyLinkStats.up} 正常 · ${topologyLinkStats.degraded} 退化 · ${topologyLinkStats.down} 中断` : `${topologyLinkStats.up} up · ${topologyLinkStats.degraded} degraded · ${topologyLinkStats.down} down`}</span>
+                    <span className="h-3 w-px bg-black/10" />
+                    <span>{language === 'zh' ? '虚线代表推断链路' : 'Dashed lines indicate inferred links'}</span>
+                  </div>
+                </div>
+
+                <div className="flex min-h-[620px] flex-col gap-4">
+                  <div className="rounded-2xl border border-black/5 bg-white p-5 shadow-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-black/35">
+                          {language === 'zh' ? '当前节点' : 'Selected Node'}
+                        </p>
+                        <h3 className="mt-2 text-xl font-semibold tracking-tight text-[#0f172a]">
+                          {selectedTopologyDevice?.hostname || (language === 'zh' ? '未选择设备' : 'No device selected')}
+                        </h3>
+                        <p className="mt-1 text-sm text-black/45">
+                          {selectedTopologyDevice
+                            ? `${selectedTopologyDevice.ip_address} · ${selectedTopologyDevice.site || '-'} · ${selectedTopologyDevice.role || '-'}`
+                            : (language === 'zh' ? '点击左侧节点查看邻接关系与健康态势。' : 'Select a node on the left to inspect adjacency and operational context.')}
+                        </p>
+                      </div>
+                      {selectedTopologyDevice && (
+                        <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-[0.14em] ${
+                          selectedTopologyDevice.status === 'online'
+                            ? 'border-emerald-200 bg-emerald-100 text-emerald-700'
+                            : selectedTopologyDevice.status === 'pending'
+                              ? 'border-amber-200 bg-amber-100 text-amber-700'
+                              : 'border-rose-200 bg-rose-100 text-rose-700'
+                        }`}>
+                          {selectedTopologyDevice.status}
+                        </span>
+                      )}
+                    </div>
+
+                    {selectedTopologyDevice ? (
+                      <>
+                        <div className="mt-4 grid grid-cols-2 gap-3">
+                          <div className="rounded-xl border border-black/5 bg-slate-50 p-3">
+                            <p className="text-[11px] uppercase tracking-[0.14em] text-black/35">{language === 'zh' ? '邻接节点' : 'Neighbors'}</p>
+                            <p className="mt-2 text-2xl font-semibold text-[#0f172a]">{topologyNeighborDevices.length}</p>
+                          </div>
+                          <div className="rounded-xl border border-black/5 bg-slate-50 p-3">
+                            <p className="text-[11px] uppercase tracking-[0.14em] text-black/35">{language === 'zh' ? '接口链路' : 'Interface Links'}</p>
+                            <p className="mt-2 text-2xl font-semibold text-[#0f172a]">{topologyDeviceLinks.length}</p>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 flex gap-2">
+                          <button onClick={() => handleShowDetails(selectedTopologyDevice)} className={secondaryActionBtnClass}>
+                            <Eye size={16} />
+                            {language === 'zh' ? '查看设备详情' : 'Open Device Detail'}
+                          </button>
+                          <button onClick={() => navTo('/monitoring')} className={secondaryActionBtnClass}>
+                            <Monitor size={16} />
+                            {language === 'zh' ? '进入监控中心' : 'Open Monitoring'}
+                          </button>
+                        </div>
+
+                        <div className="mt-5">
+                          <div className="mb-2 flex items-center justify-between">
+                            <p className="text-sm font-semibold text-[#0f172a]">{language === 'zh' ? '接口链路详情' : 'Interface Adjacencies'}</p>
+                            <span className="text-xs text-black/35">{topologyDeviceLinks.length}</span>
+                          </div>
+                          <div className="space-y-2">
+                            {topologyDeviceLinks.length > 0 ? topologyDeviceLinks.slice(0, 8).map((link) => {
+                              const isSource = link.source_device_id === selectedTopologyDevice.id;
+                              const peerName = isSource
+                                ? (link.target_hostname || link.target_hostname_resolved || '')
+                                : (link.source_hostname || link.source_hostname_resolved || '');
+                              const localPort = formatTopologyPort(isSource ? link.source_port : link.target_port);
+                              const remotePort = formatTopologyPort(isSource ? link.target_port : link.source_port);
+                              const localTelemetry = formatTopologyInterfaceTelemetry(isSource ? link.source_interface_snapshot : link.target_interface_snapshot);
+                              const remoteTelemetry = formatTopologyInterfaceTelemetry(isSource ? link.target_interface_snapshot : link.source_interface_snapshot);
+                              const peerId = isSource ? link.target_device_id : link.source_device_id;
+                              const linkKey = link.link_key || link.id;
+                              const operationalTone = getTopologyOperationalTone(link.operational_state);
+                              return (
+                                <div
+                                  key={linkKey}
+                                  className={`w-full rounded-xl border px-3 py-3 text-left transition-all ${
+                                    selectedTopologyLinkKey && linkKey === selectedTopologyLinkKey
+                                      ? 'border-[#00bceb]/40 bg-[#00bceb]/6'
+                                      : 'border-black/5 bg-slate-50 hover:border-[#00bceb]/30 hover:bg-[#00bceb]/5'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between gap-3">
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedTopologyLinkKey(linkKey || null)}
+                                      className="flex-1 text-left"
+                                    >
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <p className="text-sm font-semibold text-[#0f172a]">{peerName || (language === 'zh' ? '对端设备' : 'Peer Device')}</p>
+                                        <span className={`rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] ${operationalTone.badge}`}>
+                                          {formatTopologyOperationalState(link.operational_state)}
+                                        </span>
+                                      </div>
+                                      <p className="mt-1 text-xs text-black/45">{language === 'zh' ? '本端接口' : 'Local'}: {localPort} · {localTelemetry}</p>
+                                      <p className="text-xs text-black/45">{language === 'zh' ? '对端接口' : 'Remote'}: {remotePort} · {remoteTelemetry}</p>
+                                    </button>
+                                    <div className="flex items-center gap-2">
+                                      <div className="flex flex-wrap justify-end gap-1">
+                                        {link.evidence_sources.slice(0, 2).map((source) => (
+                                          <span key={`${linkKey}-${source}`} className="rounded-full bg-slate-200 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-700">
+                                            {formatTopologyEvidenceLabel(source)}
+                                          </span>
+                                        ))}
+                                        {link.reverse_confirmed && (
+                                          <span className="rounded-full bg-sky-100 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-sky-700">
+                                            {language === 'zh' ? '双端确认' : 'Bidirectional'}
+                                          </span>
+                                        )}
+                                      </div>
+                                      {peerId && (
+                                        <button
+                                          type="button"
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            setSelectedTopologyDeviceId(peerId);
+                                            setSelectedTopologyLinkKey(linkKey || null);
+                                          }}
+                                          className="text-[11px] font-semibold text-[#0284c7] hover:text-[#0369a1]"
+                                        >
+                                          {language === 'zh' ? '切到对端' : 'Open Peer'}
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            }) : (
+                              <div className="rounded-xl border border-dashed border-black/10 bg-slate-50 px-3 py-4 text-sm text-black/45">
+                                {language === 'zh' ? '当前节点暂无可展示的接口链路。' : 'No interface adjacency data is available for the selected node.'}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {selectedTopologyLink && (
+                          <div className={`mt-5 rounded-xl border p-3 ${getTopologyOperationalTone(selectedTopologyLink.operational_state).panel}`}>
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-700">{language === 'zh' ? '当前选中链路' : 'Selected Link'}</p>
+                              <span className={`rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] ${getTopologyOperationalTone(selectedTopologyLink.operational_state).badge}`}>
+                                {formatTopologyOperationalState(selectedTopologyLink.operational_state)}
+                              </span>
+                            </div>
+                            <div className="mt-2 space-y-1 text-sm text-slate-700">
+                              <p><span className="font-semibold">{selectedTopologyLink.source_hostname || selectedTopologyLink.source_hostname_resolved || selectedTopologyLink.source_device_id}</span> · {formatTopologyPort(selectedTopologyLink.source_port)}</p>
+                              <p><span className="font-semibold">{selectedTopologyLink.target_hostname || selectedTopologyLink.target_hostname_resolved || selectedTopologyLink.target_device_id}</span> · {formatTopologyPort(selectedTopologyLink.target_port)}</p>
+                            </div>
+                            <p className="mt-2 text-xs text-slate-600">{selectedTopologyLink.operational_summary}</p>
+                            <div className="mt-3 grid gap-2 md:grid-cols-2">
+                              <div className="rounded-lg border border-white/70 bg-white/70 px-3 py-2">
+                                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-black/35">{language === 'zh' ? '源接口遥测' : 'Source Telemetry'}</p>
+                                <p className="mt-1 text-xs text-slate-700">{formatTopologyInterfaceTelemetry(selectedTopologyLink.source_interface_snapshot)}</p>
+                              </div>
+                              <div className="rounded-lg border border-white/70 bg-white/70 px-3 py-2">
+                                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-black/35">{language === 'zh' ? '对端接口遥测' : 'Target Telemetry'}</p>
+                                <p className="mt-1 text-xs text-slate-700">{formatTopologyInterfaceTelemetry(selectedTopologyLink.target_interface_snapshot)}</p>
+                              </div>
+                            </div>
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                              {(selectedTopologyLink.evidence_sources.length > 0 ? selectedTopologyLink.evidence_sources : ['lldp']).map((source) => (
+                                <span key={`selected-link-${source}`} className="rounded-full bg-white/80 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-700 ring-1 ring-black/5">
+                                  {formatTopologyEvidenceLabel(source)}
+                                </span>
+                              ))}
+                              <span className="rounded-full bg-white/80 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-700 ring-1 ring-black/5">
+                                {language === 'zh' ? `证据 ${Number(selectedTopologyLink.evidence_count || 0)}` : `Evidence ${Number(selectedTopologyLink.evidence_count || 0)}`}
+                              </span>
+                              {selectedTopologyLink.reverse_confirmed && (
+                                <span className="rounded-full bg-white/80 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-sky-700 ring-1 ring-sky-200">
+                                  {language === 'zh' ? '双向确认' : 'Reverse Confirmed'}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="mt-5">
+                          <div className="mb-2 flex items-center justify-between">
+                            <p className="text-sm font-semibold text-[#0f172a]">{language === 'zh' ? '直接邻居' : 'Direct Neighbors'}</p>
+                            <span className="text-xs text-black/35">{topologyNeighborDevices.length}</span>
+                          </div>
+                          <div className="space-y-2">
+                            {topologyNeighborDevices.length > 0 ? topologyNeighborDevices.slice(0, 6).map((device) => (
+                              <button
+                                key={device.id}
+                                onClick={() => setSelectedTopologyDeviceId(device.id)}
+                                className="flex w-full items-center justify-between rounded-xl border border-black/5 bg-slate-50 px-3 py-2 text-left transition-all hover:border-[#00bceb]/30 hover:bg-[#00bceb]/5"
+                              >
+                                <div>
+                                  <p className="text-sm font-semibold text-[#0f172a]">{device.hostname}</p>
+                                  <p className="text-xs text-black/40">{device.ip_address} · {device.role || '-'}</p>
+                                </div>
+                                <span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] ${device.status === 'online' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                  {device.status}
+                                </span>
+                              </button>
+                            )) : (
+                              <div className="rounded-xl border border-dashed border-black/10 bg-slate-50 px-3 py-4 text-sm text-black/45">
+                                {language === 'zh' ? '当前节点没有发现邻接关系，可能是边缘孤立设备或邻居发现尚未完成。' : 'No adjacent nodes were found for the current device. It may be isolated or discovery has not completed yet.'}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+
+                  <div className="rounded-2xl border border-black/5 bg-white p-5 shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-base font-semibold tracking-tight text-[#0f172a]">{language === 'zh' ? '优先关注' : 'Priority Watchlist'}</h3>
+                      <AlertCircle size={16} className="text-amber-500" />
+                    </div>
+                    <div className="mt-4 space-y-2">
+                      {topologyPriorityDevices.length > 0 ? topologyPriorityDevices.map((device) => (
+                        <button
+                          key={device.id}
+                          onClick={() => setSelectedTopologyDeviceId(device.id)}
+                          className="flex w-full items-center justify-between rounded-xl border border-black/5 bg-slate-50 px-3 py-2 text-left transition-all hover:border-[#00bceb]/30 hover:bg-[#00bceb]/5"
+                        >
+                          <div>
+                            <p className="text-sm font-semibold text-[#0f172a]">{device.hostname}</p>
+                            <p className="text-xs text-black/40">{device.site || '-'} · {device.role || '-'}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs font-semibold text-rose-600">{device.open_alert_count || 0} {language === 'zh' ? '告警' : 'alerts'}</p>
+                            <p className="text-[11px] text-black/35">{device.status}</p>
+                          </div>
+                        </button>
+                      )) : (
+                        <div className="rounded-xl border border-dashed border-black/10 bg-slate-50 px-3 py-4 text-sm text-black/45">
+                          {language === 'zh' ? '当前过滤范围内没有需要优先处置的节点。' : 'No high-priority devices in the current topology scope.'}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-black/5 bg-white p-5 shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-base font-semibold tracking-tight text-[#0f172a]">{language === 'zh' ? '孤立节点' : 'Orphan Devices'}</h3>
+                      <span className="text-xs text-black/35">{topologyOrphanDevices.length}</span>
+                    </div>
+                    <div className="mt-4 space-y-2">
+                      {topologyOrphanDevices.length > 0 ? topologyOrphanDevices.slice(0, 6).map((device) => (
+                        <button
+                          key={device.id}
+                          onClick={() => setSelectedTopologyDeviceId(device.id)}
+                          className="flex w-full items-center justify-between rounded-xl border border-black/5 bg-slate-50 px-3 py-2 text-left transition-all hover:border-[#00bceb]/30 hover:bg-[#00bceb]/5"
+                        >
+                          <div>
+                            <p className="text-sm font-semibold text-[#0f172a]">{device.hostname}</p>
+                            <p className="text-xs text-black/40">{device.ip_address}</p>
+                          </div>
+                          <span className="rounded-full bg-slate-200 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-700">
+                            {device.site || (language === 'zh' ? '未分站点' : 'Unassigned')}
+                          </span>
+                        </button>
+                      )) : (
+                        <div className="rounded-xl border border-dashed border-black/10 bg-slate-50 px-3 py-4 text-sm text-black/45">
+                          {language === 'zh' ? '当前视图下未发现孤立节点。' : 'No orphan devices in the current view.'}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>

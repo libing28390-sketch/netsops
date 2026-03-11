@@ -40,10 +40,13 @@ def build_netmiko_compatibility_kwargs() -> Dict[str, Any]:
     """
     Netmiko/Paramiko 兼容老设备的连接参数。
 
+    - disabled_algorithms={} 告诉 Paramiko 不禁用任何算法，
+      从而保留 diffie-hellman-group14-sha1、ssh-rsa 等 legacy 算法
     - use_keys/allow_agent 关闭本地 SSH agent 干扰
     - disable_sha2_fix 打开旧 Cisco/旧 Paramiko 兼容路径
     """
     return {
+        "disabled_algorithms": {},
         "use_keys": False,
         "allow_agent": False,
         "disable_sha2_fix": True,
@@ -51,13 +54,51 @@ def build_netmiko_compatibility_kwargs() -> Dict[str, Any]:
 
 
 def build_system_ssh_open_cmd() -> List[str]:
-    """为 OpenSSH/system transport 生成兼容老设备的额外参数。"""
+    """为 OpenSSH/system transport 生成兼容老设备的额外参数。
+    
+    使用直接覆盖（=）而非追加（+=），因为现代OpenSSH可能在编译时禁用了legacy算法。
+    优先列出legacy算法以确保兼容性。
+    """
+    # 现代算法用作fallback（若设备支持）
+    modern_kex = [
+        "curve25519-sha256",
+        "curve25519-sha256@libssh.org",
+        "ecdh-sha2-nistp256",
+        "ecdh-sha2-nistp384",
+        "ecdh-sha2-nistp521",
+        "diffie-hellman-group-exchange-sha256",
+    ]
+    
+    modern_host_keys = [
+        "ecdsa-sha2-nistp256",
+        "ecdsa-sha2-nistp384",
+        "ecdsa-sha2-nistp521",
+        "rsa-sha2-512",
+        "rsa-sha2-256",
+    ]
+    
+    modern_ciphers = [
+        "aes128-gcm@openssh.com",
+        "aes256-gcm@openssh.com",
+        "aes128-ctr",
+        "aes256-ctr",
+    ]
+    
+    modern_macs = [
+        "umac-64-etm@openssh.com",
+        "umac-128-etm@openssh.com",
+        "hmac-sha2-256-etm@openssh.com",
+        "hmac-sha2-512-etm@openssh.com",
+        "hmac-sha2-256",
+        "hmac-sha2-512",
+    ]
+    
     return [
-        "-o", f"KexAlgorithms=+{','.join(LEGACY_KEX_ALGORITHMS)}",
-        "-o", f"HostKeyAlgorithms=+{','.join(LEGACY_HOST_KEY_ALGORITHMS)}",
-        "-o", f"PubkeyAcceptedAlgorithms=+{','.join(LEGACY_HOST_KEY_ALGORITHMS)}",
-        "-o", f"Ciphers=+{','.join(LEGACY_CIPHERS)}",
-        "-o", f"MACs=+{','.join(LEGACY_MAC_ALGORITHMS)}",
+        "-o", f"KexAlgorithms={','.join(LEGACY_KEX_ALGORITHMS + modern_kex)}",
+        "-o", f"HostKeyAlgorithms={','.join(LEGACY_HOST_KEY_ALGORITHMS + modern_host_keys)}",
+        "-o", f"PubkeyAcceptedAlgorithms={','.join(LEGACY_HOST_KEY_ALGORITHMS + modern_host_keys)}",
+        "-o", f"Ciphers={','.join(LEGACY_CIPHERS + modern_ciphers)}",
+        "-o", f"MACs={','.join(LEGACY_MAC_ALGORITHMS + modern_macs)}",
     ]
 
 

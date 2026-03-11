@@ -39,6 +39,11 @@ def init_db():
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
+
+        def ensure_column(table_name: str, column_name: str, definition: str):
+            columns = {row['name'] for row in cursor.execute(f'PRAGMA table_info({table_name})').fetchall()}
+            if column_name not in columns:
+                cursor.execute(f'ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}')
         
         # Create devices table if not exists
         cursor.execute('''
@@ -168,15 +173,114 @@ def init_db():
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS links (
             id TEXT PRIMARY KEY,
+            link_key TEXT UNIQUE,
             source_device_id TEXT,
+            source_hostname TEXT,
             source_port TEXT,
+            source_port_normalized TEXT,
             target_device_id TEXT,
+            target_hostname TEXT,
             target_port TEXT,
+            target_port_normalized TEXT,
+            discovery_source TEXT DEFAULT 'lldp',
+            confidence REAL DEFAULT 0.0,
+            status TEXT DEFAULT 'up',
+            is_inferred INTEGER DEFAULT 0,
+            evidence_count INTEGER DEFAULT 1,
+            metadata_json TEXT DEFAULT '{}',
+            created_at TEXT,
+            updated_at TEXT,
             last_seen TEXT,
             FOREIGN KEY (source_device_id) REFERENCES devices (id),
             FOREIGN KEY (target_device_id) REFERENCES devices (id)
         )
         ''')
+        ensure_column('links', 'link_key', 'TEXT')
+        ensure_column('links', 'source_hostname', 'TEXT')
+        ensure_column('links', 'source_port_normalized', 'TEXT')
+        ensure_column('links', 'target_hostname', 'TEXT')
+        ensure_column('links', 'target_port_normalized', 'TEXT')
+        ensure_column('links', 'discovery_source', "TEXT DEFAULT 'lldp'")
+        ensure_column('links', 'confidence', 'REAL DEFAULT 0.0')
+        ensure_column('links', 'status', "TEXT DEFAULT 'up'")
+        ensure_column('links', 'is_inferred', 'INTEGER DEFAULT 0')
+        ensure_column('links', 'evidence_count', 'INTEGER DEFAULT 1')
+        ensure_column('links', 'metadata_json', "TEXT DEFAULT '{}'")
+        ensure_column('links', 'created_at', 'TEXT')
+        ensure_column('links', 'updated_at', 'TEXT')
+        cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_links_link_key ON links(link_key)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_links_last_seen ON links(last_seen)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_links_source_target ON links(source_device_id, target_device_id)')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS topology_discovery_runs (
+            id TEXT PRIMARY KEY,
+            scope TEXT NOT NULL DEFAULT 'full',
+            status TEXT NOT NULL DEFAULT 'pending',
+            requested_by TEXT DEFAULT 'system',
+            protocol_scope TEXT DEFAULT 'lldp_cdp',
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            total_devices INTEGER DEFAULT 0,
+            success_devices INTEGER DEFAULT 0,
+            failed_devices INTEGER DEFAULT 0,
+            total_observations INTEGER DEFAULT 0,
+            total_links INTEGER DEFAULT 0,
+            summary_json TEXT DEFAULT '{}'
+        )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_topology_runs_started_at ON topology_discovery_runs(started_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_topology_runs_status ON topology_discovery_runs(status)')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS topology_discovery_run_devices (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            hostname TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            discovery_method TEXT DEFAULT '',
+            started_at TEXT,
+            completed_at TEXT,
+            observations_count INTEGER DEFAULT 0,
+            matched_links_count INTEGER DEFAULT 0,
+            error_message TEXT DEFAULT '',
+            FOREIGN KEY (run_id) REFERENCES topology_discovery_runs(id),
+            FOREIGN KEY (device_id) REFERENCES devices(id)
+        )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_topology_run_devices_run_id ON topology_discovery_run_devices(run_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_topology_run_devices_device_id ON topology_discovery_run_devices(device_id)')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS topology_observations (
+            id TEXT PRIMARY KEY,
+            source_device_id TEXT NOT NULL,
+            source_hostname TEXT DEFAULT '',
+            source_port_raw TEXT DEFAULT '',
+            source_port_normalized TEXT DEFAULT '',
+            neighbor_name_raw TEXT DEFAULT '',
+            neighbor_name_normalized TEXT DEFAULT '',
+            neighbor_ip_address TEXT DEFAULT '',
+            target_device_id TEXT,
+            target_hostname TEXT DEFAULT '',
+            target_port_raw TEXT DEFAULT '',
+            target_port_normalized TEXT DEFAULT '',
+            protocol TEXT NOT NULL DEFAULT 'lldp',
+            confidence REAL DEFAULT 0.5,
+            status TEXT DEFAULT 'active',
+            discovery_run_id TEXT,
+            raw_payload_json TEXT DEFAULT '{}',
+            collected_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (source_device_id) REFERENCES devices(id),
+            FOREIGN KEY (target_device_id) REFERENCES devices(id),
+            FOREIGN KEY (discovery_run_id) REFERENCES topology_discovery_runs(id)
+        )
+        ''')
+        cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_topology_obs_unique ON topology_observations(source_device_id, source_port_normalized, neighbor_name_normalized, target_device_id, target_port_normalized, protocol)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_topology_obs_target ON topology_observations(target_device_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_topology_obs_collected_at ON topology_observations(collected_at)')
 
         # Create playbook_executions table
         cursor.execute('''

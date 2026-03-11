@@ -224,6 +224,16 @@ def delete_device(device_id: str):
 def update_device(device_id: str, device: dict = Body(...)):
     conn = get_db_connection()
     try:
+        existing_row = conn.execute('SELECT password FROM devices WHERE id = ?', (device_id,)).fetchone()
+        if not existing_row:
+            raise HTTPException(status_code=404, detail='Device not found')
+
+        submitted_password = device.get('password')
+        if submitted_password in (None, ''):
+            stored_password = existing_row['password']
+        else:
+            stored_password = encrypt_credential(submitted_password)
+
         conn.execute('''
             UPDATE devices 
             SET hostname = ?, ip_address = ?, platform = ?, sn = ?, model = ?, version = ?, role = ?, site = ?, connection_method = ?, username = ?, password = ?, current_config = ?, config_history = ?, snmp_community = ?, snmp_port = ?
@@ -239,7 +249,7 @@ def update_device(device_id: str, device: dict = Body(...)):
             device.get('site', ''),
             device.get('connection_method', 'ssh'),
             device.get('username', ''),
-            encrypt_credential(device.get('password', '')),
+            stored_password,
             device.get('current_config', ''),
             json.dumps(device.get('config_history', [])) if device.get('config_history') else '[]',
             device.get('snmp_community', 'public'),
