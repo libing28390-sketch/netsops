@@ -663,7 +663,6 @@ const App: React.FC = () => {
   const [inventoryGroupOpen, setInventoryGroupOpen] = useState(() => location.pathname.startsWith('/inventory'));
   const [alertGroupOpen, setAlertGroupOpen] = useState(() => ['alerts', 'alert-rules', 'maintenance'].includes(location.pathname.split('/')[1] || 'dashboard'));
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.innerWidth < 768);
-  const [sidebarPulseHidden, setSidebarPulseHidden] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
   // Playbook state
   const [scenarios, setScenarios] = useState<any[]>([]);
@@ -2260,37 +2259,6 @@ const App: React.FC = () => {
   const [devicesLastUpdatedAt, setDevicesLastUpdatedAt] = useState<number | null>(null);
   const [intfNowTick, setIntfNowTick] = useState(0);
   const [hostResources, setHostResources] = useState<HostResourceSnapshot | null>(null);
-  const onlineDeviceCount = devices.filter(device => device.status === 'online').length;
-  const runningJobCount = jobs.filter(job => job.status === 'running').length;
-  const complianceDeviceCount = devices.filter(device => device.compliance === 'compliant').length;
-  const onlineDevicePct = devices.length > 0 ? Math.round((onlineDeviceCount / devices.length) * 100) : 0;
-  const compliancePct = devices.length > 0 ? Math.round((complianceDeviceCount / devices.length) * 100) : 0;
-  const sidebarHealthLevel = hostResources?.status === 'critical' || unreadNotificationCount >= 5 || onlineDevicePct < 30 || (devices.length > 0 && compliancePct === 0)
-    ? 'critical'
-    : hostResources?.status === 'degraded' || unreadNotificationCount > 0 || onlineDevicePct < 60 || compliancePct < 50
-      ? 'warning'
-      : 'healthy';
-  const sidebarHealthLabel = sidebarHealthLevel === 'critical'
-    ? t('systemCritical')
-    : sidebarHealthLevel === 'warning'
-      ? t('systemWarning')
-      : t('systemHealthy');
-  const sidebarHealthBadgeClass = sidebarHealthLevel === 'critical'
-    ? 'border-red-400/30 bg-red-400/12 text-red-200'
-    : sidebarHealthLevel === 'warning'
-      ? 'border-amber-400/30 bg-amber-400/12 text-amber-200'
-      : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300';
-  const sidebarHealthDotClass = sidebarHealthLevel === 'critical'
-    ? 'bg-red-300'
-    : sidebarHealthLevel === 'warning'
-      ? 'bg-amber-300'
-      : 'bg-emerald-300';
-  const sidebarLastSyncLabel = devicesLastUpdatedAt
-    ? new Date(devicesLastUpdatedAt).toLocaleTimeString(language === 'zh' ? 'zh-CN' : 'en-US', {
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    : t('noSyncData');
 
   // Monitoring Center state (search-first, no full device listing)
   const [monitorSearch, setMonitorSearch] = useState('');
@@ -5272,108 +5240,6 @@ const App: React.FC = () => {
             </button>
           ))}
         </nav>
-
-        <div className={`p-4 pt-0 transition-all duration-200 ${sidebarPulseHidden ? 'hidden' : ''}`}>
-          <div className="rounded-2xl border border-white/10 bg-white/[0.035] shadow-[0_18px_40px_rgba(0,0,0,0.18)] overflow-hidden">
-            <div className="px-4 py-3 border-b border-white/8 flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <p className="text-[11px] font-semibold tracking-wide text-white/92">{t('networkPulse')}</p>
-                <p className="text-[10px] text-white/42">{t('networkPulseSub')}</p>
-              </div>
-              <div className="flex items-center gap-1.5 flex-shrink-0">
-                <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold ${sidebarHealthBadgeClass} ${sidebarHealthLevel === 'critical' ? 'animate-pulse' : ''}`}>
-                  <span className={`h-1.5 w-1.5 rounded-full ${sidebarHealthDotClass}`} />
-                  {sidebarHealthLabel}
-                </span>
-              </div>
-            </div>
-
-            <div className="px-2 py-2">
-              <button
-                onClick={() => {
-                  setInventoryGroupOpen(true);
-                  navTo('/inventory/devices');
-                }}
-                className="w-full flex items-center justify-between rounded-xl px-3 py-2.5 text-left transition-all hover:bg-white/6"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <span className="w-8 h-8 rounded-xl bg-emerald-400/12 text-emerald-300 flex items-center justify-center">
-                    <CheckCircle size={15} />
-                  </span>
-                  <div className="min-w-0">
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-white/35">{t('devicesOnlineShort')}</p>
-                    <p className="text-sm font-semibold text-white truncate">{onlineDeviceCount}/{devices.length}</p>
-                  </div>
-                </div>
-                <ChevronRight size={14} className="text-white/22" />
-              </button>
-
-              <button
-                onClick={() => setActiveTab('monitoring')}
-                className="w-full flex items-center justify-between rounded-xl px-3 py-2.5 text-left transition-all hover:bg-white/6"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <span className="w-8 h-8 rounded-xl bg-amber-400/12 text-amber-300 flex items-center justify-center">
-                    <AlertTriangle size={15} />
-                  </span>
-                  <div className="min-w-0">
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-white/35">{t('activeAlertsShort')}</p>
-                    <p className="text-sm font-semibold text-white truncate">{unreadNotificationCount}</p>
-                  </div>
-                </div>
-                <ChevronRight size={14} className="text-white/22" />
-              </button>
-
-              <button
-                onClick={() => {
-                  setAutomationGroupOpen(true);
-                  navTo('/automation/history');
-                }}
-                className="w-full flex items-center justify-between rounded-xl px-3 py-2.5 text-left transition-all hover:bg-white/6"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <span className="w-8 h-8 rounded-xl bg-sky-400/12 text-sky-300 flex items-center justify-center">
-                    <Play size={15} />
-                  </span>
-                  <div className="min-w-0">
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-white/35">{t('runningTasksShort')}</p>
-                    <p className="text-sm font-semibold text-white truncate">{runningJobCount}</p>
-                  </div>
-                </div>
-                <ChevronRight size={14} className="text-white/22" />
-              </button>
-            </div>
-
-            <div className="px-4 py-3 border-t border-white/8 space-y-2">
-              <div className="flex items-center justify-between text-[11px]">
-                <div className="flex items-center gap-2 text-white/45">
-                  <Clock size={13} />
-                  <span>{t('lastSyncShort')}</span>
-                </div>
-                <span className="font-medium text-white/78">{sidebarLastSyncLabel}</span>
-              </div>
-              <button
-                onClick={() => setSidebarPulseHidden(true)}
-                title={language === 'zh' ? '收起网络状态' : 'Collapse Network Pulse'}
-                className="w-full flex items-center justify-center gap-2 rounded-xl border border-white/8 px-3 py-2 text-[11px] font-medium text-white/45 transition-all hover:bg-white/5 hover:text-white/72"
-              >
-                <ChevronDown size={13} />
-                <span>{language === 'zh' ? '收起网络状态' : 'Collapse Network Pulse'}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-        {sidebarPulseHidden && (
-          <div className="p-4 pt-0">
-            <button
-              onClick={() => setSidebarPulseHidden(false)}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl border border-white/8 text-white/35 hover:text-white/60 hover:bg-white/5 transition-all text-[11px]"
-            >
-              <Activity size={13} />
-              <span>{language === 'zh' ? '显示网络状态' : 'Show Network Pulse'}</span>
-            </button>
-          </div>
-        )}
 
       </aside>
 

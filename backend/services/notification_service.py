@@ -69,10 +69,10 @@ def _now_str() -> str:
 
 def _status_label(status: str, lang: str = 'zh') -> str:
     if lang == 'en':
-        return {'active': '🔥 Active', 'resolved': '✅ Resolved', 'acknowledged': '👁 Acknowledged'}.get(
+        return {'active': '🔥 Active', 'resolved': '✅ Closed/Recovered', 'acknowledged': '👁 Acknowledged'}.get(
             (status or '').lower(), status or 'Active'
         )
-    return {'active': '🔥 告警中', 'resolved': '✅ 已恢复', 'acknowledged': '👁 已确认'}.get(
+    return {'active': '🔥 告警中', 'resolved': '✅ 已关闭/恢复', 'acknowledged': '👁 已确认'}.get(
         (status or '').lower(), status or '告警中'
     )
 

@@ -218,7 +218,7 @@ const AlertDeskTab: React.FC<AlertDeskTabProps> = ({ language, currentUsername, 
             <option value="acknowledged">{language === 'zh' ? '已确认' : 'Acknowledged'}</option>
             <option value="investigating">{language === 'zh' ? '处理中' : 'Investigating'}</option>
             <option value="suppressed">{language === 'zh' ? '维护抑制' : 'Suppressed'}</option>
-            <option value="resolved">{language === 'zh' ? '已恢复' : 'Resolved'}</option>
+            <option value="resolved">{language === 'zh' ? '已关闭/恢复' : 'Closed/Recovered'}</option>
             <option value="all">{language === 'zh' ? '全部状态' : 'All Status'}</option>
           </select>
 

@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta, timezone
+import json
 import math
 from typing import Any
 from fastapi import APIRouter, Query
 from core.config import settings
 from database import DB_PATH, get_db_connection, init_db
 from services import alert_maintenance_service
+from services import notification_service
 import logging
 import os
 import shutil
@@ -63,6 +65,65 @@ def _normalize_host_resource_alert_row(row: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(row)
     normalized["title"] = _get_host_resource_alert_title(metric_key, str(row.get("title") or ""))
     return normalized
+
+
+def _local_alert_time(iso_value: str | None) -> str:
+    if not iso_value:
+        return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        return datetime.fromisoformat(str(iso_value)).astimezone().strftime('%Y-%m-%d %H:%M:%S')
+    except Exception:
+        return str(iso_value)
+
+
+def _dispatch_host_resource_notification(
+    alert: dict[str, Any],
+    *,
+    status: str,
+    first_occurrence: str,
+    last_occurrence: str | None = None,
+    duration_seconds: int | None = None,
+    impact_window: str | None = None,
+    alert_count: int | None = None,
+) -> None:
+    alert_info = {
+        'title': alert.get('title') or _get_host_resource_alert_title(alert.get('metric_key')),
+        'object_name': alert.get('metric_key') or alert.get('dedupe_key') or HOST_RESOURCE_ALERT_SOURCE,
+        'ip_address': '',
+        'status': status,
+        'severity': alert.get('severity') or 'major',
+        'message': alert.get('message') or '',
+        'first_occurrence': _local_alert_time(first_occurrence),
+        'last_occurrence': _local_alert_time(last_occurrence or first_occurrence),
+        'lang': DEFAULT_UI_LANGUAGE or 'zh',
+    }
+    if duration_seconds is not None:
+        alert_info['duration_seconds'] = duration_seconds
+    if impact_window is not None:
+        alert_info['impact_window'] = impact_window
+    if alert_count is not None:
+        alert_info['alert_count'] = alert_count
+
+    conn = get_db_connection()
+    try:
+        rows = conn.execute(
+            "SELECT notification_channels, preferred_language FROM users WHERE notification_channels IS NOT NULL AND notification_channels != '{}'",
+        ).fetchall()
+    finally:
+        conn.close()
+
+    for row in rows or []:
+        try:
+            channels = json.loads(row['notification_channels'] or '{}')
+        except Exception:
+            continue
+        if not channels:
+            continue
+        user_alert = {
+            **alert_info,
+            'lang': row['preferred_language'] if 'preferred_language' in row.keys() and row['preferred_language'] else alert_info['lang'],
+        }
+        notification_service.send_all_channels(channels, user_alert)
 
 
 def _get_db_health() -> tuple[bool, str]:
@@ -187,7 +248,7 @@ def _sync_host_resource_alerts(snapshot: dict[str, Any]) -> list[dict[str, Any]]
     conn = get_db_connection()
     try:
         open_rows = conn.execute(
-            "SELECT dedupe_key, severity, title, message, interface_name AS metric_key FROM alert_events WHERE source = ? AND resolved_at IS NULL",
+            "SELECT dedupe_key, severity, title, message, interface_name AS metric_key, created_at, workflow_status FROM alert_events WHERE source = ? AND resolved_at IS NULL",
             (HOST_RESOURCE_ALERT_SOURCE,),
         ).fetchall()
         open_map = {row["dedupe_key"]: dict(row) for row in open_rows}
@@ -247,13 +308,52 @@ def _sync_host_resource_alerts(snapshot: dict[str, Any]) -> list[dict[str, Any]]
                     now_utc,
                 ),
             )
+            if not maintenance_window:
+                _dispatch_host_resource_notification(
+                    alert,
+                    status='active',
+                    first_occurrence=now_utc,
+                    last_occurrence=now_utc,
+                )
 
         stale_keys = open_keys - set(desired_map)
         if stale_keys:
+            resolved_rows = [
+                {
+                    **open_map[dedupe_key],
+                    'dedupe_key': dedupe_key,
+                    'metric_key': open_map[dedupe_key].get('metric_key') or dedupe_key.split(':', 1)[-1],
+                }
+                for dedupe_key in stale_keys
+            ]
             conn.executemany(
                 "UPDATE alert_events SET resolved_at = ?, workflow_status = 'resolved', updated_at = ? WHERE dedupe_key = ? AND source = ? AND resolved_at IS NULL",
                 [(now_utc, now_utc, dedupe_key, HOST_RESOURCE_ALERT_SOURCE) for dedupe_key in stale_keys],
             )
+            for row in resolved_rows:
+                if str(row.get('workflow_status') or '').lower() == 'suppressed':
+                    continue
+                first_occurrence = str(row.get('created_at') or now_utc)
+                try:
+                    start_dt = datetime.fromisoformat(first_occurrence)
+                    end_dt = datetime.fromisoformat(now_utc)
+                    duration_seconds = max(0, int((end_dt - start_dt).total_seconds()))
+                except Exception:
+                    duration_seconds = None
+                start_label = _local_alert_time(first_occurrence)
+                end_label = _local_alert_time(now_utc)
+                impact_window = None
+                if ' ' in start_label and ' ' in end_label:
+                    impact_window = f"{start_label.split(' ')[-1]} → {end_label.split(' ')[-1]}"
+                _dispatch_host_resource_notification(
+                    row,
+                    status='resolved',
+                    first_occurrence=first_occurrence,
+                    last_occurrence=now_utc,
+                    duration_seconds=duration_seconds,
+                    impact_window=impact_window,
+                    alert_count=1,
+                )
         conn.commit()
     finally:
         conn.close()

@@ -49,14 +49,14 @@ netops-automation/
 
 ```powershell
 # 1. 克隆项目
-git clone <repo-url> netops-automation
+git clone https://github.com/libing28390-sketch/netsops.git netops-automation
 cd netops-automation
 
 # 2. 创建 Python 虚拟环境
 py -3 -m venv .venv
 
 # 3. 激活虚拟环境
-.venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
 
 # 4. 安装 Python 依赖
 .venv\Scripts\python.exe -m pip install -r backend\requirements.txt
@@ -94,7 +94,7 @@ npm run build              # 构建前端
    netstat -ano | findstr :8003
    taskkill /PID <pid> /F
    ```
-4. **PowerShell 执行策略**：如果 `.venv\Scripts\activate` 报错，先执行：
+4. **PowerShell 执行策略**：如果 `\.venv\Scripts\Activate.ps1` 报错，先执行：
    ```powershell
    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
    ```
@@ -120,7 +120,7 @@ sudo apt install python3 python3-venv python3-dev build-essential
 
 ```bash
 # 1. 克隆项目
-git clone <repo-url> netops-automation
+git clone https://github.com/libing28390-sketch/netsops.git netops-automation
 cd netops-automation
 
 # 2. 创建 Python 虚拟环境
@@ -238,12 +238,28 @@ npm run build
 ### 环境变量 (.env)
 
 从 `.env.example` 复制并按需修改：
+
+```powershell
+# Windows PowerShell
+Copy-Item .env.example .env
+```
+
 ```bash
+# Linux / macOS
 cp .env.example .env
 ```
 
-监控与告警建议增加以下变量：
+建议至少检查并按需修改以下变量：
 ```env
+# 应用基础配置
+SECRET_KEY=change-this-in-production
+CREDENTIAL_ENCRYPTION_KEY=change-me-to-a-random-secret
+ENVIRONMENT=production
+
+# 跨域与平台跳转
+CORS_ORIGINS=http://localhost:3000
+PLATFORM_URL=
+
 # 高频原始接口遥测保留时长（小时）
 TELEMETRY_RAW_RETENTION_HOURS=48
 
@@ -256,6 +272,10 @@ ALERT_INTERFACE_DOWN_ENABLED=true
 # 接口带宽利用率告警阈值（百分比）
 ALERT_INTERFACE_UTIL_THRESHOLD=85
 
+# 主机资源告警阈值（百分比）
+ALERT_CPU_THRESHOLD=90
+ALERT_MEMORY_THRESHOLD=90
+
 # 告警通知 Webhook（可填写企业微信机器人地址）
 ALERT_NOTIFY_WEBHOOK_URL=
 ```
@@ -263,9 +283,9 @@ ALERT_NOTIFY_WEBHOOK_URL=
 ### 访问地址
 
 - 开发模式：http://localhost:3000（Vite 代理 API 到 8003）
-- 生产模式：http://localhost（Nginx 反向代理到 8003）
-- Docker 模式：http://localhost（Nginx 容器 → netops 容器）
-- 直连后端：http://localhost:8003（无 Nginx，FastAPI 直接 serve）
+- 生产模式（直连后端）：http://localhost:8003（`npm run start` / `python backend/main.py`）
+- Nginx 反向代理部署：http://localhost:8080（Ubuntu 一键部署默认端口，可通过 `NGINX_PORT` 修改）
+- Docker 模式：http://localhost:8080（Nginx 容器 → netops 容器）
 
 ---
 

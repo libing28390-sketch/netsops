@@ -141,7 +141,7 @@ export const workflowLabel = (status: string, language: string) => {
     case 'acknowledged': return language === 'zh' ? '已确认' : 'Acknowledged';
     case 'investigating': return language === 'zh' ? '处理中' : 'Investigating';
     case 'suppressed': return language === 'zh' ? '维护抑制' : 'Suppressed';
-    case 'resolved': return language === 'zh' ? '已恢复' : 'Resolved';
+    case 'resolved': return language === 'zh' ? '已关闭/恢复' : 'Closed/Recovered';
     default: return language === 'zh' ? '待处理' : 'Open';
   }
 };

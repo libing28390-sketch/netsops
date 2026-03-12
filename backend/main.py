@@ -322,25 +322,33 @@ async def status_monitor():
     from core.crypto import decrypt_credential
     import re as _re
     import time as _time
-    # Polling cadence: 5s base cycle for near real-time interface monitoring.
-    # Keep slower jobs at equivalent wall-clock intervals via cycle counters.
+    # Polling cadence: 5s base cycle. Device-specific jobs are derived from the role profile.
     monitor_sleep_seconds = 5
     lldp_every_cycles = 60      # ~5 minutes
-    intf_every_cycles = 1       # every cycle (~5 seconds)
-    info_every_cycles = 120     # ~10 minutes
+    role_poll_profiles = {
+        'core': {'interface': 1, 'info': 120, 'protocol': 12},
+        'distribution': {'interface': 2, 'info': 180, 'protocol': 24},
+        'access': {'interface': 6, 'info': 240, 'protocol': 60},
+        'default': {'interface': 3, 'info': 180, 'protocol': 36},
+    }
+    protocol_aggregate_threshold = 2
+    protocol_aggregate_sample_size = 5
+    protocol_flap_window_secs = 600
+    protocol_flap_threshold = 4
+    protocol_flap_silence_secs = 900
 
     # Counter for LLDP discovery (every ~5 minutes)
-    # Counter for SNMP interface collection (every ~5 seconds)
-    # Counter for device info collection (every ~10 minutes)
     lldp_counter = 0
-    intf_counter = 0
-    info_counter = 0
+    monitor_cycle = 0
     maintenance_counter = 0
     monitor_concurrency = 4
     monitor_batch_size = 20
     sem = asyncio.Semaphore(monitor_concurrency)
     # Store previous interface octets for bandwidth calculation { device_id: { ifname: {in_octets, out_octets, ts} } }
     prev_intf_octets: dict = {}
+    protocol_peer_cache: dict[tuple[str, str], dict[str, str]] = {}
+    protocol_transition_history: dict[str, list[float]] = {}
+    protocol_notify_suppressed_until: dict[str, float] = {}
     snmp_failure_streak: dict[str, int] = {}
     # Flap detection: { "device_id:ifname": [timestamp_of_transition, ...] }
     intf_flap_history: dict = {}
@@ -370,6 +378,18 @@ async def status_monitor():
             logger.info(f"[Alert] Restored {len(open_alerts)} open alert(s) from database")
     except Exception as _exc:
         logger.warning(f"[Alert] Failed to restore open alerts: {_exc}")
+    try:
+        _protocol_rows = _db_quick(
+            "SELECT metric_type, device_id, peer, object_name FROM protocol_peer_state",
+            fetchall=True,
+        )
+        for _row in _protocol_rows or []:
+            _cache_key = (str(_row['metric_type'] or ''), str(_row['device_id'] or ''))
+            protocol_peer_cache.setdefault(_cache_key, {})[str(_row['peer'] or '')] = str(_row['object_name'] or _row['peer'] or '')
+        if _protocol_rows:
+            logger.info(f"[Alert] Restored {len(_protocol_rows)} protocol peer state row(s) from database")
+    except Exception as _exc:
+        logger.warning(f"[Alert] Failed to restore protocol peer state: {_exc}")
     # Throttle webhook notifications per alert key.
     webhook_last_sent: dict = {}
     current_alert_rules = alert_rule_service.get_runtime_rules()
@@ -417,6 +437,55 @@ async def status_monitor():
             return 'interface_down'
         return None
 
+    def _device_role_bucket(device_row: dict) -> str:
+        role_haystack = ' '.join(
+            str(device_row.get(field) or '').strip().lower()
+            for field in ('role', 'hostname', 'platform', 'site')
+        )
+        if any(token in role_haystack for token in ('core', 'border', 'edge', 'spine')):
+            return 'core'
+        if any(token in role_haystack for token in ('distribution', 'dist', 'aggregation', 'agg', 'leaf')):
+            return 'distribution'
+        if any(token in role_haystack for token in ('access', 'l2')):
+            return 'access'
+        return 'default'
+
+    def _device_poll_profile(device_row: dict) -> dict[str, int]:
+        return role_poll_profiles.get(_device_role_bucket(device_row), role_poll_profiles['default'])
+
+    def _should_collect(cycle_tick: int, every_cycles: int) -> bool:
+        return every_cycles <= 1 or cycle_tick % every_cycles == 0
+
+    def _is_protocol_peer_alert_key(dedupe_key: str) -> bool:
+        return any(dedupe_key.startswith(f'{metric}:') for metric in ('bgp_neighbor_down', 'ospf_neighbor_down', 'bfd_session_down')) and ':summary:' not in dedupe_key and ':flap:' not in dedupe_key
+
+    def _protocol_metric_label(metric_type: str) -> str:
+        return {
+            'bgp_neighbor_down': 'BGP 邻居',
+            'ospf_neighbor_down': 'OSPF 邻居',
+            'bfd_session_down': 'BFD 会话',
+        }.get(metric_type, metric_type)
+
+    def _protocol_transition_notify_allowed(dedupe_key: str) -> bool:
+        if not _is_protocol_peer_alert_key(dedupe_key):
+            return True
+        now_ts = datetime.now(timezone.utc).timestamp()
+        suppressed_until = protocol_notify_suppressed_until.get(dedupe_key, 0)
+        history = [ts for ts in protocol_transition_history.get(dedupe_key, []) if now_ts - ts <= protocol_flap_window_secs]
+        history.append(now_ts)
+        protocol_transition_history[dedupe_key] = history
+        if len(history) >= protocol_flap_threshold:
+            next_until = now_ts + protocol_flap_silence_secs
+            protocol_notify_suppressed_until[dedupe_key] = max(suppressed_until, next_until)
+            logger.warning(
+                f"[Protocol Monitor] Suppressing notifications for {dedupe_key} until {datetime.fromtimestamp(protocol_notify_suppressed_until[dedupe_key], timezone.utc).isoformat()} due to frequent state changes"
+            )
+            return False
+        return suppressed_until <= now_ts
+
+    def _is_protocol_notification_suppressed(dedupe_key: str) -> bool:
+        return protocol_notify_suppressed_until.get(dedupe_key, 0) > datetime.now(timezone.utc).timestamp()
+
     def load_topology_ports(device_id: str) -> set[str]:
         rows = _db_quick(
             '''
@@ -437,6 +506,49 @@ async def status_monitor():
             if str(row['target_device_id'] or '') == device_id and target_port:
                 ports.add(target_port)
         return ports
+
+    def load_persisted_interface_statuses(device_id: str) -> dict[str, str]:
+        rows = _db_quick(
+            '''
+            SELECT latest.interface_name, latest.status
+            FROM interface_telemetry_raw AS latest
+            JOIN (
+                SELECT interface_name, MAX(ts) AS max_ts
+                FROM interface_telemetry_raw
+                WHERE device_id = ?
+                GROUP BY interface_name
+            ) AS snapshot
+              ON latest.interface_name = snapshot.interface_name
+             AND latest.ts = snapshot.max_ts
+            WHERE latest.device_id = ?
+            ''',
+            (device_id, device_id),
+            fetchall=True,
+        ) or []
+        return {
+            str(row['interface_name'] or ''): str(row['status'] or '').lower()
+            for row in rows
+            if str(row['interface_name'] or '').strip()
+        }
+
+    def persist_protocol_peer_state(metric_type: str, device_id: str, peers: dict[str, str]):
+        _db_quick(
+            "DELETE FROM protocol_peer_state WHERE metric_type = ? AND device_id = ?",
+            (metric_type, device_id),
+        )
+        if not peers:
+            return
+        now_iso = _utc_now_iso()
+        _db_many(
+            '''
+            INSERT INTO protocol_peer_state (metric_type, device_id, peer, object_name, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ''',
+            [
+                (metric_type, device_id, peer, object_name, now_iso)
+                for peer, object_name in peers.items()
+            ],
+        )
 
     def sync_lldp_neighbor_alerts():
         links = _db_quick(
@@ -493,6 +605,17 @@ async def status_monitor():
                 if any(token in key for token in fuzzy_tokens) and str(value).strip():
                     return str(value).strip()
         return ''
+
+    def _protocol_state_display(metric_type: str, record: dict) -> str:
+        if metric_type == 'bgp_neighbor_down':
+            raw_state = _record_value(record, ('state_pfxrcd', 'state', 'status', 'session_state'), ('state', 'status'))
+            normalized = _normalize_protocol_text(raw_state)
+            if normalized.isdigit():
+                return f"Established/Prefix={raw_state}"
+            return raw_state or 'unknown'
+        if metric_type == 'ospf_neighbor_down':
+            return _record_value(record, ('state', 'adj_state', 'adjacency_state', 'status'), ('state', 'status')) or 'unknown'
+        return _record_value(record, ('state', 'status', 'session_state'), ('state', 'status')) or 'unknown'
 
     def _bgp_peer_state(record: dict) -> tuple[str, bool | None]:
         peer = _record_value(record, ('neighbor', 'peer', 'peer_ip', 'neighbor_ip', 'remote_addr', 'remote_ip'), ('neighbor', 'peer', 'remote'))
@@ -553,78 +676,151 @@ async def status_monitor():
             return
 
         categories = {str(item.get('key') or ''): item for item in (payload.get('categories') or []) if isinstance(item, dict)}
-        bgp_records = categories.get('bgp', {}).get('records') or []
-        ospf_records = categories.get('ospf', {}).get('records') or []
-        bfd_records = categories.get('bfd', {}).get('records') or []
+        def _sync_protocol_category(metric_type: str, category_key: str, title: str):
+            category = categories.get(category_key, {})
+            if not category or not bool(category.get('success')):
+                return
 
-        for record in bgp_records:
-            if not isinstance(record, dict):
-                continue
-            peer, is_down = _bgp_peer_state(record)
-            if not peer or is_down is None:
-                continue
-            rule = resolve_alert_rule('bgp_neighbor_down', device_row=device_row, ip_address=ip_address, interface_name=peer)
-            if not rule:
-                continue
-            set_alert_state(
-                f"bgp_neighbor_down:{device_row['id']}:{peer}",
-                is_down,
-                rule.get('severity', 'critical'),
-                'BGP Neighbor Down',
-                f"BGP 邻居 {peer} {'状态异常' if is_down else '已恢复建立'}",
-                device_row['id'], peer,
-                ip_address=ip_address,
-                status='active' if is_down else 'resolved',
-                rule=rule,
-            )
+            previous_peers = protocol_peer_cache.get((metric_type, device_row['id']), {})
+            current_peers: dict[str, str] = {}
+            peer_events: list[dict] = []
+            records = category.get('records') or []
 
-        for record in ospf_records:
-            if not isinstance(record, dict):
-                continue
-            peer, is_down = _ospf_peer_state(record)
-            if not peer or is_down is None:
-                continue
-            rule = resolve_alert_rule('ospf_neighbor_down', device_row=device_row, ip_address=ip_address, interface_name=peer)
-            if not rule:
-                continue
-            set_alert_state(
-                f"ospf_neighbor_down:{device_row['id']}:{peer}",
-                is_down,
-                rule.get('severity', 'critical'),
-                'OSPF Neighbor Down',
-                f"OSPF 邻居 {peer} {'邻接异常' if is_down else '已恢复正常'}",
-                device_row['id'], peer,
-                ip_address=ip_address,
-                status='active' if is_down else 'resolved',
-                rule=rule,
-            )
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
 
-        for record in bfd_records:
-            if not isinstance(record, dict):
-                continue
-            peer, interface_name, is_down = _bfd_peer_state(record)
-            if not peer or is_down is None:
-                continue
-            scoped_name = interface_name or peer
-            rule = resolve_alert_rule('bfd_session_down', device_row=device_row, ip_address=ip_address, interface_name=scoped_name)
-            if not rule:
-                continue
-            set_alert_state(
-                f"bfd_session_down:{device_row['id']}:{peer}",
-                is_down,
-                rule.get('severity', 'critical'),
-                'BFD Session Down',
-                (
-                    f"BFD 会话 {peer}{f' ({interface_name})' if interface_name else ''} 状态异常"
-                    if is_down else
-                    f"BFD 会话 {peer}{f' ({interface_name})' if interface_name else ''} 已恢复正常"
-                ),
-                device_row['id'],
-                scoped_name,
-                ip_address=ip_address,
-                status='active' if is_down else 'resolved',
-                rule=rule,
-            )
+                if metric_type == 'bgp_neighbor_down':
+                    peer, is_down = _bgp_peer_state(record)
+                    object_name = peer
+                elif metric_type == 'ospf_neighbor_down':
+                    peer, is_down = _ospf_peer_state(record)
+                    object_name = peer
+                else:
+                    peer, interface_name, is_down = _bfd_peer_state(record)
+                    object_name = interface_name or peer
+
+                if not peer:
+                    continue
+
+                current_peers[peer] = object_name or peer
+                if is_down is None:
+                    continue
+
+                state_display = _protocol_state_display(metric_type, record)
+                if metric_type == 'bgp_neighbor_down':
+                    active_message = f"BGP 邻居 {peer} 状态由 UP 变为 DOWN（当前状态: {state_display}）"
+                    resolved_message = f"BGP 邻居 {peer} 状态由 DOWN 恢复为 UP（当前状态: {state_display}）"
+                    missing_message = f"BGP 邻居 {peer} 上一轮为 UP，本轮未采集到，按 DOWN 处理"
+                elif metric_type == 'ospf_neighbor_down':
+                    active_message = f"OSPF 邻居 {peer} 状态由 UP 变为 DOWN（当前状态: {state_display}）"
+                    resolved_message = f"OSPF 邻居 {peer} 状态由 DOWN 恢复为 UP（当前状态: {state_display}）"
+                    missing_message = f"OSPF 邻居 {peer} 上一轮为 UP，本轮未采集到，按 DOWN 处理"
+                else:
+                    suffix = f" ({interface_name})" if interface_name else ''
+                    active_message = f"BFD 会话 {peer}{suffix} 状态由 UP 变为 DOWN（当前状态: {state_display}）"
+                    resolved_message = f"BFD 会话 {peer}{suffix} 状态由 DOWN 恢复为 UP（当前状态: {state_display}）"
+                    missing_message = f"BFD 会话 {peer}{suffix} 上一轮为 UP，本轮未采集到，按 DOWN 处理"
+
+                peer_events.append({
+                    'dedupe_key': f"{metric_type}:{device_row['id']}:{peer}",
+                    'peer': peer,
+                    'object_name': current_peers[peer],
+                    'is_down': bool(is_down),
+                    'message': active_message if is_down else resolved_message,
+                })
+
+            for peer, object_name in previous_peers.items():
+                if peer in current_peers:
+                    continue
+
+                if metric_type == 'bgp_neighbor_down':
+                    missing_message = f"BGP 邻居 {peer} 上一轮为 UP，本轮未采集到，按 DOWN 处理"
+                elif metric_type == 'ospf_neighbor_down':
+                    missing_message = f"OSPF 邻居 {peer} 上一轮为 UP，本轮未采集到，按 DOWN 处理"
+                else:
+                    missing_suffix = f" ({object_name})" if object_name and object_name != peer else ''
+                    missing_message = f"BFD 会话 {peer}{missing_suffix} 上一轮为 UP，本轮未采集到，按 DOWN 处理"
+
+                peer_events.append({
+                    'dedupe_key': f"{metric_type}:{device_row['id']}:{peer}",
+                    'peer': peer,
+                    'object_name': object_name,
+                    'is_down': True,
+                    'message': missing_message,
+                })
+
+            down_peers = [str(event['peer']) for event in peer_events if event['is_down']]
+            aggregate_active = len(down_peers) >= protocol_aggregate_threshold
+            for event in peer_events:
+                rule = resolve_alert_rule(metric_type, device_row=device_row, ip_address=ip_address, interface_name=event['object_name'])
+                if not rule:
+                    continue
+                set_alert_state(
+                    event['dedupe_key'],
+                    event['is_down'],
+                    rule.get('severity', 'critical'),
+                    title,
+                    event['message'],
+                    device_row['id'],
+                    event['object_name'],
+                    ip_address=ip_address,
+                    status='active' if event['is_down'] else 'resolved',
+                    rule=rule,
+                    notify=not aggregate_active,
+                )
+
+            protocol_peer_cache[(metric_type, device_row['id'])] = current_peers
+            persist_protocol_peer_state(metric_type, device_row['id'], current_peers)
+            _sync_protocol_aggregate_alert(metric_type, title, device_row, ip_address, down_peers)
+            flapping_peers = [peer for peer in down_peers if _is_protocol_notification_suppressed(f"{metric_type}:{device_row['id']}:{peer}")]
+            _sync_protocol_flap_alert(metric_type, title, device_row, ip_address, flapping_peers)
+
+        _sync_protocol_category('bgp_neighbor_down', 'bgp', 'BGP Neighbor Down')
+        _sync_protocol_category('ospf_neighbor_down', 'ospf', 'OSPF Neighbor Down')
+        _sync_protocol_category('bfd_session_down', 'bfd', 'BFD Session Down')
+
+    def _set_protocol_alerts_for_device_offline(device_row: dict, ip_address: str):
+        metric_titles = {
+            'bgp_neighbor_down': 'BGP Neighbor Down',
+            'ospf_neighbor_down': 'OSPF Neighbor Down',
+            'bfd_session_down': 'BFD Session Down',
+        }
+        for metric_type, title in metric_titles.items():
+            peer_map = protocol_peer_cache.get((metric_type, device_row['id']), {})
+            down_peers: list[str] = []
+            if peer_map:
+                logger.info(
+                    f"[Protocol Monitor] Device {ip_address} offline, marking {len(peer_map)} {metric_type} peer(s) as down"
+                )
+            aggregate_active = len(peer_map) >= protocol_aggregate_threshold
+            for peer, object_name in peer_map.items():
+                rule = resolve_alert_rule(metric_type, device_row=device_row, ip_address=ip_address, interface_name=object_name)
+                if not rule:
+                    continue
+                down_peers.append(peer)
+                if metric_type == 'bgp_neighbor_down':
+                    message = f"设备离线，BGP 邻居 {peer} 上一轮为 UP，现按 DOWN 处理"
+                elif metric_type == 'ospf_neighbor_down':
+                    message = f"设备离线，OSPF 邻居 {peer} 上一轮为 UP，现按 DOWN 处理"
+                else:
+                    suffix = f" ({object_name})" if object_name and object_name != peer else ''
+                    message = f"设备离线，BFD 会话 {peer}{suffix} 上一轮为 UP，现按 DOWN 处理"
+                set_alert_state(
+                    f"{metric_type}:{device_row['id']}:{peer}",
+                    True,
+                    rule.get('severity', 'critical'),
+                    title,
+                    message,
+                    device_row['id'],
+                    object_name,
+                    ip_address=ip_address,
+                    status='active',
+                    rule=rule,
+                    notify=not aggregate_active,
+                )
+            _sync_protocol_aggregate_alert(metric_type, title, device_row, ip_address, down_peers)
+            _sync_protocol_flap_alert(metric_type, title, device_row, ip_address, [])
 
     def maybe_notify_webhook(dedupe_key: str, severity: str, title: str, message: str,
                                created_at: str, ip_address: str = '', object_name: str = '',
@@ -703,7 +899,8 @@ async def status_monitor():
 
     def set_alert_state(dedupe_key: str, is_active: bool, severity: str, title: str, message: str,
                          device_id: str, interface_name: str | None = None,
-                         ip_address: str = '', status: str = '', rule: dict | None = None):
+                         ip_address: str = '', status: str = '', rule: dict | None = None,
+                         notify: bool = True):
         currently_open = open_alerts.get(dedupe_key)
         if is_active and not currently_open:
             maintenance_window = alert_maintenance_service.find_active_window_for_alert({
@@ -726,15 +923,16 @@ async def status_monitor():
             if maintenance_window:
                 return
             object_name = interface_name if interface_name else dedupe_key
-            maybe_notify_webhook(
-                dedupe_key, severity, title, message,
-                created_at=created_at,
-                ip_address=ip_address,
-                object_name=object_name,
-                status=status or 'active',
-                last_occurrence=created_at,
-                rule=rule,
-            )
+            if notify and _protocol_transition_notify_allowed(dedupe_key):
+                maybe_notify_webhook(
+                    dedupe_key, severity, title, message,
+                    created_at=created_at,
+                    ip_address=ip_address,
+                    object_name=object_name,
+                    status=status or 'active',
+                    last_occurrence=created_at,
+                    rule=rule,
+                )
         elif (not is_active) and currently_open:
             alert_row = _db_quick(
                 "SELECT workflow_status FROM alert_events WHERE dedupe_key = ? AND resolved_at IS NULL ORDER BY created_at DESC LIMIT 1",
@@ -762,18 +960,69 @@ async def status_monitor():
                 (dedupe_key,), fetch=True,
             )
             _alert_count = _count_row['cnt'] if _count_row else None
-            maybe_notify_webhook(
-                dedupe_key, severity, title, message,
-                created_at=currently_open,
-                ip_address=ip_address,
-                object_name=object_name,
-                status='resolved',
-                last_occurrence=now_ts,
-                duration_seconds=_duration_seconds,
-                impact_window=_impact_window,
-                alert_count=_alert_count,
-                rule=rule,
-            )
+            if notify and _protocol_transition_notify_allowed(dedupe_key):
+                maybe_notify_webhook(
+                    dedupe_key, severity, title, message,
+                    created_at=currently_open,
+                    ip_address=ip_address,
+                    object_name=object_name,
+                    status='resolved',
+                    last_occurrence=now_ts,
+                    duration_seconds=_duration_seconds,
+                    impact_window=_impact_window,
+                    alert_count=_alert_count,
+                    rule=rule,
+                )
+
+    def _sync_protocol_aggregate_alert(metric_type: str, title: str, device_row: dict, ip_address: str, down_peers: list[str]):
+        dedupe_key = f"{metric_type}:summary:{device_row['id']}"
+        dev_label = device_row.get('hostname') or ip_address or device_row['id']
+        sample = ', '.join(down_peers[:protocol_aggregate_sample_size])
+        if len(down_peers) > protocol_aggregate_sample_size:
+            sample = f"{sample} 等 {len(down_peers)} 个对象"
+        message = (
+            f"{dev_label} 当前 {_protocol_metric_label(metric_type)}异常 {len(down_peers)} 个：{sample}"
+            if down_peers else
+            f"{dev_label} {_protocol_metric_label(metric_type)}聚合告警已恢复"
+        )
+        rule = resolve_alert_rule(metric_type, device_row=device_row, ip_address=ip_address, interface_name=dev_label)
+        set_alert_state(
+            dedupe_key,
+            len(down_peers) >= protocol_aggregate_threshold,
+            (rule or {}).get('severity', 'critical'),
+            f"{title} Summary",
+            message,
+            device_row['id'],
+            dev_label,
+            ip_address=ip_address,
+            status='active' if len(down_peers) >= protocol_aggregate_threshold else 'resolved',
+            rule=rule,
+        )
+
+    def _sync_protocol_flap_alert(metric_type: str, title: str, device_row: dict, ip_address: str, flapping_peers: list[str]):
+        dedupe_key = f"{metric_type}:flap:{device_row['id']}"
+        dev_label = device_row.get('hostname') or ip_address or device_row['id']
+        sample = ', '.join(flapping_peers[:protocol_aggregate_sample_size])
+        if len(flapping_peers) > protocol_aggregate_sample_size:
+            sample = f"{sample} 等 {len(flapping_peers)} 个对象"
+        message = (
+            f"{dev_label} 存在 {_protocol_metric_label(metric_type)}抖动对象 {len(flapping_peers)} 个，通知已进入抑制窗口：{sample}"
+            if flapping_peers else
+            f"{dev_label} {_protocol_metric_label(metric_type)}抖动抑制已解除"
+        )
+        rule = resolve_alert_rule(metric_type, device_row=device_row, ip_address=ip_address, interface_name=dev_label)
+        set_alert_state(
+            dedupe_key,
+            bool(flapping_peers),
+            (rule or {}).get('severity', 'major'),
+            f"{title} Flapping",
+            message,
+            device_row['id'],
+            dev_label,
+            ip_address=ip_address,
+            status='active' if flapping_peers else 'resolved',
+            rule=rule,
+        )
 
     def resolved_alert_severity(rule: dict | None, fallback: str) -> str:
         configured = str((rule or {}).get('severity') or '').strip().lower()
@@ -782,11 +1031,15 @@ async def status_monitor():
         normalized_fallback = str(fallback or '').strip().lower()
         return normalized_fallback or 'major'
 
-    async def process_device(device, collect_intf: bool, collect_info: bool):
+    async def process_device(device, cycle_tick: int):
         async with sem:
             device = _as_dict(device)
             ip = device['ip_address']
             dev_id = device['id']
+            poll_profile = _device_poll_profile(device)
+            collect_intf = _should_collect(cycle_tick, poll_profile['interface'])
+            collect_info = _should_collect(cycle_tick, poll_profile['info'])
+            collect_protocol = _should_collect(cycle_tick, poll_profile['protocol'])
 
             def mark_offline_and_clear_cache():
                 # Keep UI consistent with real reachability: when a device is offline,
@@ -811,6 +1064,7 @@ async def status_monitor():
 
                 if device['status'] != new_status:
                     if new_status == 'offline':
+                        _set_protocol_alerts_for_device_offline(device, ip)
                         mark_offline_and_clear_cache()
                         set_alert_state(
                             f"dev_offline:{dev_id}", True, 'critical', 'Device Offline',
@@ -828,6 +1082,7 @@ async def status_monitor():
             except Exception:
                 new_status = 'offline'
                 if device.get('status') != 'offline':
+                    _set_protocol_alerts_for_device_offline(device, ip)
                     set_alert_state(
                         f"dev_offline:{dev_id}", True, 'critical', 'Device Offline',
                         f"{dev_label} ({ip}) 无法连接，Ping 超时",
@@ -995,6 +1250,7 @@ async def status_monitor():
                 except Exception as info_err:
                     logger.debug(f"[SNMP] {ip} device info collection failed: {info_err}")
 
+            if collect_protocol:
                 await _collect_protocol_neighbor_alerts(device, ip)
 
             # 4. Interface data collection
@@ -1008,10 +1264,12 @@ async def status_monitor():
                         topology_ports = load_topology_ports(dev_id)
                         # Calculate real-time throughput and bandwidth utilization from previous snapshot.
                         prev = prev_intf_octets.get(dev_id, {})
+                        persisted_statuses = load_persisted_interface_statuses(dev_id) if not prev else {}
                         cur_snapshot = {}
                         raw_rows = []
                         for iface in intf_data:
                             iname = iface['name']
+                            effective_prev_status = str(prev.get(iname, {}).get('status', '') or persisted_statuses.get(iname, '')).lower()
                             cur_snapshot[iname] = {
                                 'in_octets': iface['in_octets'],
                                 'out_octets': iface['out_octets'],
@@ -1027,9 +1285,8 @@ async def status_monitor():
 
                             # ── Flap detection: track UP↔DOWN transitions ──
                             flap_key = f"{dev_id}:{iname}"
-                            prev_status = str(prev.get(iname, {}).get('status', '')).lower()
                             curr_status = str(iface.get('status', '')).lower()
-                            if prev_status and prev_status != curr_status and prev_status in ('up', 'down') and curr_status in ('up', 'down'):
+                            if effective_prev_status and effective_prev_status != curr_status and effective_prev_status in ('up', 'down') and curr_status in ('up', 'down'):
                                 hist = intf_flap_history.setdefault(flap_key, [])
                                 hist.append(now_ts)
                             # Prune old entries outside the window
@@ -1123,12 +1380,11 @@ async def status_monitor():
                                 f"{iname} 状态恢复：DOWN → UP"
                             )
                             down_rule = resolve_alert_rule(down_metric, device_row=device, ip_address=ip, interface_name=iname)
-                            prev_status = str(prev.get(iname, {}).get('status', '')).lower()
                             curr_status = str(iface.get('status', '')).lower()
                             if down_rule:
                                 down_key = f"{'interconnect_down' if is_topology_port else 'if_down'}:{dev_id}:{iname}"
                                 alternate_key = f"{'if_down' if is_topology_port else 'interconnect_down'}:{dev_id}:{iname}"
-                                if prev_status == 'up' and curr_status == 'down':
+                                if effective_prev_status == 'up' and curr_status == 'down':
                                     set_alert_state(
                                         alternate_key, False, resolved_alert_severity(None, 'warning'), 'Interface Down',
                                         f"{iname} 状态恢复：DOWN → UP",
@@ -1141,7 +1397,7 @@ async def status_monitor():
                                         dev_id, iname,
                                         ip_address=ip, status='active', rule=down_rule,
                                     )
-                                elif prev_status == 'down' and curr_status == 'up':
+                                elif effective_prev_status == 'down' and curr_status == 'up':
                                     set_alert_state(
                                         down_key, False, resolved_alert_severity(down_rule, 'major' if is_topology_port else 'warning'), down_title,
                                         recover_message,
@@ -1282,16 +1538,13 @@ async def status_monitor():
                 # Read device list with a short-lived connection
                 devices = _db_quick('SELECT * FROM devices', fetchall=True)
 
-                collect_intf = intf_counter == 0
-                collect_info = info_counter == 0
                 for i in range(0, len(devices), monitor_batch_size):
                     batch = devices[i:i + monitor_batch_size]
-                    await asyncio.gather(*(process_device(device, collect_intf, collect_info) for device in batch))
+                    await asyncio.gather(*(process_device(device, monitor_cycle) for device in batch))
                     # Let API requests run between monitor chunks under high device counts.
                     await asyncio.sleep(0)
 
-                intf_counter = (intf_counter + 1) % intf_every_cycles
-                info_counter = (info_counter + 1) % info_every_cycles
+                monitor_cycle += 1
                 maintenance_counter += 1
 
                 # Every ~60s: aggregate 1m telemetry and enforce retention windows.

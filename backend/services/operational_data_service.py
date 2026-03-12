@@ -53,7 +53,7 @@ COMMAND_CATALOG: dict[str, dict[str, list[str]]] = {
         'routing_table': ['show ip route'],
         'bgp': ['show ip bgp summary'],
         'ospf': ['show ip ospf neighbor'],
-        'bfd': ['show bfd neighbors details'],
+        'bfd': ['show bfd neighbors', 'show bfd neighbors details'],
     },
     'cisco_nxos': {
         'interfaces': ['show ip interface brief'],
@@ -113,7 +113,7 @@ COMMAND_CATALOG: dict[str, dict[str, list[str]]] = {
         'routing_table': ['show ip route'],
         'bgp': ['show ip bgp summary'],
         'ospf': ['show ip ospf neighbor'],
-        'bfd': ['show bfd neighbors details'],
+        'bfd': ['show bfd neighbors', 'show bfd neighbors details'],
     },
 }
 
@@ -229,11 +229,6 @@ def _parse_command_output(platform: str, category: str, command: str, output: st
         return records
 
     normalized_command = _normalize_command_for_template_match(command)
-    ntc_platform = _resolve_ntc_platform(platform)
-    template_first_bfd_platforms = {'cisco_ios', 'cisco_nxos'}
-    if category == 'bfd' and ntc_platform in template_first_bfd_platforms:
-        return []
-
     if category == 'bfd' or ' bfd ' in f' {normalized_command} ':
         return _parse_bfd_raw(output)
 

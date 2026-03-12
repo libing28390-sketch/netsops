@@ -530,6 +530,18 @@ def init_db():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_alert_events_dedupe_key ON alert_events(dedupe_key)')
 
         cursor.execute('''
+        CREATE TABLE IF NOT EXISTS protocol_peer_state (
+            metric_type TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            peer TEXT NOT NULL,
+            object_name TEXT,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (metric_type, device_id, peer)
+        )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_protocol_peer_state_device_metric ON protocol_peer_state(device_id, metric_type)')
+
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS alert_maintenance_windows (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
