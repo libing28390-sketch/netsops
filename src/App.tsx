@@ -2,7 +2,7 @@
 import { motion } from 'motion/react';
 import { Routes, Route, useLocation, useNavigate, Navigate } from 'react-router-dom';
 import * as htmlToImage from 'html-to-image';
-import { Plus, Server, CheckCircle, CheckCircle2, XCircle, RotateCcw, Play, Activity, LayoutDashboard, Database, Zap, ShieldCheck, History, LogOut, Search, Bell, Settings, Download, Upload, FileText, ChevronLeft, ChevronRight, Filter, Globe, TrendingUp, PieChart as PieChartIcon, Clock, AlertTriangle, X, Edit2, AlertCircle, FolderOpen, Eye, EyeOff, Sun, Moon, User, ChevronDown, Copy, Menu, PanelLeftClose, Monitor, ExternalLink, Trash2, Wrench, Maximize2, Minimize2 } from 'lucide-react';
+import { Plus, Server, CheckCircle, CheckCircle2, XCircle, RotateCcw, Play, Activity, LayoutDashboard, Database, Zap, ShieldCheck, History, LogOut, Search, Bell, Settings, Download, Upload, FileText, ChevronLeft, ChevronRight, Filter, Globe, TrendingUp, PieChart as PieChartIcon, Clock, AlertTriangle, X, Edit2, AlertCircle, FolderOpen, Eye, EyeOff, Sun, Moon, User, ChevronDown, Copy, Menu, PanelLeftClose, Monitor, ExternalLink, Trash2, Wrench, Maximize2, Minimize2, BarChart3, GitCompareArrows, Cpu, Network } from 'lucide-react';
 import { useI18n } from './i18n.tsx';
 import * as XLSX from 'xlsx';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from 'recharts';
@@ -22,6 +22,10 @@ const InventoryDevicesTab = lazy(() => import('./pages/InventoryDevicesTab'));
 const AlertDeskTab = lazy(() => import('./pages/AlertDeskTab'));
 const AlertRulesTab = lazy(() => import('./pages/AlertRulesTab'));
 const AlertMaintenanceTab = lazy(() => import('./pages/AlertMaintenanceTab'));
+const ReportsTab = lazy(() => import('./pages/ReportsTab'));
+const ConfigDriftTab = lazy(() => import('./pages/ConfigDriftTab'));
+const CapacityPlanningTab = lazy(() => import('./pages/CapacityPlanningTab'));
+const IPVlanTab = lazy(() => import('./pages/IPVlanTab'));
 
 // Types imported from ./types — re-export User as UserType to avoid clash with lucide-react User icon
 
@@ -662,6 +666,7 @@ const App: React.FC = () => {
   const [automationGroupOpen, setAutomationGroupOpen] = useState(() => location.pathname.startsWith('/automation'));
   const [inventoryGroupOpen, setInventoryGroupOpen] = useState(() => location.pathname.startsWith('/inventory'));
   const [alertGroupOpen, setAlertGroupOpen] = useState(() => ['alerts', 'alert-rules', 'maintenance'].includes(location.pathname.split('/')[1] || 'dashboard'));
+  const [monitoringGroupOpen, setMonitoringGroupOpen] = useState(() => location.pathname === '/monitoring' || location.pathname === '/inventory/interfaces');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.innerWidth < 768);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
   // Playbook state
@@ -810,6 +815,7 @@ const App: React.FC = () => {
         diff: t('diffCompare'),
         search: t('configSearchTab'),
         schedule: t('scheduledBackup'),
+        drift: language === 'zh' ? '配置漂移' : 'Config Drift',
       };
       return map[configPage] || configPage;
     }
@@ -825,7 +831,10 @@ const App: React.FC = () => {
     if (activeTab === 'alert-rules') return language === 'zh' ? '告警规则' : 'Alert Rules';
     if (activeTab === 'maintenance') return language === 'zh' ? '维护期' : 'Maintenance';
     if (activeTab === 'history') return t('auditLogs');
-    if (activeTab === 'configuration') return t('configuration');
+    if (activeTab === 'configuration') return language === 'zh' ? '平台设置' : 'Platform Settings';
+    if (activeTab === 'reports') return language === 'zh' ? '运维报表' : 'Reports';
+    if (activeTab === 'capacity') return language === 'zh' ? '容量规划' : 'Capacity Planning';
+    if (activeTab === 'ipam') return language === 'zh' ? 'IP/VLAN管理' : 'IP/VLAN Management';
     if (activeTab === 'compliance') return t('compliance');
     if (activeTab === 'monitoring') return language === 'zh' ? '监控中心' : 'Monitoring Center';
     if (activeTab === 'health') return language === 'zh' ? '健康检测' : 'Health Detection';
@@ -884,6 +893,12 @@ const App: React.FC = () => {
       setAlertGroupOpen(true);
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'monitoring' || location.pathname === '/inventory/interfaces') {
+      setMonitoringGroupOpen(true);
+    }
+  }, [activeTab, location.pathname]);
 
   // Load config snapshots from backend when entering Config Center tab
   const loadConfigSnapshots = async (
@@ -4972,36 +4987,86 @@ const App: React.FC = () => {
         </div>
 
         <nav className="sidebar-nav-scroll flex flex-col flex-1 p-4 space-y-0.5 mt-2 overflow-y-auto">
-          {[
-            { id: 'dashboard', icon: LayoutDashboard, label: t('dashboard') },
-            { id: 'monitoring', icon: TrendingUp, label: language === 'zh' ? '监控中心' : 'Monitoring' },
-            { id: 'topology', icon: Globe, label: 'Topology' },
-            { id: 'health', icon: Activity, label: language === 'zh' ? '健康检测' : 'Health Detection' },
-          ].map(item => (
-            <button
-              key={item.id}
-              onClick={() => setActiveTab(item.id)}
-              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                activeTab === item.id
-                  ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
-                  : 'text-white/60 hover:bg-white/5 hover:text-white'
-              } ${item.id === 'dashboard' ? 'order-10' : item.id === 'monitoring' ? 'order-20' : item.id === 'topology' ? 'order-40' : 'order-50'}`}
-            >
-              <item.icon size={17} className="shrink-0" />
-              <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{item.label}</span>
-              {item.id === 'monitoring' && (
-                <span className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em] ${hostResourceTone}`} title={hostResourceSummary}>
-                  {hostResources
-                    ? (language === 'zh'
-                      ? `主机 ${formatCompactResourcePercent(hostResources.cpu_percent)}/${formatCompactResourcePercent(hostResources.memory_percent)}`
-                      : `H ${formatCompactResourcePercent(hostResources.cpu_percent)}/${formatCompactResourcePercent(hostResources.memory_percent)}`)
-                    : (language === 'zh' ? '主机 --/--' : 'H --/--')}
-                </span>
-              )}
-            </button>
-          ))}
+          {/* ── Section: 感知层 / Awareness ── */}
+          <div className="order-[5] px-3 pt-1 pb-2">
+            <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-white/25">{language === 'zh' ? '感知层' : 'AWARENESS'}</p>
+          </div>
 
-          <div className="pt-2 order-30">
+          <button
+            onClick={() => setActiveTab('dashboard')}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all order-10 ${
+              activeTab === 'dashboard'
+                ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
+                : 'text-white/60 hover:bg-white/5 hover:text-white'
+            }`}
+          >
+            <LayoutDashboard size={17} className="shrink-0" />
+            <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{t('dashboard')}</span>
+          </button>
+
+          {/* ── Monitoring collapsible group ── */}
+          <div className="order-20">
+            <button
+              onClick={() => {
+                const next = !monitoringGroupOpen;
+                setMonitoringGroupOpen(next);
+                if (next && activeTab !== 'monitoring' && location.pathname !== '/inventory/interfaces') {
+                  setActiveTab('monitoring');
+                }
+              }}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
+                activeTab === 'monitoring' || location.pathname === '/inventory/interfaces'
+                  ? 'text-white'
+                  : 'text-white/60 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <TrendingUp size={17} className={activeTab === 'monitoring' || location.pathname === '/inventory/interfaces' ? 'text-[#00bceb]' : ''} />
+              <span className="flex-1 text-left">{language === 'zh' ? '监控中心' : 'Monitoring'}</span>
+              <span className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em] mr-1 ${hostResourceTone}`} title={hostResourceSummary}>
+                {hostResources
+                  ? (language === 'zh'
+                    ? `${formatCompactResourcePercent(hostResources.cpu_percent)}/${formatCompactResourcePercent(hostResources.memory_percent)}`
+                    : `${formatCompactResourcePercent(hostResources.cpu_percent)}/${formatCompactResourcePercent(hostResources.memory_percent)}`)
+                  : '--/--'}
+              </span>
+              <ChevronRight
+                size={14}
+                className={`text-white/30 transition-transform duration-200 ${
+                  monitoringGroupOpen ? 'rotate-90' : ''
+                }`}
+              />
+            </button>
+            <div className={`overflow-hidden transition-all duration-200 ease-in-out ${
+              monitoringGroupOpen ? 'max-h-48 opacity-100' : 'max-h-0 opacity-0'
+            }`}>
+              <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5">
+                {([
+                  { id: 'monitoring', path: null, icon: Monitor, label: language === 'zh' ? '平台资源' : 'Host Resources' },
+                  { id: 'inventory-interfaces', path: '/inventory/interfaces', icon: Activity, label: t('interfaceMonitoring') },
+                ] as const).map(item => {
+                  const isActive = item.path ? location.pathname === item.path : activeTab === 'monitoring';
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => item.path ? navTo(item.path) : setActiveTab('monitoring')}
+                      className={`w-full flex items-center gap-2.5 pl-5 pr-3 py-2 rounded-lg text-sm transition-all ${
+                        isActive
+                          ? 'bg-[#00bceb]/15 text-[#00bceb] font-semibold'
+                          : 'text-white/40 hover:bg-white/5 hover:text-white/80 font-medium'
+                      }`}
+                    >
+                      {isActive && <span className="w-1 h-1 rounded-full bg-[#00bceb] flex-shrink-0" />}
+                      {!isActive && <span className="w-1 h-1 flex-shrink-0" />}
+                      <item.icon size={14} />
+                      <span className="text-[13px]">{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div className="order-30">
             <button
               onClick={() => {
                 const next = !alertGroupOpen;
@@ -5056,7 +5121,42 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* ── Inventory collapsible group ── */}
+          {[
+            { id: 'topology', icon: Globe, label: 'Topology' },
+            { id: 'health', icon: Activity, label: language === 'zh' ? '健康检测' : 'Health Detection' },
+          ].map(item => (
+            <button
+              key={item.id}
+              onClick={() => setActiveTab(item.id)}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                activeTab === item.id
+                  ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
+                  : 'text-white/60 hover:bg-white/5 hover:text-white'
+              } ${item.id === 'topology' ? 'order-[45]' : 'order-[50]'}`}
+            >
+              <item.icon size={17} className="shrink-0" />
+              <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{item.label}</span>
+            </button>
+          ))}
+
+          {/* ── Section: 资产层 / Assets ── */}
+          <div className="order-[55] px-3 pt-4 pb-2">
+            <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-white/25">{language === 'zh' ? '资产层' : 'ASSETS'}</p>
+          </div>
+
+          <button
+            onClick={() => setActiveTab('ipam')}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all order-[57] ${
+              activeTab === 'ipam'
+                ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
+                : 'text-white/60 hover:bg-white/5 hover:text-white'
+            }`}
+          >
+            <Network size={17} className="shrink-0" />
+            <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? 'IP/VLAN管理' : 'IP/VLAN Mgmt'}</span>
+          </button>
+
+          {/* ── Inventory (devices only) ── */}
           <div className="order-60">
             <button
               onClick={() => {
@@ -5085,7 +5185,6 @@ const App: React.FC = () => {
               <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5">
                 {([
                   { path: 'inventory/devices',    icon: Server,   label: t('deviceList') },
-                  { path: 'inventory/interfaces', icon: Activity, label: t('interfaceMonitoring') },
                 ] as const).map(item => {
                   const isActive = location.pathname === `/${item.path}`;
                   return (
@@ -5109,8 +5208,13 @@ const App: React.FC = () => {
             </div>
           </div>
 
+          {/* ── Section: 操作层 / Operations ── */}
+          <div className="order-[75] px-3 pt-4 pb-2">
+            <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-white/25">{language === 'zh' ? '操作层' : 'OPERATIONS'}</p>
+          </div>
+
           {/* ── Automation collapsible group ── */}
-          <div className="pt-2 order-80">
+          <div className="order-80">
             <button
               onClick={() => {
                 const next = !automationGroupOpen;
@@ -5164,7 +5268,7 @@ const App: React.FC = () => {
           </div>
 
           {/* ── Config Center collapsible group ── */}
-          <div className="pt-2 order-70">
+          <div className="order-70">
             <button
               onClick={() => {
                 const next = !configGroupOpen;
@@ -5189,7 +5293,7 @@ const App: React.FC = () => {
 
             {/* Sub-items — animated expand/collapse */}
             <div className={`overflow-hidden transition-all duration-200 ease-in-out ${
-              configGroupOpen ? 'max-h-48 opacity-100' : 'max-h-0 opacity-0'
+              configGroupOpen ? 'max-h-64 opacity-100' : 'max-h-0 opacity-0'
             }`}>
               <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5">
                 {([
@@ -5197,6 +5301,7 @@ const App: React.FC = () => {
                   { path: 'config/diff',     icon: FileText,  label: t('diffCompare') },
                   { path: 'config/search',   icon: Search,    label: t('configSearchTab') },
                   { path: 'config/schedule', icon: Clock,     label: t('scheduledBackup') },
+                  { path: 'config/drift',    icon: GitCompareArrows, label: language === 'zh' ? '配置漂移' : 'Config Drift' },
                 ] as const).map(item => {
                   const isActive = location.pathname === `/${item.path}`;
                   return (
@@ -5220,11 +5325,40 @@ const App: React.FC = () => {
             </div>
           </div>
 
+          <button
+            onClick={() => setActiveTab('compliance')}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all order-[88] ${
+              activeTab === 'compliance'
+                ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
+                : 'text-white/60 hover:bg-white/5 hover:text-white'
+            }`}
+          >
+            <ShieldCheck size={17} className="shrink-0" />
+            <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{t('compliance')}</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('capacity')}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all order-[90] ${
+              activeTab === 'capacity'
+                ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
+                : 'text-white/60 hover:bg-white/5 hover:text-white'
+            }`}
+          >
+            <Cpu size={17} className="shrink-0" />
+            <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? '容量规划' : 'Capacity'}</span>
+          </button>
+
+          {/* ── Section: 管理层 / Management ── */}
+          <div className="order-[95] px-3 pt-4 pb-2">
+            <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-white/25">{language === 'zh' ? '管理层' : 'MANAGEMENT'}</p>
+          </div>
+
           {[
-            { id: 'configuration', icon: Settings,    label: t('configuration') },
-            { id: 'compliance',    icon: ShieldCheck,  label: t('compliance') },
             { id: 'history',       icon: History,      label: t('auditLogs') },
-            { id: 'users',         icon: Globe,        label: t('userManagement') },
+            { id: 'reports',       icon: BarChart3,    label: language === 'zh' ? '报表中心' : 'Reports' },
+            { id: 'configuration', icon: Settings,    label: t('configuration') },
+            { id: 'users',         icon: User,        label: t('userManagement') },
           ].map(item => (
             <button
               key={item.id}
@@ -5233,10 +5367,10 @@ const App: React.FC = () => {
                 activeTab === item.id
                   ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
                   : 'text-white/60 hover:bg-white/5 hover:text-white'
-              } ${item.id === 'compliance' ? 'order-90' : item.id === 'history' ? 'order-100' : item.id === 'configuration' ? 'order-110' : 'order-120'}`}
+              } ${item.id === 'history' ? 'order-[100]' : item.id === 'reports' ? 'order-[105]' : item.id === 'configuration' ? 'order-[110]' : 'order-[120]'}`}
             >
-              <item.icon size={17} />
-              {item.label}
+              <item.icon size={17} className="shrink-0" />
+              <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{item.label}</span>
             </button>
           ))}
         </nav>
@@ -10164,6 +10298,37 @@ const App: React.FC = () => {
                 language={language}
                 t={t}
               />
+            </Suspense>
+          )}
+
+          {activeTab === 'reports' && (
+            <Suspense fallback={lazyPanelFallback}>
+              <ReportsTab
+                devices={devices}
+                jobs={jobs}
+                complianceOverview={complianceOverview}
+                platformData={platformData}
+                language={language}
+                t={t}
+              />
+            </Suspense>
+          )}
+
+          {activeTab === 'config' && configPage === 'drift' && (
+            <Suspense fallback={lazyPanelFallback}>
+              <ConfigDriftTab language={language} t={t} />
+            </Suspense>
+          )}
+
+          {activeTab === 'capacity' && (
+            <Suspense fallback={lazyPanelFallback}>
+              <CapacityPlanningTab language={language} t={t} />
+            </Suspense>
+          )}
+
+          {activeTab === 'ipam' && (
+            <Suspense fallback={lazyPanelFallback}>
+              <IPVlanTab language={language} t={t} />
             </Suspense>
           )}
         </main>

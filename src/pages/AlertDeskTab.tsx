@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { CheckCircle2, Eye, RefreshCw, Search, Wrench, X } from 'lucide-react';
+import { CheckCircle2, Download, Eye, RefreshCw, Search, Wrench, X } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import type { AlertDetailResponse, AlertListResponse, AlertRecord } from '../types';
 import Pagination from '../components/Pagination';
 import { alertWorkflowBadgeClass, severityBadgeClass } from '../components/shared';
@@ -170,6 +171,29 @@ const AlertDeskTab: React.FC<AlertDeskTabProps> = ({ language, currentUsername, 
 
   const selectedItem = selectedDetail?.item || null;
 
+  const handleExportAlerts = () => {
+    if (rows.length === 0) return;
+    const exportData = rows.map(r => ({
+      Title: r.title,
+      Severity: r.severity,
+      Status: r.workflow_status,
+      Hostname: r.hostname || '',
+      IP: r.ip_address || '',
+      Interface: r.interface_name || '',
+      Site: r.site || '',
+      Assignee: r.assignee || '',
+      'Ack By': r.ack_by || '',
+      Occurrences: r.occurrence_count ?? 1,
+      'Created At': r.created_at ? new Date(r.created_at).toLocaleString() : '',
+      'Resolved At': r.resolved_at ? new Date(r.resolved_at).toLocaleString() : '',
+      Message: r.message,
+    }));
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Alerts');
+    XLSX.writeFile(wb, 'alerts_export.xlsx');
+  };
+
   return (
     <div className="space-y-4">
       <div className={alertPanelClass}>
@@ -185,10 +209,16 @@ const AlertDeskTab: React.FC<AlertDeskTabProps> = ({ language, currentUsername, 
               {language === 'zh' ? '只保留筛选、列表、分页和必要操作。' : 'A simple page with filters, list, pagination, and essential actions.'}
             </p>
           </div>
-          <button onClick={() => void loadAlerts()} className={alertSecondaryButtonClass}>
-            <RefreshCw size={14} />
-            {language === 'zh' ? '刷新列表' : 'Refresh'}
-          </button>
+          <div className="flex gap-2">
+            <button onClick={handleExportAlerts} className={alertSecondaryButtonClass} title={language === 'zh' ? '导出告警' : 'Export Alerts'}>
+              <Download size={14} />
+              {language === 'zh' ? '导出' : 'Export'}
+            </button>
+            <button onClick={() => void loadAlerts()} className={alertSecondaryButtonClass}>
+              <RefreshCw size={14} />
+              {language === 'zh' ? '刷新列表' : 'Refresh'}
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-col gap-3 px-5 py-4 lg:flex-row lg:items-center">

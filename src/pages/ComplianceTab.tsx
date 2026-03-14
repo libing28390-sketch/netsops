@@ -1,5 +1,6 @@
 import React from 'react';
-import { RotateCcw, ShieldCheck } from 'lucide-react';
+import { Download, RotateCcw, ShieldCheck } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import type { ComplianceFinding, ComplianceOverview } from '../types';
 import { sectionHeaderRowClass, sectionToolbarClass, primaryActionBtnClass, severityBadgeClass, complianceStatusBadgeClass } from '../components/shared';
 import Pagination from '../components/Pagination';
@@ -37,6 +38,29 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({
   runComplianceAudit, openComplianceFindingDetail, updateComplianceFinding,
   language, t,
 }) => {
+  const handleExportCompliance = () => {
+    if (complianceFindings.length === 0) return;
+    const exportData = complianceFindings.map(f => ({
+      Title: f.title,
+      'Rule ID': f.rule_id,
+      Hostname: f.hostname || '',
+      IP: f.ip_address || '',
+      Severity: f.severity,
+      Category: f.category,
+      Status: f.status,
+      Description: f.description,
+      Remediation: f.remediation || '',
+      Owner: f.owner || '',
+      'First Seen': f.first_seen ? new Date(f.first_seen).toLocaleString() : '',
+      'Last Seen': f.last_seen ? new Date(f.last_seen).toLocaleString() : '',
+      'Resolved At': f.resolved_at ? new Date(f.resolved_at).toLocaleString() : '',
+    }));
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Compliance');
+    XLSX.writeFile(wb, 'compliance_findings_export.xlsx');
+  };
+
   return (
     <div className="space-y-8">
       <div className={sectionHeaderRowClass}>
@@ -50,6 +74,14 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({
               {language === 'zh' ? '最近审计' : 'Last audit'}: {new Date((complianceOverview as any).recent_runs[0].started_at).toLocaleString()}
             </span>
           )}
+          <button
+            onClick={handleExportCompliance}
+            className="inline-flex items-center gap-2 rounded-xl border border-black/10 bg-white px-4 py-2.5 text-sm font-medium text-black/60 hover:text-[#00bceb] hover:border-[#00bceb]/30 transition-all"
+            title={language === 'zh' ? '导出合规报告' : 'Export Compliance'}
+          >
+            <Download size={14} />
+            {language === 'zh' ? '导出' : 'Export'}
+          </button>
           <button
             onClick={runComplianceAudit}
             disabled={complianceRunLoading}

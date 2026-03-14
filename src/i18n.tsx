@@ -13,7 +13,7 @@ export const translations: Translations = {
   dashboard: { en: 'Dashboard', zh: '仪表盘' },
   inventory: { en: 'Inventory', zh: '资产管理' },
   automation: { en: 'Automation', zh: '自动化中心' },
-  configuration: { en: 'Configuration', zh: '配置管理' },
+  configuration: { en: 'Platform Settings', zh: '平台设置' },
   compliance: { en: 'Compliance', zh: '合规审计' },
   auditLogs: { en: 'Audit Logs', zh: '审计日志' },
   settings: { en: 'Settings', zh: '设置' },

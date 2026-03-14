@@ -968,6 +968,87 @@ def init_db():
             if 'out_pkts_sum' not in rollup_columns:
                 cursor.execute('ALTER TABLE interface_telemetry_1m ADD COLUMN out_pkts_sum INTEGER DEFAULT 0')
 
+        # ── Config drift detection results ──
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS config_drift_results (
+            id TEXT PRIMARY KEY,
+            device_id TEXT NOT NULL,
+            hostname TEXT,
+            baseline_snapshot_id TEXT,
+            current_snapshot_id TEXT,
+            drift_status TEXT NOT NULL DEFAULT 'unknown',
+            added_lines INTEGER DEFAULT 0,
+            removed_lines INTEGER DEFAULT 0,
+            changed_lines INTEGER DEFAULT 0,
+            diff_summary TEXT DEFAULT '',
+            checked_at TEXT NOT NULL,
+            FOREIGN KEY (device_id) REFERENCES devices(id)
+        )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_config_drift_device ON config_drift_results(device_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_config_drift_checked ON config_drift_results(checked_at)')
+
+        # ── IP/VLAN resource management ──
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ip_subnets (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            network TEXT NOT NULL,
+            prefix_len INTEGER NOT NULL,
+            vlan_id INTEGER,
+            vlan_name TEXT DEFAULT '',
+            gateway TEXT DEFAULT '',
+            description TEXT DEFAULT '',
+            site TEXT DEFAULT '',
+            status TEXT DEFAULT 'active',
+            total_ips INTEGER DEFAULT 0,
+            used_ips INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        ''')
+        cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_ip_subnets_network ON ip_subnets(network, prefix_len)')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ip_addresses (
+            id TEXT PRIMARY KEY,
+            subnet_id TEXT NOT NULL,
+            address TEXT NOT NULL,
+            hostname TEXT DEFAULT '',
+            device_id TEXT DEFAULT '',
+            interface_name TEXT DEFAULT '',
+            mac_address TEXT DEFAULT '',
+            status TEXT DEFAULT 'active',
+            description TEXT DEFAULT '',
+            last_seen TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (subnet_id) REFERENCES ip_subnets(id)
+        )
+        ''')
+        cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_ip_addr_unique ON ip_addresses(subnet_id, address)')
+
+        # ── Capacity planning snapshots (daily link/device utilization) ──
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS capacity_snapshots (
+            id TEXT PRIMARY KEY,
+            device_id TEXT NOT NULL,
+            hostname TEXT DEFAULT '',
+            interface_name TEXT DEFAULT '',
+            snapshot_date TEXT NOT NULL,
+            avg_in_util REAL DEFAULT 0,
+            avg_out_util REAL DEFAULT 0,
+            peak_in_util REAL DEFAULT 0,
+            peak_out_util REAL DEFAULT 0,
+            bandwidth_mbps REAL DEFAULT 0,
+            cpu_avg REAL DEFAULT 0,
+            memory_avg REAL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (device_id) REFERENCES devices(id)
+        )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_capacity_snap_device_date ON capacity_snapshots(device_id, snapshot_date)')
+
         conn.commit()
     finally:
         conn.close()

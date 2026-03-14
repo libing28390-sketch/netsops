@@ -49,8 +49,15 @@ const DashboardTab: React.FC<DashboardTabProps> = ({
 
   const dashAgoSec = Math.round((Date.now() - dashLastRefresh.getTime()) / 1000);
 
+  // Determine accent border color for each stat card (P2: left color bar for abnormal states)
+  const getStatAccent = (stat: { tab: string; color: string }) => {
+    if (stat.color.includes('text-red')) return 'border-l-[3px] border-l-red-500';
+    if (stat.color.includes('text-orange')) return 'border-l-[3px] border-l-orange-400';
+    return '';
+  };
+
   return (
-    <div className="space-y-8 overflow-auto h-full">
+    <div className="space-y-5 overflow-auto h-full">
       <div className={sectionHeaderRowClass}>
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-[#00172D]">{t('networkOverview')}</h2>
@@ -96,10 +103,10 @@ const DashboardTab: React.FC<DashboardTabProps> = ({
           { label: t('failedTasks'), value: failedCount24h, icon: AlertCircle, color: failedCount24h > 0 ? 'text-red-600' : 'text-black/40', bg: failedCount24h > 0 ? 'bg-red-50' : 'bg-black/5', tab: 'history' },
           { label: language === 'zh' ? '平台宿主机' : 'Platform Host', value: hostResources ? `${Math.round(Math.max(hostResources.cpu_percent || 0, hostResources.memory_percent || 0, hostResources.disk_percent || 0))}%` : '--', icon: MonitorSmartphone, color: hostResources?.status === 'critical' ? 'text-red-600' : hostResources?.status === 'degraded' ? 'text-orange-600' : 'text-[#005073]', bg: hostResources?.status === 'critical' ? 'bg-red-50' : hostResources?.status === 'degraded' ? 'bg-orange-50' : 'bg-[#005073]/5', tab: 'monitoring' },
         ].map((stat, i) => (
-          <div key={i} onClick={() => setActiveTab(stat.tab)} className="bg-white p-6 rounded-2xl shadow-sm border border-black/5 flex items-center justify-between group hover:shadow-md hover:border-black/10 transition-all cursor-pointer">
+          <div key={i} onClick={() => setActiveTab(stat.tab)} className={`bg-white px-5 py-4 rounded-2xl shadow-sm border border-black/5 flex items-center justify-between group hover:shadow-md hover:border-black/10 transition-all cursor-pointer ${getStatAccent(stat)}`}>
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-black/30 mb-1">{stat.label}</p>
-              <p className={`text-3xl font-bold ${stat.color}`}>{stat.value}</p>
+              <p className="text-xs font-bold uppercase tracking-widest text-black/30 mb-1">{stat.label}</p>
+              <p className={`text-3xl font-bold monitoring-data ${stat.color}`}>{stat.value}</p>
             </div>
             <div className={`p-3 rounded-xl ${stat.bg} ${stat.color} group-hover:scale-110 transition-transform`}>
               <stat.icon size={24} />
@@ -161,7 +168,7 @@ const DashboardTab: React.FC<DashboardTabProps> = ({
             <PieChartIcon size={18} className="text-emerald-500" />
             {t('platformDistribution')}
           </h3>
-          <div className="h-[200px] w-full">
+          <div className="h-[200px] w-full relative">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={platformData} innerRadius={65} outerRadius={85} paddingAngle={8} dataKey="value" stroke="none">
@@ -172,6 +179,11 @@ const DashboardTab: React.FC<DashboardTabProps> = ({
                 <Tooltip />
               </PieChart>
             </ResponsiveContainer>
+            {/* P1: Total device count in donut center */}
+            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+              <span className="text-2xl font-bold text-[#00172D] monitoring-data">{devices.length}</span>
+              <span className="text-[10px] text-black/40 font-medium">{language === 'zh' ? '总设备' : 'Total'}</span>
+            </div>
           </div>
           <div className="mt-8 space-y-3">
             {platformData.map((item, i) => (

@@ -1,4 +1,6 @@
 import React from 'react';
+import { Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import type { AuditEvent } from '../types';
 import { sectionHeaderRowClass, severityBadgeClass, auditStatusBadgeClass } from '../components/shared';
 import Pagination from '../components/Pagination';
@@ -33,6 +35,25 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
   auditTimeFilter, setAuditTimeFilter,
   openAuditEventDetail, language, t,
 }) => {
+  const handleExportAudit = () => {
+    if (auditRows.length === 0) return;
+    const exportData = auditRows.map(e => ({
+      Timestamp: new Date(e.created_at).toLocaleString(),
+      Action: e.summary,
+      'Event Type': e.event_type,
+      Category: e.category,
+      Severity: e.severity,
+      Target: e.target_name || e.target_id || e.device_id || '',
+      User: e.actor_username || 'system',
+      Status: e.status,
+      'Source IP': e.source_ip || '',
+    }));
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Audit Logs');
+    XLSX.writeFile(wb, 'audit_logs_export.xlsx');
+  };
+
   return (
     <div className="space-y-6">
       <div className={sectionHeaderRowClass}>
@@ -40,6 +61,10 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
           <h2 className="text-2xl font-medium tracking-tight">{t('auditLogsTitle')}</h2>
           <p className="text-sm text-black/40">{t('fullHistory')}</p>
         </div>
+        <button onClick={handleExportAudit} className="inline-flex items-center gap-2 rounded-xl border border-black/10 bg-white px-4 py-2 text-sm font-medium text-black/60 hover:text-[#00bceb] hover:border-[#00bceb]/30 transition-all" title={language === 'zh' ? '导出审计日志' : 'Export Audit Logs'}>
+          <Download size={14} />
+          {language === 'zh' ? '导出' : 'Export'}
+        </button>
       </div>
 
       <div className="bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden">
