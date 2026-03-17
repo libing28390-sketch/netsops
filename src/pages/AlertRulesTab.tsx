@@ -134,8 +134,9 @@ const AlertRulesTab: React.FC<AlertPageCommonProps> = ({ language, currentUserna
       if (!prev) return prev;
       const next = { ...prev, [key]: value } as AlertRuleSettings;
       if (key === 'metric_type') {
-        next.threshold = thresholdMetrics.has(value) ? defaultThresholdForMetric(value) : null;
-        next.severity = defaultSeverityForMetric(value);
+        const metricValue = value as AlertRuleSettings['metric_type'];
+        next.threshold = thresholdMetrics.has(metricValue) ? defaultThresholdForMetric(metricValue) : null;
+        next.severity = defaultSeverityForMetric(metricValue);
       }
       if (key === 'scope_type' && value === 'global') {
         next.scope_value = '';
