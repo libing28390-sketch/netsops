@@ -2,7 +2,7 @@ import React, { Suspense, lazy, useState, useEffect, useMemo, useCallback } from
 import { motion } from 'motion/react';
 import { Routes, Route, useLocation, useNavigate, Navigate } from 'react-router-dom';
 import * as htmlToImage from 'html-to-image';
-import { Plus, Server, CheckCircle, CheckCircle2, XCircle, RotateCcw, Play, Activity, LayoutDashboard, Database, Zap, ShieldCheck, History, LogOut, Search, Bell, Settings, Download, Upload, FileText, ChevronLeft, ChevronRight, Filter, Globe, TrendingUp, PieChart as PieChartIcon, Clock, AlertTriangle, X, Edit2, AlertCircle, FolderOpen, Eye, EyeOff, Sun, Moon, User, ChevronDown, Copy, Menu, PanelLeftClose, Monitor, ExternalLink, Trash2, Wrench, Maximize2, Minimize2, BarChart3, GitCompareArrows, Cpu, Network } from 'lucide-react';
+import { Plus, Server, CheckCircle, CheckCircle2, XCircle, RotateCcw, Play, Activity, LayoutDashboard, Database, Zap, ShieldCheck, History, LogOut, Search, Bell, Settings, Download, Upload, FileText, ChevronLeft, ChevronRight, Filter, Globe, TrendingUp, PieChart as PieChartIcon, Clock, AlertTriangle, X, Edit2, AlertCircle, FolderOpen, Eye, EyeOff, Sun, Moon, User, ChevronDown, Copy, Menu, PanelLeftClose, Monitor, ExternalLink, Trash2, Wrench, Maximize2, Minimize2, BarChart3, GitCompareArrows, Cpu, Network, Pin } from 'lucide-react';
 import { useI18n } from './i18n.tsx';
 import * as XLSX from 'xlsx';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from 'recharts';
@@ -667,8 +667,21 @@ const App: React.FC = () => {
   const [inventoryGroupOpen, setInventoryGroupOpen] = useState(() => location.pathname.startsWith('/inventory'));
   const [alertGroupOpen, setAlertGroupOpen] = useState(() => ['alerts', 'alert-rules', 'maintenance'].includes(location.pathname.split('/')[1] || 'dashboard'));
   const [monitoringGroupOpen, setMonitoringGroupOpen] = useState(() => location.pathname === '/monitoring' || location.pathname === '/inventory/interfaces');
+  const [managementGroupOpen, setManagementGroupOpen] = useState(() => ['history', 'configuration', 'users'].includes(location.pathname.split('/')[1] || 'dashboard'));
+  const [realtimeSectionOpen, setRealtimeSectionOpen] = useState(true);
+  const [alertsSectionOpen, setAlertsSectionOpen] = useState(true);
+  const [assetsSectionOpen, setAssetsSectionOpen] = useState(true);
+  const [automationSectionOpen, setAutomationSectionOpen] = useState(true);
+  const [capacitySectionOpen, setCapacitySectionOpen] = useState(true);
+  const [managementSectionOpen, setManagementSectionOpen] = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.innerWidth < 768);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+  const [recentSidebarPaths, setRecentSidebarPaths] = useState<string[]>([]);
+  const [pinnedPaths, setPinnedPaths] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('netops_pinned_nav') || '[]'); } catch { return []; }
+  });
+  const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false);
+  const [cmdPaletteQuery, setCmdPaletteQuery] = useState('');
   // Playbook state
   const [scenarios, setScenarios] = useState<any[]>([]);
   const [platforms, setPlatforms] = useState<Record<string, any>>({});
@@ -800,6 +813,104 @@ const App: React.FC = () => {
     if (isMobile) setSidebarCollapsed(true);
   };
 
+  const togglePin = useCallback((path: string) => {
+    setPinnedPaths((prev) => {
+      const next = prev.includes(path)
+        ? prev.filter((p) => p !== path)
+        : [...prev, path].slice(0, 6);
+      localStorage.setItem('netops_pinned_nav', JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const getSidebarRecentLabel = useCallback((path: string): string => {
+    if (path === '/dashboard') return t('dashboard');
+    if (path === '/monitoring') return language === 'zh' ? '监控中心' : 'Monitoring Center';
+    if (path === '/topology') return language === 'zh' ? '网络拓扑' : 'Topology';
+    if (path === '/health') return language === 'zh' ? '健康检测' : 'Health Detection';
+    if (path === '/alerts') return language === 'zh' ? '告警信息' : 'Alert Desk';
+    if (path === '/alert-rules') return language === 'zh' ? '告警规则' : 'Alert Rules';
+    if (path === '/maintenance') return language === 'zh' ? '维护期' : 'Maintenance';
+    if (path === '/inventory/devices') return t('deviceList');
+    if (path === '/inventory/interfaces') return t('interfaceMonitoring');
+    if (path === '/ipam') return language === 'zh' ? 'IP/VLAN管理' : 'IP/VLAN Mgmt';
+    if (path === '/automation/execute') return t('directExecution');
+    if (path === '/automation/scenarios') return t('scenarioLibrary');
+    if (path === '/automation/history') return t('executionHistory');
+    if (path === '/config/backup') return t('backupHistory');
+    if (path === '/config/diff') return t('diffCompare');
+    if (path === '/config/search') return t('configSearchTab');
+    if (path === '/config/schedule') return t('scheduledBackup');
+    if (path === '/config/drift') return language === 'zh' ? '配置漂移' : 'Config Drift';
+    if (path === '/compliance') return t('compliance');
+    if (path === '/capacity') return language === 'zh' ? '容量规划' : 'Capacity Planning';
+    if (path === '/reports') return language === 'zh' ? '报表中心' : 'Reports';
+    if (path === '/history') return t('auditLogs');
+    if (path === '/configuration') return language === 'zh' ? '平台设置' : 'Platform Settings';
+    if (path === '/users') return t('userManagement');
+    return path.replace('/', '');
+  }, [language, t]);
+
+  const recentSidebarItems = useMemo(() => {
+    return recentSidebarPaths
+      .filter((path) => path && path !== '/')
+      .slice(0, 3)
+      .map((path) => ({ path, label: getSidebarRecentLabel(path) }));
+  }, [getSidebarRecentLabel, recentSidebarPaths]);
+
+  // 命令面板全量导航条目
+  const allNavItems = useMemo<{ path: string; label: string; group: string }[]>(() => {
+    const zh = language === 'zh';
+    return [
+      { path: '/dashboard', label: t('dashboard'), group: zh ? '实时监控' : 'Real-time' },
+      { path: '/monitoring', label: zh ? '监控中心' : 'Monitoring Center', group: zh ? '实时监控' : 'Real-time' },
+      { path: '/topology', label: zh ? '网络拓扑' : 'Topology', group: zh ? '实时监控' : 'Real-time' },
+      { path: '/health', label: zh ? '健康检测' : 'Health Detection', group: zh ? '实时监控' : 'Real-time' },
+      { path: '/inventory/devices', label: t('deviceList'), group: zh ? '设备清单' : 'Inventory' },
+      { path: '/inventory/interfaces', label: t('interfaceMonitoring'), group: zh ? '设备清单' : 'Inventory' },
+      { path: '/ipam', label: zh ? 'IP/VLAN 管理' : 'IP/VLAN Mgmt', group: zh ? '设备清单' : 'Inventory' },
+      { path: '/alerts', label: zh ? '告警信息' : 'Alert Desk', group: zh ? '告警管理' : 'Alerts' },
+      { path: '/alert-rules', label: zh ? '告警规则' : 'Alert Rules', group: zh ? '告警管理' : 'Alerts' },
+      { path: '/maintenance', label: zh ? '维护期' : 'Maintenance', group: zh ? '告警管理' : 'Alerts' },
+      { path: '/automation/execute', label: t('directExecution'), group: zh ? '作业自动化' : 'Automation' },
+      { path: '/automation/scenarios', label: t('scenarioLibrary'), group: zh ? '作业自动化' : 'Automation' },
+      { path: '/automation/history', label: t('executionHistory'), group: zh ? '作业自动化' : 'Automation' },
+      { path: '/config/backup', label: t('backupHistory'), group: zh ? '配置与合规' : 'Config & Compliance' },
+      { path: '/config/diff', label: t('diffCompare'), group: zh ? '配置与合规' : 'Config & Compliance' },
+      { path: '/config/search', label: t('configSearchTab'), group: zh ? '配置与合规' : 'Config & Compliance' },
+      { path: '/config/schedule', label: t('scheduledBackup'), group: zh ? '配置与合规' : 'Config & Compliance' },
+      { path: '/config/drift', label: zh ? '配置漂移' : 'Config Drift', group: zh ? '配置与合规' : 'Config & Compliance' },
+      { path: '/compliance', label: t('compliance'), group: zh ? '配置与合规' : 'Config & Compliance' },
+      { path: '/capacity', label: zh ? '容量规划' : 'Capacity Planning', group: zh ? '分析报告' : 'Analytics' },
+      { path: '/reports', label: zh ? '报表中心' : 'Reports', group: zh ? '分析报告' : 'Analytics' },
+      { path: '/history', label: t('auditLogs'), group: zh ? '平台管理' : 'Management' },
+      { path: '/configuration', label: zh ? '平台设置' : 'Platform Settings', group: zh ? '平台管理' : 'Management' },
+      { path: '/users', label: t('userManagement'), group: zh ? '平台管理' : 'Management' },
+    ];
+  }, [language, t]);
+
+  const cmdPaletteFiltered = useMemo(() => {
+    const q = cmdPaletteQuery.trim().toLowerCase();
+    if (!q) return allNavItems;
+    return allNavItems.filter(
+      (item) => item.label.toLowerCase().includes(q) || item.group.toLowerCase().includes(q) || item.path.toLowerCase().includes(q)
+    );
+  }, [allNavItems, cmdPaletteQuery]);
+
+  // Ctrl+K 全局快捷键
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        setCmdPaletteOpen((v) => !v);
+        setCmdPaletteQuery('');
+      }
+      if (e.key === 'Escape') setCmdPaletteOpen(false);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
   const pageTitle = useMemo(() => {
     if (activeTab === 'automation') {
       const map: Record<string, string> = {
@@ -889,16 +1000,40 @@ const App: React.FC = () => {
   }, [isAuthenticated, location.pathname, navigate]);
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      setRecentSidebarPaths([]);
+      return;
+    }
+
+    const path = location.pathname;
+    if (!path || path === '/') return;
+
+    setRecentSidebarPaths((prev) => {
+      const next = [path, ...prev.filter((item) => item !== path)].slice(0, 3);
+      return next;
+    });
+  }, [isAuthenticated, location.pathname]);
+
+  useEffect(() => {
     const monitoringActive = activeTab === 'monitoring' || location.pathname === '/inventory/interfaces';
     const alertActive = ['alerts', 'alert-rules', 'maintenance'].includes(activeTab);
-    const configActive = activeTab === 'config' || location.pathname.startsWith('/config');
+    const configActive = activeTab === 'config' || activeTab === 'compliance' || location.pathname.startsWith('/config');
     const automationActive = activeTab === 'automation' || location.pathname.startsWith('/automation');
-    const inventoryActive = activeTab === 'inventory' && location.pathname !== '/inventory/interfaces';
+    const inventoryActive = activeTab === 'inventory' || activeTab === 'ipam';
+    const managementActive = ['history', 'configuration', 'users'].includes(activeTab);
     setMonitoringGroupOpen(monitoringActive);
     setAlertGroupOpen(alertActive);
     setConfigGroupOpen(configActive);
     setAutomationGroupOpen(automationActive);
     setInventoryGroupOpen(inventoryActive);
+    setManagementGroupOpen(managementActive);
+    // Auto-expand parent section when navigating into it
+    if (['dashboard', 'monitoring', 'topology', 'health'].includes(activeTab) || location.pathname === '/inventory/interfaces') setRealtimeSectionOpen(true);
+    if (alertActive) setAlertsSectionOpen(true);
+    if (inventoryActive) setAssetsSectionOpen(true);
+    if (automationActive || configActive) setAutomationSectionOpen(true);
+    if (['capacity', 'reports'].includes(activeTab)) setCapacitySectionOpen(true);
+    if (managementActive) setManagementSectionOpen(true);
   }, [activeTab, location.pathname]);
 
   // Load config snapshots from backend when entering Config Center tab
@@ -4993,20 +5128,88 @@ const App: React.FC = () => {
         </div>
 
         <nav className="sidebar-nav-scroll flex flex-col flex-1 px-3 py-4 space-y-1 mt-2 overflow-y-auto">
-          <div className="px-3 pt-2 pb-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">{language === 'zh' ? '实时监控' : 'REAL-TIME'}</p>
-            <div className="mt-1.5 h-px bg-white/10" />
-          </div>
+          {/* 固定快捷区 */}
+          {pinnedPaths.length > 0 && (
+            <div className="px-3 pb-2">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-500 flex items-center gap-1">
+                <Pin size={9} className="opacity-60" />
+                {language === 'zh' ? '固定' : 'PINNED'}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {pinnedPaths.map((path) => {
+                  const label = getSidebarRecentLabel(path);
+                  const active = location.pathname === path;
+                  return (
+                    <div key={path} className="relative group/pin">
+                      <button
+                        onClick={() => navTo(path)}
+                        className={`px-2.5 py-1 rounded-md text-[11px] transition-colors border pr-5 ${active ? 'border-[#00bceb]/45 text-[#63dbf6] bg-[#00bceb]/12' : 'border-white/10 text-white/55 hover:text-white hover:bg-white/5'}`}
+                        title={label}
+                      >
+                        <span className="block truncate max-w-[100px]">{label}</span>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); togglePin(path); }}
+                        title={language === 'zh' ? '取消固定' : 'Unpin'}
+                        className="absolute right-0.5 top-1/2 -translate-y-1/2 opacity-0 group-hover/pin:opacity-100 text-white/40 hover:text-white transition-opacity p-0.5 rounded"
+                      >
+                        <X size={9} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
+          {/* 最近访问区 */}
+          {recentSidebarItems.length > 0 && (
+            <div className="px-3 pb-2">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-500">{language === 'zh' ? '最近访问' : 'RECENT'}</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {recentSidebarItems.map((item) => {
+                  const isPinned = pinnedPaths.includes(item.path);
+                  const active = location.pathname === item.path;
+                  return (
+                    <div key={item.path} className="relative group/recent">
+                      <button
+                        onClick={() => navTo(item.path)}
+                        className={`max-w-full px-2.5 py-1 rounded-md text-[11px] transition-colors border pr-5 ${active ? 'border-[#00bceb]/45 text-[#63dbf6] bg-[#00bceb]/12' : 'border-white/10 text-white/55 hover:text-white hover:bg-white/5'}`}
+                        title={item.label}
+                      >
+                        <span className="block truncate max-w-[100px]">{item.label}</span>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); togglePin(item.path); }}
+                        title={isPinned ? (language === 'zh' ? '取消固定' : 'Unpin') : (language === 'zh' ? '固定' : 'Pin')}
+                        className={`absolute right-0.5 top-1/2 -translate-y-1/2 transition-opacity p-0.5 rounded ${isPinned ? 'opacity-70 text-[#00bceb]' : 'opacity-0 group-hover/recent:opacity-100 text-white/40 hover:text-white'}`}
+                      >
+                        <Pin size={9} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <button
+            onClick={() => setRealtimeSectionOpen(v => !v)}
+            className="w-full px-3 pt-2 pb-1 flex items-center gap-1.5 text-left hover:opacity-80 transition-opacity"
+          >
+            <ChevronRight size={10} className={`text-white/30 transition-transform duration-150 shrink-0 ${realtimeSectionOpen ? 'rotate-90' : ''}`} />
+            <p className="flex-1 text-[11px] font-semibold uppercase tracking-widest text-slate-500">{language === 'zh' ? '实时监控' : 'REAL-TIME'}</p>
+          </button>
+          <div className="mx-3 mb-1.5 h-px bg-white/10" />
+          <div className={`space-y-1 overflow-hidden transition-all duration-200 ease-in-out ${realtimeSectionOpen ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none'}`}>
           <button
             onClick={() => setActiveTab('dashboard')}
             className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
               activeTab === 'dashboard'
-                ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
-                : 'text-white/60 hover:bg-white/5 hover:text-white'
+                ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
             }`}
           >
-            <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'dashboard' ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
             <LayoutDashboard size={17} className={`shrink-0 ${activeTab === 'dashboard' ? 'text-[#00bceb]' : ''}`} />
             <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{t('dashboard')}</span>
           </button>
@@ -5022,11 +5225,10 @@ const App: React.FC = () => {
               }}
               className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
                 activeTab === 'monitoring' || location.pathname === '/inventory/interfaces'
-                  ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
-                  : 'text-white/60 hover:bg-white/5 hover:text-white'
+                  ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                  : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
               }`}
             >
-              <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${(activeTab === 'monitoring' || location.pathname === '/inventory/interfaces') ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
               <TrendingUp size={17} className={activeTab === 'monitoring' || location.pathname === '/inventory/interfaces' ? 'text-[#00bceb]' : ''} />
               <span className="flex-1 text-left">{language === 'zh' ? '监控中心' : 'Monitoring'}</span>
               <span className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em] mr-1 ${hostResourceTone}`} title={hostResourceSummary}>
@@ -5046,7 +5248,7 @@ const App: React.FC = () => {
             <div className={`overflow-hidden transition-all duration-200 ease-in-out ${
               monitoringGroupOpen ? 'max-h-48 opacity-100' : 'max-h-0 opacity-0'
             }`}>
-              <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5">
+              <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5 border-l border-slate-700">
                 {([
                   { id: 'monitoring', path: null, icon: Monitor, label: language === 'zh' ? '平台资源' : 'Host Resources' },
                   { id: 'inventory-interfaces', path: '/inventory/interfaces', icon: Activity, label: t('interfaceMonitoring') },
@@ -5056,10 +5258,10 @@ const App: React.FC = () => {
                     <button
                       key={item.id}
                       onClick={() => item.path ? navTo(item.path) : setActiveTab('monitoring')}
-                      className={`w-full flex items-center gap-2.5 pl-5 pr-3 py-2 rounded-lg text-sm transition-all ${
+                      className={`w-full flex items-center gap-2.5 pl-8 pr-3 py-2 rounded-lg text-sm transition-all ${
                         isActive
-                          ? 'bg-[#00bceb]/15 text-[#00bceb] font-semibold'
-                          : 'text-white/40 hover:bg-white/5 hover:text-white/80 font-medium'
+                          ? 'bg-slate-700/60 text-white font-semibold'
+                          : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100 font-medium'
                       }`}
                     >
                       {isActive && <span className="w-1 h-1 rounded-full bg-[#00bceb] flex-shrink-0" />}
@@ -5082,21 +5284,25 @@ const App: React.FC = () => {
               onClick={() => setActiveTab(item.id)}
               className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
                 activeTab === item.id
-                  ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
-                  : 'text-white/60 hover:bg-white/5 hover:text-white'
+                  ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                  : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
               }`}
             >
-              <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === item.id ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
               <item.icon size={17} className={`shrink-0 ${activeTab === item.id ? 'text-[#00bceb]' : ''}`} />
               <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{item.label}</span>
             </button>
           ))}
-
-          <div className="px-3 pt-5 pb-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">{language === 'zh' ? '告警处置' : 'ALERTS'}</p>
-            <div className="mt-1.5 h-px bg-white/10" />
           </div>
 
+          <button
+            onClick={() => setAlertsSectionOpen(v => !v)}
+            className="w-full px-3 pt-5 pb-1 flex items-center gap-1.5 text-left hover:opacity-80 transition-opacity"
+          >
+            <ChevronRight size={10} className={`text-white/30 transition-transform duration-150 shrink-0 ${alertsSectionOpen ? 'rotate-90' : ''}`} />
+            <p className="flex-1 text-[11px] font-semibold uppercase tracking-widest text-slate-500">{language === 'zh' ? '告警处置' : 'ALERTS'}</p>
+          </button>
+          <div className="mx-3 mb-1.5 h-px bg-white/10" />
+          <div className={`space-y-1 overflow-hidden transition-all duration-200 ease-in-out ${alertsSectionOpen ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none'}`}>
           <div>
             <button
               onClick={() => {
@@ -5108,11 +5314,10 @@ const App: React.FC = () => {
               }}
               className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
                 ['alerts', 'alert-rules', 'maintenance'].includes(activeTab)
-                  ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
-                  : 'text-white/60 hover:bg-white/5 hover:text-white'
+                  ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                  : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
               }`}
             >
-              <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${['alerts', 'alert-rules', 'maintenance'].includes(activeTab) ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
               <AlertTriangle size={17} className={['alerts', 'alert-rules', 'maintenance'].includes(activeTab) ? 'text-[#00bceb]' : ''} />
               <span className="flex-1 text-left">{language === 'zh' ? '告警中心' : 'Alert Center'}</span>
               <span className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em] mr-1 ${alertNavTone}`} title={language === 'zh' ? '未读通知' : 'Unread notifications'}>
@@ -5128,7 +5333,7 @@ const App: React.FC = () => {
             <div className={`overflow-hidden transition-all duration-200 ease-in-out ${
               alertGroupOpen ? 'max-h-48 opacity-100' : 'max-h-0 opacity-0'
             }`}>
-              <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5">
+              <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5 border-l border-slate-700">
                 {([
                   { id: 'alerts', icon: AlertTriangle, label: language === 'zh' ? '告警信息' : 'Alert Desk' },
                   { id: 'alert-rules', icon: Settings, label: language === 'zh' ? '告警规则' : 'Alert Rules' },
@@ -5139,10 +5344,10 @@ const App: React.FC = () => {
                     <button
                       key={item.id}
                       onClick={() => setActiveTab(item.id)}
-                      className={`w-full flex items-center gap-2.5 pl-5 pr-3 py-2 rounded-lg text-sm transition-all ${
+                      className={`w-full flex items-center gap-2.5 pl-8 pr-3 py-2 rounded-lg text-sm transition-all ${
                         isActive
-                          ? 'bg-[#00bceb]/15 text-[#00bceb] font-semibold'
-                          : 'text-white/40 hover:bg-white/5 hover:text-white/80 font-medium'
+                          ? 'bg-slate-700/60 text-white font-semibold'
+                          : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100 font-medium'
                       }`}
                     >
                       {isActive && <span className="w-1 h-1 rounded-full bg-[#00bceb] flex-shrink-0" />}
@@ -5155,40 +5360,31 @@ const App: React.FC = () => {
               </div>
             </div>
           </div>
-
-          <div className="px-3 pt-5 pb-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">{language === 'zh' ? '资产与配置' : 'ASSETS & CONFIG'}</p>
-            <div className="mt-1.5 h-px bg-white/10" />
           </div>
 
           <button
-            onClick={() => setActiveTab('ipam')}
-            className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-              activeTab === 'ipam'
-                ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
-                : 'text-white/60 hover:bg-white/5 hover:text-white'
-            }`}
+            onClick={() => setAssetsSectionOpen(v => !v)}
+            className="w-full px-3 pt-5 pb-1 flex items-center gap-1.5 text-left hover:opacity-80 transition-opacity"
           >
-            <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'ipam' ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
-            <Network size={17} className={`shrink-0 ${activeTab === 'ipam' ? 'text-[#00bceb]' : ''}`} />
-            <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? 'IP/VLAN管理' : 'IP/VLAN Mgmt'}</span>
+            <ChevronRight size={10} className={`text-white/30 transition-transform duration-150 shrink-0 ${assetsSectionOpen ? 'rotate-90' : ''}`} />
+            <p className="flex-1 text-[11px] font-semibold uppercase tracking-widest text-slate-500">{language === 'zh' ? '资产与配置' : 'ASSETS & CONFIG'}</p>
           </button>
-
+          <div className="mx-3 mb-1.5 h-px bg-white/10" />
+          <div className={`space-y-1 overflow-hidden transition-all duration-200 ease-in-out ${assetsSectionOpen ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none'}`}>
           <div>
             <button
               onClick={() => {
                 const next = !inventoryGroupOpen;
                 setInventoryGroupOpen(next);
-                if (next && !location.pathname.startsWith('/inventory')) navTo('/inventory/devices');
+                if (next && !(location.pathname.startsWith('/inventory') || activeTab === 'ipam')) navTo('/inventory/devices');
               }}
               className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
-                activeTab === 'inventory'
-                  ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
-                  : 'text-white/60 hover:bg-white/5 hover:text-white'
+                (activeTab === 'inventory' || activeTab === 'ipam')
+                  ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                  : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
               }`}
             >
-              <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'inventory' ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
-              <Database size={17} className={activeTab === 'inventory' ? 'text-[#00bceb]' : ''} />
+              <Database size={17} className={(activeTab === 'inventory' || activeTab === 'ipam') ? 'text-[#00bceb]' : ''} />
               <span className="flex-1 text-left">{t('inventory')}</span>
               <ChevronRight
                 size={14}
@@ -5200,19 +5396,20 @@ const App: React.FC = () => {
             <div className={`overflow-hidden transition-all duration-200 ease-in-out ${
               inventoryGroupOpen ? 'max-h-48 opacity-100' : 'max-h-0 opacity-0'
             }`}>
-              <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5">
+              <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5 border-l border-slate-700">
                 {([
                   { path: 'inventory/devices',    icon: Server,   label: t('deviceList') },
+                  { path: 'ipam',                 icon: Network,  label: language === 'zh' ? 'IP/VLAN管理' : 'IP/VLAN Mgmt' },
                 ] as const).map(item => {
-                  const isActive = location.pathname === `/${item.path}`;
+                  const isActive = item.path === 'ipam' ? activeTab === 'ipam' : location.pathname === `/${item.path}`;
                   return (
                     <button
                       key={item.path}
-                      onClick={() => navTo(`/${item.path}`)}
-                      className={`w-full flex items-center gap-2.5 pl-5 pr-3 py-2 rounded-lg text-sm transition-all ${
+                      onClick={() => item.path === 'ipam' ? setActiveTab('ipam') : navTo(`/${item.path}`)}
+                      className={`w-full flex items-center gap-2.5 pl-8 pr-3 py-2 rounded-lg text-sm transition-all ${
                         isActive
-                          ? 'bg-[#00bceb]/15 text-[#00bceb] font-semibold'
-                          : 'text-white/40 hover:bg-white/5 hover:text-white/80 font-medium'
+                          ? 'bg-slate-700/60 text-white font-semibold'
+                          : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100 font-medium'
                       }`}
                     >
                       {isActive && <span className="w-1 h-1 rounded-full bg-[#00bceb] flex-shrink-0" />}
@@ -5225,12 +5422,17 @@ const App: React.FC = () => {
               </div>
             </div>
           </div>
-
-          <div className="px-3 pt-5 pb-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">{language === 'zh' ? '自动化与合规' : 'AUTOMATION'}</p>
-            <div className="mt-1.5 h-px bg-white/10" />
           </div>
 
+          <button
+            onClick={() => setAutomationSectionOpen(v => !v)}
+            className="w-full px-3 pt-5 pb-1 flex items-center gap-1.5 text-left hover:opacity-80 transition-opacity"
+          >
+            <ChevronRight size={10} className={`text-white/30 transition-transform duration-150 shrink-0 ${automationSectionOpen ? 'rotate-90' : ''}`} />
+            <p className="flex-1 text-[11px] font-semibold uppercase tracking-widest text-slate-500">{language === 'zh' ? '自动化与合规' : 'AUTOMATION'}</p>
+          </button>
+          <div className="mx-3 mb-1.5 h-px bg-white/10" />
+          <div className={`space-y-1 overflow-hidden transition-all duration-200 ease-in-out ${automationSectionOpen ? 'max-h-[800px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none'}`}>
           <div>
             <button
               onClick={() => {
@@ -5240,11 +5442,10 @@ const App: React.FC = () => {
               }}
               className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
                 activeTab === 'automation'
-                  ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
-                  : 'text-white/60 hover:bg-white/5 hover:text-white'
+                  ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                  : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
               }`}
             >
-              <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'automation' ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
               <Zap size={17} className={activeTab === 'automation' ? 'text-[#00bceb]' : ''} />
               <span className="flex-1 text-left">{t('automation')}</span>
               <ChevronRight
@@ -5257,7 +5458,7 @@ const App: React.FC = () => {
             <div className={`overflow-hidden transition-all duration-200 ease-in-out ${
               automationGroupOpen ? 'max-h-48 opacity-100' : 'max-h-0 opacity-0'
             }`}>
-              <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5">
+              <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5 border-l border-slate-700">
                 {([
                   { path: 'automation/execute',   icon: Zap,        label: t('directExecution') },
                   { path: 'automation/scenarios', icon: FolderOpen, label: t('scenarioLibrary') },
@@ -5268,10 +5469,10 @@ const App: React.FC = () => {
                     <button
                       key={item.path}
                       onClick={() => navTo(`/${item.path}`)}
-                      className={`w-full flex items-center gap-2.5 pl-5 pr-3 py-2 rounded-lg text-sm transition-all ${
+                      className={`w-full flex items-center gap-2.5 pl-8 pr-3 py-2 rounded-lg text-sm transition-all ${
                         isActive
-                          ? 'bg-[#00bceb]/15 text-[#00bceb] font-semibold'
-                          : 'text-white/40 hover:bg-white/5 hover:text-white/80 font-medium'
+                          ? 'bg-slate-700/60 text-white font-semibold'
+                          : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100 font-medium'
                       }`}
                     >
                       {isActive && <span className="w-1 h-1 rounded-full bg-[#00bceb] flex-shrink-0" />}
@@ -5293,14 +5494,13 @@ const App: React.FC = () => {
                 if (next && !location.pathname.startsWith('/config')) navTo('/config/backup');
               }}
               className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
-                activeTab === 'config'
-                  ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
-                  : 'text-white/60 hover:bg-white/5 hover:text-white'
+                (activeTab === 'config' || activeTab === 'compliance')
+                  ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                  : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
               }`}
             >
-              <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'config' ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
-              <FolderOpen size={17} className={activeTab === 'config' ? 'text-[#00bceb]' : ''} />
-              <span className="flex-1 text-left">{t('configCenter')}</span>
+              <FolderOpen size={17} className={(activeTab === 'config' || activeTab === 'compliance') ? 'text-[#00bceb]' : ''} />
+              <span className="flex-1 text-left">{language === 'zh' ? '配置与合规' : 'Config & Compliance'}</span>
               <ChevronRight
                 size={14}
                 className={`text-white/30 transition-transform duration-200 ${
@@ -5313,23 +5513,24 @@ const App: React.FC = () => {
             <div className={`overflow-hidden transition-all duration-200 ease-in-out ${
               configGroupOpen ? 'max-h-64 opacity-100' : 'max-h-0 opacity-0'
             }`}>
-              <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5">
+              <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5 border-l border-slate-700">
                 {([
                   { path: 'config/backup',   icon: Download,  label: t('backupHistory') },
                   { path: 'config/diff',     icon: FileText,  label: t('diffCompare') },
                   { path: 'config/search',   icon: Search,    label: t('configSearchTab') },
                   { path: 'config/schedule', icon: Clock,     label: t('scheduledBackup') },
                   { path: 'config/drift',    icon: GitCompareArrows, label: language === 'zh' ? '配置漂移' : 'Config Drift' },
+                  { path: 'compliance',      icon: ShieldCheck, label: t('compliance') },
                 ] as const).map(item => {
-                  const isActive = location.pathname === `/${item.path}`;
+                  const isActive = item.path === 'compliance' ? activeTab === 'compliance' : location.pathname === `/${item.path}`;
                   return (
                     <button
                       key={item.path}
-                      onClick={() => navTo(`/${item.path}`)}
-                      className={`w-full flex items-center gap-2.5 pl-5 pr-3 py-2 rounded-lg text-sm transition-all ${
+                      onClick={() => item.path === 'compliance' ? setActiveTab('compliance') : navTo(`/${item.path}`)}
+                      className={`w-full flex items-center gap-2.5 pl-8 pr-3 py-2 rounded-lg text-sm transition-all ${
                         isActive
-                          ? 'bg-[#00bceb]/15 text-[#00bceb] font-semibold'
-                          : 'text-white/40 hover:bg-white/5 hover:text-white/80 font-medium'
+                          ? 'bg-slate-700/60 text-white font-semibold'
+                          : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100 font-medium'
                       }`}
                     >
                       {isActive && <span className="w-1 h-1 rounded-full bg-[#00bceb] flex-shrink-0" />}
@@ -5342,34 +5543,25 @@ const App: React.FC = () => {
               </div>
             </div>
           </div>
-
-          <button
-            onClick={() => setActiveTab('compliance')}
-            className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-              activeTab === 'compliance'
-                ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
-                : 'text-white/60 hover:bg-white/5 hover:text-white'
-            }`}
-          >
-            <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'compliance' ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
-            <ShieldCheck size={17} className={`shrink-0 ${activeTab === 'compliance' ? 'text-[#00bceb]' : ''}`} />
-            <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{t('compliance')}</span>
-          </button>
-
-          <div className="px-3 pt-5 pb-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">{language === 'zh' ? '容量与报表' : 'CAPACITY'}</p>
-            <div className="mt-1.5 h-px bg-white/10" />
           </div>
 
+          <button
+            onClick={() => setCapacitySectionOpen(v => !v)}
+            className="w-full px-3 pt-5 pb-1 flex items-center gap-1.5 text-left hover:opacity-80 transition-opacity"
+          >
+            <ChevronRight size={10} className={`text-white/30 transition-transform duration-150 shrink-0 ${capacitySectionOpen ? 'rotate-90' : ''}`} />
+            <p className="flex-1 text-[11px] font-semibold uppercase tracking-widest text-slate-500">{language === 'zh' ? '容量与报表' : 'CAPACITY'}</p>
+          </button>
+          <div className="mx-3 mb-1.5 h-px bg-white/10" />
+          <div className={`space-y-1 overflow-hidden transition-all duration-200 ease-in-out ${capacitySectionOpen ? 'max-h-[400px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none'}`}>
           <button
             onClick={() => setActiveTab('capacity')}
             className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
               activeTab === 'capacity'
-                ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
-                : 'text-white/60 hover:bg-white/5 hover:text-white'
+                ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
             }`}
           >
-            <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'capacity' ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
             <Cpu size={17} className={`shrink-0 ${activeTab === 'capacity' ? 'text-[#00bceb]' : ''}`} />
             <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? '容量规划' : 'Capacity'}</span>
           </button>
@@ -5378,39 +5570,79 @@ const App: React.FC = () => {
             onClick={() => setActiveTab('reports')}
             className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
               activeTab === 'reports'
-                ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
-                : 'text-white/60 hover:bg-white/5 hover:text-white'
+                ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
             }`}
           >
-            <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'reports' ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
             <BarChart3 size={17} className={`shrink-0 ${activeTab === 'reports' ? 'text-[#00bceb]' : ''}`} />
             <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? '报表中心' : 'Reports'}</span>
           </button>
-
-          <div className="px-3 pt-5 pb-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">{language === 'zh' ? '平台管理' : 'MANAGEMENT'}</p>
-            <div className="mt-1.5 h-px bg-white/10" />
           </div>
 
-          {[
-            { id: 'history',       icon: History,      label: t('auditLogs') },
-            { id: 'configuration', icon: Settings,    label: t('configuration') },
-            { id: 'users',         icon: User,        label: t('userManagement') },
-          ].map(item => (
+          <button
+            onClick={() => setManagementSectionOpen(v => !v)}
+            className="w-full px-3 pt-5 pb-1 flex items-center gap-1.5 text-left hover:opacity-80 transition-opacity"
+          >
+            <ChevronRight size={10} className={`text-white/30 transition-transform duration-150 shrink-0 ${managementSectionOpen ? 'rotate-90' : ''}`} />
+            <p className="flex-1 text-[11px] font-semibold uppercase tracking-widest text-slate-500">{language === 'zh' ? '平台管理' : 'MANAGEMENT'}</p>
+          </button>
+          <div className="mx-3 mb-1.5 h-px bg-white/10" />
+          <div className={`space-y-1 overflow-hidden transition-all duration-200 ease-in-out ${managementSectionOpen ? 'max-h-[400px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none'}`}>
+          <div>
             <button
-              key={item.id}
-              onClick={() => setActiveTab(item.id)}
-              className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                activeTab === item.id
-                  ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
-                  : 'text-white/60 hover:bg-white/5 hover:text-white'
+              onClick={() => {
+                const next = !managementGroupOpen;
+                setManagementGroupOpen(next);
+                if (next && !['history', 'configuration', 'users'].includes(activeTab)) {
+                  setActiveTab('history');
+                }
+              }}
+              className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
+                ['history', 'configuration', 'users'].includes(activeTab)
+                  ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                  : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
               }`}
             >
-              <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === item.id ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
-              <item.icon size={17} className={`shrink-0 ${activeTab === item.id ? 'text-[#00bceb]' : ''}`} />
-              <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{item.label}</span>
+              <Settings size={17} className={['history', 'configuration', 'users'].includes(activeTab) ? 'text-[#00bceb]' : ''} />
+              <span className="flex-1 text-left">{language === 'zh' ? '平台管理' : 'Management'}</span>
+              <ChevronRight
+                size={14}
+                className={`text-white/30 transition-transform duration-200 ${
+                  managementGroupOpen ? 'rotate-90 text-white/55' : ''
+                }`}
+              />
             </button>
-          ))}
+            <div className={`overflow-hidden transition-all duration-200 ease-in-out ${
+              managementGroupOpen ? 'max-h-48 opacity-100' : 'max-h-0 opacity-0'
+            }`}>
+              <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5 border-l border-slate-700">
+                {([
+                  { id: 'history',       icon: History,   label: t('auditLogs') },
+                  { id: 'configuration', icon: Settings,  label: t('configuration') },
+                  { id: 'users',         icon: User,      label: t('userManagement') },
+                ] as const).map(item => {
+                  const isActive = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setActiveTab(item.id)}
+                      className={`w-full flex items-center gap-2.5 pl-8 pr-3 py-2 rounded-lg text-sm transition-all ${
+                        isActive
+                          ? 'bg-slate-700/60 text-white font-semibold'
+                          : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100 font-medium'
+                      }`}
+                    >
+                      {isActive && <span className="w-1 h-1 rounded-full bg-[#00bceb] flex-shrink-0" />}
+                      {!isActive && <span className="w-1 h-1 flex-shrink-0" />}
+                      <item.icon size={14} />
+                      <span className="text-[13px]">{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+          </div>
         </nav>
 
       </aside>
@@ -12991,6 +13223,69 @@ const App: React.FC = () => {
       )}
 
       {/* Toast Notification */}
+      {/* 命令面板 Ctrl+K */}
+      {cmdPaletteOpen && (
+        <div
+          className="fixed inset-0 z-[200] flex items-start justify-center pt-[15vh] bg-black/60 backdrop-blur-sm"
+          onClick={() => setCmdPaletteOpen(false)}
+        >
+          <div
+            className="w-full max-w-lg mx-4 rounded-2xl shadow-2xl border border-white/10 bg-[#131720] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* 搜索框 */}
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-white/10">
+              <Search size={16} className="text-white/40 shrink-0" />
+              <input
+                autoFocus
+                value={cmdPaletteQuery}
+                onChange={(e) => setCmdPaletteQuery(e.target.value)}
+                placeholder={language === 'zh' ? '搜索页面…' : 'Go to page…'}
+                className="flex-1 bg-transparent text-white text-sm placeholder-white/30 outline-none"
+              />
+              <kbd className="hidden sm:block text-[10px] text-white/25 border border-white/10 rounded px-1.5 py-0.5 font-mono">ESC</kbd>
+            </div>
+            {/* 结果列表 */}
+            <ul className="max-h-80 overflow-y-auto py-2">
+              {cmdPaletteFiltered.length === 0 ? (
+                <li className="px-4 py-8 text-center text-white/30 text-sm">
+                  {language === 'zh' ? '没有匹配的页面' : 'No results found'}
+                </li>
+              ) : (
+                cmdPaletteFiltered.map((item) => {
+                  const active = location.pathname === item.path;
+                  const isPinned = pinnedPaths.includes(item.path);
+                  return (
+                    <li key={item.path}>
+                      <button
+                        className={`w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-white/5 transition-colors ${active ? 'text-[#63dbf6]' : 'text-white/80'}`}
+                        onClick={() => { navTo(item.path); setCmdPaletteOpen(false); }}
+                      >
+                        <span className="flex-1 text-sm truncate">{item.label}</span>
+                        <span className="text-[11px] text-white/30 shrink-0">{item.group}</span>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); togglePin(item.path); }}
+                          title={isPinned ? (language === 'zh' ? '取消固定' : 'Unpin') : (language === 'zh' ? '固定到侧栏' : 'Pin to sidebar')}
+                          className={`p-1 rounded hover:bg-white/10 transition-colors ${isPinned ? 'text-[#00bceb]' : 'text-white/20 hover:text-white/60'}`}
+                        >
+                          <Pin size={12} />
+                        </button>
+                      </button>
+                    </li>
+                  );
+                })
+              )}
+            </ul>
+            {/* 底部提示 */}
+            <div className="px-4 py-2 border-t border-white/5 flex items-center gap-4 text-[11px] text-white/25">
+              <span className="flex items-center gap-1"><kbd className="border border-white/10 rounded px-1 py-0.5 font-mono">↵</kbd> {language === 'zh' ? '跳转' : 'go'}</span>
+              <span className="flex items-center gap-1"><kbd className="border border-white/10 rounded px-1 py-0.5 font-mono">ESC</kbd> {language === 'zh' ? '关闭' : 'close'}</span>
+              <span className="ml-auto flex items-center gap-1"><kbd className="border border-white/10 rounded px-1 py-0.5 font-mono">Ctrl K</kbd> {language === 'zh' ? '切换' : 'toggle'}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {toast && (
         <motion.div 
           initial={{ y: 50, opacity: 0 }}
