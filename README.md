@@ -274,6 +274,77 @@ npm run build
 
 Windows 和 Ubuntu 的部署步骤请查看 [DEPLOY.md](DEPLOY.md)。
 
+### Windows 代理配置（V2Ray: 127.0.0.1:10808）
+
+当出现“浏览器可访问外网，但 Git/npm/pip 等命令行工具无法访问外网”时，可执行以下步骤统一代理。
+
+#### 一键应用（普通 PowerShell）
+
+```powershell
+# 1) WinINET（系统/桌面应用常用）
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /t REG_SZ /d "socks=127.0.0.1:10808;http=127.0.0.1:10808;https=127.0.0.1:10808" /f
+
+# 2) 用户环境变量（新开终端生效）
+setx HTTP_PROXY "socks5://127.0.0.1:10808"
+setx HTTPS_PROXY "socks5://127.0.0.1:10808"
+setx ALL_PROXY "socks5://127.0.0.1:10808"
+setx NO_PROXY "localhost,127.0.0.1,::1"
+
+# 3) Git 全局代理
+git config --global http.proxy socks5h://127.0.0.1:10808
+git config --global https.proxy socks5h://127.0.0.1:10808
+
+# 4) npm 代理
+npm config set proxy "http://127.0.0.1:10808"
+npm config set https-proxy "http://127.0.0.1:10808"
+```
+
+#### WinHTTP（管理员 PowerShell）
+
+WinHTTP 影响系统服务和部分只走 WinHTTP 的工具，必须在“管理员身份”PowerShell 执行：
+
+```powershell
+netsh winhttp set proxy 127.0.0.1:10808 "localhost;127.0.0.1"
+netsh winhttp show proxy
+```
+
+如果出现 `拒绝访问 (5)`，说明当前终端不是管理员权限。
+
+#### 配置验证
+
+```powershell
+reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable
+reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer
+git config --global --get http.proxy
+git config --global --get https.proxy
+npm config get proxy
+npm config get https-proxy
+netsh winhttp show proxy
+```
+
+#### 回滚（取消代理）
+
+```powershell
+# WinINET
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f
+
+# 环境变量
+setx HTTP_PROXY ""
+setx HTTPS_PROXY ""
+setx ALL_PROXY ""
+setx NO_PROXY ""
+
+# Git / npm
+git config --global --unset http.proxy
+git config --global --unset https.proxy
+npm config delete proxy
+npm config delete https-proxy
+
+# WinHTTP（管理员）
+netsh winhttp reset proxy
+```
+
 ### 补充说明
 
 - 仓库已忽略本地虚拟环境、SQLite 运行文件、备份文件、日志和编辑器配置。
