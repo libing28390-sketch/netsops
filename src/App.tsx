@@ -5106,10 +5106,10 @@ const App: React.FC = () => {
         <div className="fixed inset-0 z-[25] bg-black/50 md:hidden" onClick={() => setSidebarCollapsed(true)} />
       )}
       {/* Sidebar */}
-      <aside className={`theme-sidebar flex flex-col shadow-2xl transition-all duration-300 ease-in-out ${
+      <aside className={`theme-sidebar flex flex-col flex-shrink-0 shadow-2xl transition-all duration-300 ease-in-out ${
         isMobile
-          ? `fixed inset-y-0 left-0 w-64 z-30 ${sidebarCollapsed ? '-translate-x-full' : 'translate-x-0'}`
-          : `z-20 ${sidebarCollapsed ? 'w-0 min-w-0 overflow-hidden opacity-0' : 'w-64'}`
+          ? `fixed inset-y-0 left-0 w-72 z-30 ${sidebarCollapsed ? '-translate-x-full' : 'translate-x-0'}`
+          : `z-20 ${sidebarCollapsed ? 'w-0 min-w-0 overflow-hidden opacity-0' : 'w-72 min-w-72'}`
       }`}>
         <div className="p-6 border-b border-white/5 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -5206,7 +5206,7 @@ const App: React.FC = () => {
             onClick={() => setActiveTab('dashboard')}
             className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
               activeTab === 'dashboard'
-                ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
                 : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
             }`}
           >
@@ -5225,12 +5225,12 @@ const App: React.FC = () => {
               }}
               className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
                 activeTab === 'monitoring' || location.pathname === '/inventory/interfaces'
-                  ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                  ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
                   : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
               }`}
             >
               <TrendingUp size={17} className={activeTab === 'monitoring' || location.pathname === '/inventory/interfaces' ? 'text-[#00bceb]' : ''} />
-              <span className="flex-1 text-left">{language === 'zh' ? '监控中心' : 'Monitoring'}</span>
+              <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? '监控中心' : 'Monitoring'}</span>
               <span className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em] mr-1 ${hostResourceTone}`} title={hostResourceSummary}>
                 {hostResources
                   ? (language === 'zh'
@@ -5284,7 +5284,7 @@ const App: React.FC = () => {
               onClick={() => setActiveTab(item.id)}
               className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
                 activeTab === item.id
-                  ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                  ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
                   : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
               }`}
             >
@@ -5314,12 +5314,12 @@ const App: React.FC = () => {
               }}
               className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
                 ['alerts', 'alert-rules', 'maintenance'].includes(activeTab)
-                  ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                  ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
                   : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
               }`}
             >
               <AlertTriangle size={17} className={['alerts', 'alert-rules', 'maintenance'].includes(activeTab) ? 'text-[#00bceb]' : ''} />
-              <span className="flex-1 text-left">{language === 'zh' ? '告警中心' : 'Alert Center'}</span>
+              <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? '告警中心' : 'Alert Center'}</span>
               <span className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em] mr-1 ${alertNavTone}`} title={language === 'zh' ? '未读通知' : 'Unread notifications'}>
                 {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
               </span>
@@ -5380,12 +5380,12 @@ const App: React.FC = () => {
               }}
               className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
                 (activeTab === 'inventory' || activeTab === 'ipam')
-                  ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                  ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
                   : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
               }`}
             >
               <Database size={17} className={(activeTab === 'inventory' || activeTab === 'ipam') ? 'text-[#00bceb]' : ''} />
-              <span className="flex-1 text-left">{t('inventory')}</span>
+              <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{t('inventory')}</span>
               <ChevronRight
                 size={14}
                 className={`text-white/30 transition-transform duration-200 ${
@@ -5442,12 +5442,12 @@ const App: React.FC = () => {
               }}
               className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
                 activeTab === 'automation'
-                  ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                  ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
                   : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
               }`}
             >
               <Zap size={17} className={activeTab === 'automation' ? 'text-[#00bceb]' : ''} />
-              <span className="flex-1 text-left">{t('automation')}</span>
+              <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{t('automation')}</span>
               <ChevronRight
                 size={14}
                 className={`text-white/30 transition-transform duration-200 ${
@@ -5495,12 +5495,12 @@ const App: React.FC = () => {
               }}
               className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
                 (activeTab === 'config' || activeTab === 'compliance')
-                  ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                  ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
                   : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
               }`}
             >
               <FolderOpen size={17} className={(activeTab === 'config' || activeTab === 'compliance') ? 'text-[#00bceb]' : ''} />
-              <span className="flex-1 text-left">{language === 'zh' ? '配置与合规' : 'Config & Compliance'}</span>
+              <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? '配置与合规' : 'Config & Compliance'}</span>
               <ChevronRight
                 size={14}
                 className={`text-white/30 transition-transform duration-200 ${
@@ -5558,7 +5558,7 @@ const App: React.FC = () => {
             onClick={() => setActiveTab('capacity')}
             className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
               activeTab === 'capacity'
-                ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
                 : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
             }`}
           >
@@ -5570,7 +5570,7 @@ const App: React.FC = () => {
             onClick={() => setActiveTab('reports')}
             className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
               activeTab === 'reports'
-                ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
                 : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
             }`}
           >
@@ -5599,12 +5599,12 @@ const App: React.FC = () => {
               }}
               className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
                 ['history', 'configuration', 'users'].includes(activeTab)
-                  ? 'border-l-[3px] border-blue-500 bg-slate-800 text-white'
+                  ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
                   : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
               }`}
             >
               <Settings size={17} className={['history', 'configuration', 'users'].includes(activeTab) ? 'text-[#00bceb]' : ''} />
-              <span className="flex-1 text-left">{language === 'zh' ? '平台管理' : 'Management'}</span>
+              <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? '平台管理' : 'Management'}</span>
               <ChevronRight
                 size={14}
                 className={`text-white/30 transition-transform duration-200 ${
