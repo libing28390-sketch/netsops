@@ -4993,27 +4993,25 @@ const App: React.FC = () => {
         </div>
 
         <nav className="sidebar-nav-scroll flex flex-col flex-1 px-3 py-4 space-y-1 mt-2 overflow-y-auto">
-          {/* ── Section: 感知层 / Awareness ── */}
-          <div className="order-[5] px-3 pt-2 pb-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">{language === 'zh' ? '感知层' : 'AWARENESS'}</p>
+          <div className="px-3 pt-2 pb-2">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">{language === 'zh' ? '实时监控' : 'REAL-TIME'}</p>
             <div className="mt-1.5 h-px bg-white/10" />
           </div>
 
           <button
             onClick={() => setActiveTab('dashboard')}
-            className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all order-10 ${
+            className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
               activeTab === 'dashboard'
-                ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
+                ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
                 : 'text-white/60 hover:bg-white/5 hover:text-white'
             }`}
           >
-            <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'dashboard' ? 'bg-white/90' : 'bg-transparent'}`} />
-            <LayoutDashboard size={17} className={`shrink-0 ${activeTab === 'dashboard' ? 'text-white' : ''}`} />
+            <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'dashboard' ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
+            <LayoutDashboard size={17} className={`shrink-0 ${activeTab === 'dashboard' ? 'text-[#00bceb]' : ''}`} />
             <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{t('dashboard')}</span>
           </button>
 
-          {/* ── Monitoring collapsible group ── */}
-          <div className="order-20">
+          <div>
             <button
               onClick={() => {
                 const next = !monitoringGroupOpen;
@@ -5075,7 +5073,31 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          <div className="order-30">
+          {[
+            { id: 'topology', icon: Globe, label: language === 'zh' ? '网络拓扑' : 'Topology' },
+            { id: 'health', icon: Activity, label: language === 'zh' ? '健康检测' : 'Health Detection' },
+          ].map(item => (
+            <button
+              key={item.id}
+              onClick={() => setActiveTab(item.id)}
+              className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                activeTab === item.id
+                  ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
+                  : 'text-white/60 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === item.id ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
+              <item.icon size={17} className={`shrink-0 ${activeTab === item.id ? 'text-[#00bceb]' : ''}`} />
+              <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{item.label}</span>
+            </button>
+          ))}
+
+          <div className="px-3 pt-5 pb-2">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">{language === 'zh' ? '告警处置' : 'ALERTS'}</p>
+            <div className="mt-1.5 h-px bg-white/10" />
+          </div>
+
+          <div>
             <button
               onClick={() => {
                 const next = !alertGroupOpen;
@@ -5134,46 +5156,25 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {[
-            { id: 'topology', icon: Globe, label: language === 'zh' ? '网络拓扑' : 'Topology' },
-            { id: 'health', icon: Activity, label: language === 'zh' ? '健康检测' : 'Health Detection' },
-          ].map(item => (
-            <button
-              key={item.id}
-              onClick={() => setActiveTab(item.id)}
-              className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                activeTab === item.id
-                  ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
-                  : 'text-white/60 hover:bg-white/5 hover:text-white'
-              } ${item.id === 'topology' ? 'order-[45]' : 'order-[50]'}`}
-            >
-              <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === item.id ? 'bg-white/90' : 'bg-transparent'}`} />
-              <item.icon size={17} className="shrink-0" />
-              <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{item.label}</span>
-            </button>
-          ))}
-
-          {/* ── Section: 资产层 / Assets ── */}
-          <div className="order-[55] px-3 pt-5 pb-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">{language === 'zh' ? '资产层' : 'ASSETS'}</p>
+          <div className="px-3 pt-5 pb-2">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">{language === 'zh' ? '资产与配置' : 'ASSETS & CONFIG'}</p>
             <div className="mt-1.5 h-px bg-white/10" />
           </div>
 
           <button
             onClick={() => setActiveTab('ipam')}
-            className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all order-[57] ${
+            className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
               activeTab === 'ipam'
-                ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
+                ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
                 : 'text-white/60 hover:bg-white/5 hover:text-white'
             }`}
           >
-            <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'ipam' ? 'bg-white/90' : 'bg-transparent'}`} />
-            <Network size={17} className="shrink-0" />
+            <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'ipam' ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
+            <Network size={17} className={`shrink-0 ${activeTab === 'ipam' ? 'text-[#00bceb]' : ''}`} />
             <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? 'IP/VLAN管理' : 'IP/VLAN Mgmt'}</span>
           </button>
 
-          {/* ── Inventory (devices only) ── */}
-          <div className="order-60">
+          <div>
             <button
               onClick={() => {
                 const next = !inventoryGroupOpen;
@@ -5225,14 +5226,12 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* ── Section: 操作层 / Operations ── */}
-          <div className="order-[75] px-3 pt-5 pb-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">{language === 'zh' ? '操作层' : 'OPERATIONS'}</p>
+          <div className="px-3 pt-5 pb-2">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">{language === 'zh' ? '自动化与合规' : 'AUTOMATION'}</p>
             <div className="mt-1.5 h-px bg-white/10" />
           </div>
 
-          {/* ── Automation collapsible group ── */}
-          <div className="order-80">
+          <div>
             <button
               onClick={() => {
                 const next = !automationGroupOpen;
@@ -5286,8 +5285,7 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* ── Config Center collapsible group ── */}
-          <div className="order-70">
+          <div>
             <button
               onClick={() => {
                 const next = !configGroupOpen;
@@ -5347,39 +5345,55 @@ const App: React.FC = () => {
 
           <button
             onClick={() => setActiveTab('compliance')}
-            className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all order-[88] ${
+            className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
               activeTab === 'compliance'
-                ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
+                ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
                 : 'text-white/60 hover:bg-white/5 hover:text-white'
             }`}
           >
-            <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'compliance' ? 'bg-white/90' : 'bg-transparent'}`} />
-            <ShieldCheck size={17} className="shrink-0" />
+            <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'compliance' ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
+            <ShieldCheck size={17} className={`shrink-0 ${activeTab === 'compliance' ? 'text-[#00bceb]' : ''}`} />
             <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{t('compliance')}</span>
           </button>
 
+          <div className="px-3 pt-5 pb-2">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">{language === 'zh' ? '容量与报表' : 'CAPACITY'}</p>
+            <div className="mt-1.5 h-px bg-white/10" />
+          </div>
+
           <button
             onClick={() => setActiveTab('capacity')}
-            className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all order-[90] ${
+            className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
               activeTab === 'capacity'
-                ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
+                ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
                 : 'text-white/60 hover:bg-white/5 hover:text-white'
             }`}
           >
-            <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'capacity' ? 'bg-white/90' : 'bg-transparent'}`} />
-            <Cpu size={17} className="shrink-0" />
+            <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'capacity' ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
+            <Cpu size={17} className={`shrink-0 ${activeTab === 'capacity' ? 'text-[#00bceb]' : ''}`} />
             <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? '容量规划' : 'Capacity'}</span>
           </button>
 
-          {/* ── Section: 管理层 / Management ── */}
-          <div className="order-[95] px-3 pt-5 pb-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">{language === 'zh' ? '管理层' : 'MANAGEMENT'}</p>
+          <button
+            onClick={() => setActiveTab('reports')}
+            className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+              activeTab === 'reports'
+                ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
+                : 'text-white/60 hover:bg-white/5 hover:text-white'
+            }`}
+          >
+            <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === 'reports' ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
+            <BarChart3 size={17} className={`shrink-0 ${activeTab === 'reports' ? 'text-[#00bceb]' : ''}`} />
+            <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? '报表中心' : 'Reports'}</span>
+          </button>
+
+          <div className="px-3 pt-5 pb-2">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/45">{language === 'zh' ? '平台管理' : 'MANAGEMENT'}</p>
             <div className="mt-1.5 h-px bg-white/10" />
           </div>
 
           {[
             { id: 'history',       icon: History,      label: t('auditLogs') },
-            { id: 'reports',       icon: BarChart3,    label: language === 'zh' ? '报表中心' : 'Reports' },
             { id: 'configuration', icon: Settings,    label: t('configuration') },
             { id: 'users',         icon: User,        label: t('userManagement') },
           ].map(item => (
@@ -5388,12 +5402,12 @@ const App: React.FC = () => {
               onClick={() => setActiveTab(item.id)}
               className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
                 activeTab === item.id
-                  ? 'bg-[#00bceb] text-white shadow-lg shadow-[#00bceb]/20'
+                  ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]'
                   : 'text-white/60 hover:bg-white/5 hover:text-white'
-              } ${item.id === 'history' ? 'order-[100]' : item.id === 'reports' ? 'order-[105]' : item.id === 'configuration' ? 'order-[110]' : 'order-[120]'}`}
+              }`}
             >
-              <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === item.id ? 'bg-white/90' : 'bg-transparent'}`} />
-              <item.icon size={17} className="shrink-0" />
+              <span className={`absolute left-1.5 top-1.5 bottom-1.5 w-0.5 rounded-full transition-all ${activeTab === item.id ? 'bg-[#00bceb]' : 'bg-transparent'}`} />
+              <item.icon size={17} className={`shrink-0 ${activeTab === item.id ? 'text-[#00bceb]' : ''}`} />
               <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{item.label}</span>
             </button>
           ))}
