@@ -326,11 +326,59 @@ textarea {
 	border-bottom: 1px solid var(--header-border);
 }
 
+/* Sidebar collapsed mini mode (desktop only) */
+.sidebar-mini .sidebar-logo-text,
+.sidebar-mini .sidebar-collapse-btn {
+	display: none;
+}
+
+.sidebar-mini .sidebar-logo-area {
+	justify-content: center;
+	padding: 1.25rem 0.75rem;
+}
+
+.sidebar-mini .sidebar-nav-scroll {
+	padding-left: 0.5rem;
+	padding-right: 0.5rem;
+}
+
+.sidebar-mini .sidebar-pinned,
+.sidebar-mini .sidebar-recent {
+	display: none;
+}
+
+.sidebar-mini .sidebar-section-toggle {
+	display: none;
+}
+
+.sidebar-mini .sidebar-section-divider {
+	margin-top: 0.75rem;
+}
+
+.sidebar-mini .sidebar-nav-item {
+	justify-content: center;
+	padding-left: 0;
+	padding-right: 0;
+	gap: 0;
+}
+
+.sidebar-mini .sidebar-nav-label,
+.sidebar-mini .sidebar-nav-badge,
+.sidebar-mini .sidebar-nav-chevron {
+	display: none;
+}
+
+.sidebar-mini .sidebar-subitems {
+	display: none !important;
+	max-height: 0 !important;
+	opacity: 0 !important;
+}
+
 .sidebar-nav-scroll {
 }
 
 .sidebar-nav-scroll::-webkit-scrollbar {
-	width: 8px;
+	width: 4px;
 }
 
 .sidebar-nav-scroll::-webkit-scrollbar-track {
