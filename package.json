@@ -10,7 +10,7 @@
     "dev:backend:win": "cross-env NODE_ENV=development PYTHONPATH=backend .venv/Scripts/python.exe backend/main.py",
     "dev:backend:linux": "cross-env NODE_ENV=development PYTHONPATH=backend .venv/bin/python backend/main.py",
     "dev:backend": "node -e \"const p=process.platform==='win32'?'.venv/Scripts/python.exe':'.venv/bin/python';require('child_process').execSync('cross-env NODE_ENV=development PYTHONPATH=backend '+p+' backend/main.py',{stdio:'inherit'})\"",
-    "dev:frontend": "vite --port 3700 --host 0.0.0.0",
+    "dev:frontend": "vite",
     "start:win": "npm run build && cross-env NODE_ENV=production .venv/Scripts/python.exe backend/main.py",
     "start:linux": "npm run build && cross-env NODE_ENV=production .venv/bin/python backend/main.py",
     "start": "node -e \"const p=process.platform==='win32'?'.venv/Scripts/python.exe':'.venv/bin/python';require('child_process').execSync('cross-env NODE_ENV=production '+p+' backend/main.py',{stdio:'inherit'})\"",

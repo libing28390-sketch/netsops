@@ -1,0 +1,370 @@
+import React from 'react';
+import { motion } from 'motion/react';
+import { Download, Globe, RotateCcw, Search } from 'lucide-react';
+import type { Device } from '../types';
+import { darkActionBtnClass, secondaryActionBtnClass, sectionHeaderRowClass } from '../components/shared';
+import TopologyGraph from '../components/TopologyGraph';
+import TopologyInspectorPanel from '../components/TopologyInspectorPanel';
+
+type TopologyStatusFilter = 'all' | 'online' | 'offline' | 'pending';
+
+interface TopologyStats {
+  nodeCount: number;
+  linkCount: number;
+  siteCount: number;
+  atRiskCount: number;
+  orphanCount: number;
+}
+
+interface TopologyLinkStats {
+  up: number;
+  degraded: number;
+  down: number;
+  stale: number;
+  multiSource: number;
+}
+
+interface TopologyOperationalTone {
+  badge: string;
+  panel: string;
+}
+
+interface TopologyDecoratedLinkLike {
+  id?: string;
+  link_key?: string;
+  source_device_id: string;
+  target_device_id: string;
+  source_port?: string;
+  target_port?: string;
+  source_hostname?: string;
+  source_hostname_resolved?: string;
+  target_hostname?: string;
+  target_hostname_resolved?: string;
+  source_interface_snapshot?: unknown;
+  target_interface_snapshot?: unknown;
+  inferred?: boolean;
+  operational_state?: 'up' | 'degraded' | 'down' | 'stale' | 'unknown';
+  operational_summary?: string;
+  last_seen?: string;
+  evidence_sources: string[];
+  evidence_count?: number;
+  reverse_confirmed?: boolean;
+}
+
+interface TopologyPageProps {
+  language: string;
+  topologyDiscoveryRunning: boolean;
+  topologyStats: TopologyStats;
+  topologyLinkStats: TopologyLinkStats;
+  topologySearch: string;
+  topologySiteFilter: string;
+  topologyRoleFilter: string;
+  topologyStatusFilter: TopologyStatusFilter;
+  topologySiteOptions: string[];
+  topologyRoleOptions: string[];
+  topologyVisibleDevices: Device[];
+  topologyVisibleLinks: TopologyDecoratedLinkLike[];
+  selectedTopologyDeviceId: string | null;
+  selectedTopologyLinkKey: string | null;
+  selectedTopologyDevice: Device | null;
+  selectedTopologyLink: TopologyDecoratedLinkLike | null;
+  topologyNeighborDevices: Device[];
+  topologyDeviceLinks: TopologyDecoratedLinkLike[];
+  topologyPriorityDevices: Device[];
+  topologyOrphanDevices: Device[];
+  topologyCanvasRef: React.RefObject<HTMLDivElement | null>;
+  onTriggerDiscovery: () => void;
+  onExportMap: () => void;
+  onTopologySearchChange: (value: string) => void;
+  onTopologySiteFilterChange: (value: string) => void;
+  onTopologyRoleFilterChange: (value: string) => void;
+  onTopologyStatusFilterChange: (value: TopologyStatusFilter) => void;
+  onSelectTopologyDevice: (deviceId: string) => void;
+  onSelectTopologyLink: (linkKey: string | null) => void;
+  onOpenDeviceDetail: (device: Device) => void;
+  onOpenMonitoring: () => void;
+  formatTopologyPort: (value?: string) => string;
+  formatTopologyInterfaceTelemetry: (snapshot: unknown) => string;
+  formatTopologyLastSeen: (value?: string) => string;
+  formatTopologyOperationalState: (value?: string) => string;
+  formatTopologyEvidenceLabel: (value?: string) => string;
+  getTopologyOperationalTone: (value?: string) => TopologyOperationalTone;
+}
+
+const TopologyPage: React.FC<TopologyPageProps> = ({
+  language,
+  topologyDiscoveryRunning,
+  topologyStats,
+  topologyLinkStats,
+  topologySearch,
+  topologySiteFilter,
+  topologyRoleFilter,
+  topologyStatusFilter,
+  topologySiteOptions,
+  topologyRoleOptions,
+  topologyVisibleDevices,
+  topologyVisibleLinks,
+  selectedTopologyDeviceId,
+  selectedTopologyLinkKey,
+  selectedTopologyDevice,
+  selectedTopologyLink,
+  topologyNeighborDevices,
+  topologyDeviceLinks,
+  topologyPriorityDevices,
+  topologyOrphanDevices,
+  topologyCanvasRef,
+  onTriggerDiscovery,
+  onExportMap,
+  onTopologySearchChange,
+  onTopologySiteFilterChange,
+  onTopologyRoleFilterChange,
+  onTopologyStatusFilterChange,
+  onSelectTopologyDevice,
+  onSelectTopologyLink,
+  onOpenDeviceDetail,
+  onOpenMonitoring,
+  formatTopologyPort,
+  formatTopologyInterfaceTelemetry,
+  formatTopologyLastSeen,
+  formatTopologyOperationalState,
+  formatTopologyEvidenceLabel,
+  getTopologyOperationalTone,
+}) => {
+  return (
+    <div className="h-full flex flex-col space-y-6">
+      <div className={sectionHeaderRowClass}>
+        <div>
+          <h2 className="text-2xl font-medium tracking-tight">{language === 'zh' ? '网络拓扑' : 'Network Topology'}</h2>
+          <p className="text-sm text-black/40">
+            {language === 'zh'
+              ? '基于 LLDP 邻居发现展示网络连接关系，按站点、角色和状态快速缩小故障域。'
+              : 'Visualize LLDP-based network adjacency and reduce the fault domain by site, role, and health state.'}
+          </p>
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onTriggerDiscovery} className={secondaryActionBtnClass} disabled={topologyDiscoveryRunning}>
+            <RotateCcw size={16} />
+            {topologyDiscoveryRunning
+              ? (language === 'zh' ? '发现中...' : 'Discovering...')
+              : (language === 'zh' ? '刷新发现' : 'Refresh Discovery')}
+          </button>
+          <button onClick={onExportMap} className={darkActionBtnClass}>
+            <Download size={16} />
+            {language === 'zh' ? '导出拓扑图' : 'Export Map'}
+          </button>
+        </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
+        {[
+          {
+            label: language === 'zh' ? '可视节点' : 'Visible Nodes',
+            value: topologyStats.nodeCount,
+            tone: 'bg-[#00bceb]/10 text-[#007ea0] border-[#00bceb]/20',
+          },
+          {
+            label: language === 'zh' ? '链路关系' : 'Adjacencies',
+            value: topologyStats.linkCount,
+            tone: 'bg-slate-100 text-slate-700 border-slate-200',
+          },
+          {
+            label: language === 'zh' ? '覆盖站点' : 'Sites',
+            value: topologyStats.siteCount,
+            tone: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+          },
+          {
+            label: language === 'zh' ? '风险节点' : 'At Risk',
+            value: topologyStats.atRiskCount,
+            tone: 'bg-amber-100 text-amber-700 border-amber-200',
+          },
+          {
+            label: language === 'zh' ? '孤立节点' : 'Orphans',
+            value: topologyStats.orphanCount,
+            tone: 'bg-rose-100 text-rose-700 border-rose-200',
+          },
+          {
+            label: language === 'zh' ? '健康链路' : 'Healthy Links',
+            value: topologyLinkStats.up,
+            tone: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+          },
+          {
+            label: language === 'zh' ? '退化链路' : 'Degraded Links',
+            value: topologyLinkStats.degraded,
+            tone: 'bg-amber-100 text-amber-700 border-amber-200',
+          },
+          {
+            label: language === 'zh' ? '中断链路' : 'Down Links',
+            value: topologyLinkStats.down,
+            tone: 'bg-rose-100 text-rose-700 border-rose-200',
+          },
+          {
+            label: language === 'zh' ? '陈旧链路' : 'Stale Links',
+            value: topologyLinkStats.stale,
+            tone: 'bg-sky-100 text-sky-700 border-sky-200',
+          },
+          {
+            label: language === 'zh' ? '多源证据' : 'Multi-source',
+            value: topologyLinkStats.multiSource,
+            tone: 'bg-sky-100 text-sky-700 border-sky-200',
+          },
+        ].map((item) => (
+          <div key={item.label} className="rounded-2xl border border-black/5 bg-white p-4 shadow-sm">
+            <div className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-[0.14em] ${item.tone}`}>
+              {item.label}
+            </div>
+            <div className="mt-3 text-3xl font-semibold tracking-tight text-[#0f172a]">{item.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="rounded-2xl border border-black/5 bg-white p-4 shadow-sm">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_repeat(3,minmax(0,0.8fr))]">
+          <label className="flex items-center gap-2 rounded-xl border border-black/10 px-3 py-2">
+            <Search size={15} className="text-black/35" />
+            <input
+              value={topologySearch}
+              onChange={(event) => onTopologySearchChange(event.target.value)}
+              placeholder={language === 'zh' ? '搜索主机名、IP、站点、角色' : 'Search hostname, IP, site, role'}
+              className="w-full bg-transparent text-sm outline-none placeholder:text-black/30"
+            />
+          </label>
+          <select
+            value={topologySiteFilter}
+            onChange={(event) => onTopologySiteFilterChange(event.target.value)}
+            title={language === 'zh' ? '按站点筛选拓扑' : 'Filter topology by site'}
+            className="rounded-xl border border-black/10 px-3 py-2 text-sm outline-none"
+          >
+            <option value="all">{language === 'zh' ? '全部站点' : 'All Sites'}</option>
+            {topologySiteOptions.map((site) => <option key={site} value={site}>{site}</option>)}
+          </select>
+          <select
+            value={topologyRoleFilter}
+            onChange={(event) => onTopologyRoleFilterChange(event.target.value)}
+            title={language === 'zh' ? '按角色筛选拓扑' : 'Filter topology by role'}
+            className="rounded-xl border border-black/10 px-3 py-2 text-sm outline-none"
+          >
+            <option value="all">{language === 'zh' ? '全部角色' : 'All Roles'}</option>
+            {topologyRoleOptions.map((role) => <option key={role} value={role}>{role}</option>)}
+          </select>
+          <select
+            value={topologyStatusFilter}
+            onChange={(event) => onTopologyStatusFilterChange(event.target.value as TopologyStatusFilter)}
+            title={language === 'zh' ? '按状态筛选拓扑' : 'Filter topology by status'}
+            className="rounded-xl border border-black/10 px-3 py-2 text-sm outline-none"
+          >
+            <option value="all">{language === 'zh' ? '全部状态' : 'All Status'}</option>
+            <option value="online">{language === 'zh' ? '在线' : 'Online'}</option>
+            <option value="offline">{language === 'zh' ? '离线' : 'Offline'}</option>
+            <option value="pending">{language === 'zh' ? '待确认' : 'Pending'}</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,2.2fr)_minmax(320px,0.95fr)]">
+        <div className="relative flex min-h-[620px] flex-col overflow-hidden rounded-2xl border border-black/5 bg-white shadow-sm" ref={topologyCanvasRef}>
+          <div className="absolute inset-0 bg-[radial-gradient(#000_1px,transparent_1px)] bg-[length:20px_20px] opacity-[0.03]" />
+          <div className="relative flex items-center justify-between border-b border-black/5 px-5 py-4">
+            <div>
+              <h3 className="text-lg font-semibold tracking-tight text-[#0f172a]">
+                {language === 'zh' ? '拓扑画布' : 'Topology Canvas'}
+              </h3>
+              <p className="text-xs text-black/45">
+                {language === 'zh'
+                  ? '离线设备默认保留展示；陈旧链路表示最近 30 分钟未刷新。手动发现用于立即校验，不应作为唯一更新方式。'
+                  : 'Offline devices remain visible by default. Stale links mean discovery has not refreshed within the last 30 minutes. Manual discovery is for immediate validation, not the only update path.'}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-black/45">
+              <span className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/90 px-3 py-1.5">
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                {language === 'zh' ? '节点在线 / 链路正常' : 'Node Online / Link Up'}
+              </span>
+              <span className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/90 px-3 py-1.5">
+                <span className="h-2 w-2 rounded-full bg-amber-500" />
+                {language === 'zh' ? '节点告警 / 链路退化' : 'Node Alert / Link Degraded'}
+              </span>
+              <span className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/90 px-3 py-1.5">
+                <span className="h-2 w-2 rounded-full bg-red-500" />
+                {language === 'zh' ? '节点离线 / 链路中断' : 'Node Offline / Link Down'}
+              </span>
+              <span className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/90 px-3 py-1.5">
+                <span className="h-2 w-2 rounded-full bg-sky-500" />
+                {language === 'zh' ? '链路陈旧' : 'Link Stale'}
+              </span>
+              <span className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/90 px-3 py-1.5">
+                <span className="h-2 w-2 rounded-full bg-slate-400" />
+                {language === 'zh' ? '链路未知' : 'Link Unknown'}
+              </span>
+            </div>
+          </div>
+
+          <div className="relative flex-1">
+            {topologyVisibleDevices.length === 0 ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
+                <div className="rounded-full border border-black/10 bg-slate-50 p-4 text-slate-500">
+                  <Globe size={26} />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-slate-700">
+                    {language === 'zh' ? '当前筛选条件下没有可展示的设备' : 'No devices match the current topology filter'}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {language === 'zh' ? '清空搜索或放宽站点、角色、状态筛选后重试。' : 'Clear the search or relax the site, role, or status filters.'}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="relative h-full w-full">
+                <TopologyGraph
+                  devices={topologyVisibleDevices}
+                  links={topologyVisibleLinks}
+                  selectedNodeId={selectedTopologyDeviceId}
+                  selectedLinkKey={selectedTopologyLinkKey}
+                  onNodeClick={(device) => {
+                    onSelectTopologyDevice(device.id);
+                  }}
+                  onLinkClick={(link) => {
+                    onSelectTopologyDevice(link.source_device_id);
+                    onSelectTopologyLink(link.link_key || link.id || null);
+                  }}
+                />
+              </motion.div>
+            )}
+          </div>
+
+          <div className="relative flex flex-wrap items-center gap-3 border-t border-black/5 px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-black/45">
+            <span>{language === 'zh' ? `当前展示 ${topologyStats.nodeCount} 个节点 / ${topologyStats.linkCount} 条链路` : `Showing ${topologyStats.nodeCount} nodes / ${topologyStats.linkCount} links`}</span>
+            <span className="h-3 w-px bg-black/10" />
+            <span>{language === 'zh' ? `${topologyLinkStats.up} 正常 · ${topologyLinkStats.degraded} 退化 · ${topologyLinkStats.down} 中断 · ${topologyLinkStats.stale} 陈旧` : `${topologyLinkStats.up} up · ${topologyLinkStats.degraded} degraded · ${topologyLinkStats.down} down · ${topologyLinkStats.stale} stale`}</span>
+            <span className="h-3 w-px bg-black/10" />
+            <span>{language === 'zh' ? '虚线代表推断链路' : 'Dashed lines indicate inferred links'}</span>
+          </div>
+        </div>
+
+        <TopologyInspectorPanel
+          language={language}
+          selectedTopologyDevice={selectedTopologyDevice}
+          selectedTopologyLink={selectedTopologyLink}
+          topologyNeighborDevices={topologyNeighborDevices}
+          topologyDeviceLinks={topologyDeviceLinks}
+          topologyPriorityDevices={topologyPriorityDevices}
+          topologyOrphanDevices={topologyOrphanDevices}
+          selectedTopologyLinkKey={selectedTopologyLinkKey}
+          secondaryActionBtnClass={secondaryActionBtnClass}
+          onSelectDevice={onSelectTopologyDevice}
+          onSelectLink={onSelectTopologyLink}
+          onOpenDeviceDetail={onOpenDeviceDetail}
+          onOpenMonitoring={onOpenMonitoring}
+          formatTopologyPort={formatTopologyPort}
+          formatTopologyInterfaceTelemetry={formatTopologyInterfaceTelemetry}
+          formatTopologyLastSeen={formatTopologyLastSeen}
+          formatTopologyOperationalState={formatTopologyOperationalState}
+          formatTopologyEvidenceLabel={formatTopologyEvidenceLabel}
+          getTopologyOperationalTone={getTopologyOperationalTone}
+        />
+      </div>
+    </div>
+  );
+};
+
+export default TopologyPage;

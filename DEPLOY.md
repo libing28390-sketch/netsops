@@ -4,7 +4,7 @@
 
 | 组件 | 技术栈 | 端口 |
 |------|--------|------|
-| 前端 | React 19 + TypeScript + Vite + TailwindCSS | 3000 (dev) |
+| 前端 | React 19 + TypeScript + Vite + TailwindCSS | 4300 (dev) |
 | 后端 | Python FastAPI + Uvicorn | 8003 |
 | 数据库 | SQLite (WAL mode) | - |
 | SNMP | pysnmp 7.x | - |
@@ -169,7 +169,7 @@ npm run build
 2. **防火墙**：Ubuntu 默认 UFW 可能阻止外部访问：
    ```bash
    sudo ufw allow 'Nginx Full'   # 生产：80/443
-   sudo ufw allow 3000/tcp       # 仅开发时需要
+   sudo ufw allow 4300/tcp       # 仅开发时需要
    ```
 3. **端口占用**：查看和清理端口：
    ```bash
@@ -226,7 +226,7 @@ npm run build
 | `npm run dev:frontend` | 仅启动前端开发服务器 |
 | `npm run build` | 构建前端生产版本到 `dist/` |
 | `npm run start` | 构建 + 启动生产模式（自动检测平台） |
-| `npm run cleanup` | 清理占用的 8003/3000 端口 |
+| `npm run cleanup` | 清理占用的 8003/4300 端口 |
 | `npm run clean` | 删除 `dist/` 构建目录 |
 
 ### 默认账号
@@ -257,7 +257,7 @@ CREDENTIAL_ENCRYPTION_KEY=change-me-to-a-random-secret
 ENVIRONMENT=production
 
 # 跨域与平台跳转
-CORS_ORIGINS=http://localhost:3000
+CORS_ORIGINS=http://localhost:4300
 PLATFORM_URL=
 
 # 高频原始接口遥测保留时长（小时）
@@ -282,7 +282,7 @@ ALERT_NOTIFY_WEBHOOK_URL=
 
 ### 访问地址
 
-- 开发模式：http://localhost:3000（Vite 代理 API 到 8003）
+- 开发模式：http://localhost:4300（Vite 代理 API 到 8003）
 - 生产模式（直连后端）：http://localhost:8003（`npm run start` / `python backend/main.py`）
 - Nginx 反向代理部署：http://localhost:8080（Ubuntu 一键部署默认端口，可通过 `NGINX_PORT` 修改）
 - Docker 模式：http://localhost:8080（Nginx 容器 → netops 容器）

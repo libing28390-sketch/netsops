@@ -7,11 +7,21 @@ interface InterfaceMonitoringTabProps {
   devices: Device[];
   devicesLastUpdatedAt: number | null;
   language: string;
-  showToast: (msg: string, type: 'success' | 'error' | 'info') => void;
-  refreshDevices: () => Promise<void>;
+  snmpTestingId: string | null;
+  snmpSyncingId: string | null;
+  onSnmpTest: (deviceId: string) => Promise<void>;
+  onSnmpSyncNow: (deviceId: string) => Promise<void>;
 }
 
-function InterfaceMonitoringTab({ devices, devicesLastUpdatedAt, language, showToast, refreshDevices }: InterfaceMonitoringTabProps) {
+function InterfaceMonitoringTab({
+  devices,
+  devicesLastUpdatedAt,
+  language,
+  snmpTestingId,
+  snmpSyncingId,
+  onSnmpTest,
+  onSnmpSyncNow,
+}: InterfaceMonitoringTabProps) {
   // ── Internal state ──
   const [intfSearch, setIntfSearch] = useState('');
   const [intfDevicePage, setIntfDevicePage] = useState(1);
@@ -20,8 +30,6 @@ function InterfaceMonitoringTab({ devices, devicesLastUpdatedAt, language, showT
   const [intfFilterMap, setIntfFilterMap] = useState<Record<string, string>>({});
   const [intfStatusFilter, setIntfStatusFilter] = useState<'all' | 'hasData' | 'hasDown' | 'hasErrors'>('hasData');
   const [intfSortBy, setIntfSortBy] = useState<'name' | 'downCount' | 'errors' | 'bw'>('name');
-  const [snmpTestingId, setSnmpTestingId] = useState<string | null>(null);
-  const [snmpSyncingId, setSnmpSyncingId] = useState<string | null>(null);
 
   // ── "Updated ago" timer ──
   const [intfNowTick, setIntfNowTick] = useState(0);
@@ -35,40 +43,6 @@ function InterfaceMonitoringTab({ devices, devicesLastUpdatedAt, language, showT
     if (!devicesLastUpdatedAt) return null;
     return Math.max(0, Math.floor((Date.now() - devicesLastUpdatedAt) / 1000));
   }, [devicesLastUpdatedAt, intfNowTick]);
-
-  // ── Handlers ──
-  const handleSnmpTest = async (deviceId: string) => {
-    setSnmpTestingId(deviceId);
-    try {
-      const resp = await fetch(`/api/devices/${deviceId}/snmp-test`, { method: 'POST' });
-      const data = await resp.json();
-      if (data.success && data.synced) {
-        await refreshDevices();
-      }
-    } catch (err: any) {
-      // silently ignore
-    } finally {
-      setSnmpTestingId(null);
-    }
-  };
-
-  const handleSnmpSyncNow = async (deviceId: string) => {
-    setSnmpSyncingId(deviceId);
-    try {
-      const resp = await fetch(`/api/devices/${deviceId}/snmp-test`, { method: 'POST' });
-      const data = await resp.json();
-      if (!resp.ok || !data.success) {
-        showToast(language === 'zh' ? 'SNMP 立即同步失败' : 'SNMP sync failed', 'error');
-        return;
-      }
-      await refreshDevices();
-      showToast(language === 'zh' ? 'SNMP 信息已更新' : 'SNMP data refreshed', 'success');
-    } catch (err) {
-      showToast(language === 'zh' ? 'SNMP 立即同步失败' : 'SNMP sync failed', 'error');
-    } finally {
-      setSnmpSyncingId(null);
-    }
-  };
 
   // ── Computed values ──
   const DEVS_PER_PAGE = 10;
@@ -323,14 +297,14 @@ function InterfaceMonitoringTab({ devices, devicesLastUpdatedAt, language, showT
                               <span className="text-[10px] text-black/30 italic">{language === 'zh' ? '未采集到接口数据' : 'No interface data'}</span>
                             )}
                             <button
-                              onClick={(e) => { e.stopPropagation(); handleSnmpTest(device.id); }}
+                              onClick={(e) => { e.stopPropagation(); void onSnmpTest(device.id); }}
                               disabled={snmpTestingId === device.id}
                               className="ml-2 px-3 py-1 text-[10px] font-bold uppercase bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-all disabled:opacity-50 flex-shrink-0"
                             >
                               {snmpTestingId === device.id ? 'Testing...' : 'SNMP Test'}
                             </button>
                             <button
-                              onClick={(e) => { e.stopPropagation(); handleSnmpSyncNow(device.id); }}
+                              onClick={(e) => { e.stopPropagation(); void onSnmpSyncNow(device.id); }}
                               disabled={snmpSyncingId === device.id}
                               className="px-3 py-1 text-[10px] font-bold uppercase bg-emerald-50 text-emerald-600 rounded-lg hover:bg-emerald-100 transition-all disabled:opacity-50 flex-shrink-0"
                             >

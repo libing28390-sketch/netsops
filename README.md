@@ -105,7 +105,7 @@ npm run dev
 
 Default development endpoints:
 
-- Frontend: http://localhost:3700
+- Frontend: http://localhost:4300
 - Backend API: http://localhost:8003
 
 #### Build
@@ -241,7 +241,7 @@ npm run dev
 
 默认开发访问地址：
 
-- 前端：http://localhost:3700
+- 前端：http://localhost:4300
 - 后端 API：http://localhost:8003
 
 #### 构建

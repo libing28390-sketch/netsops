@@ -1,0 +1,291 @@
+import React from 'react';
+import { motion } from 'motion/react';
+import {
+  Activity,
+  Bell,
+  ChevronDown,
+  Clock,
+  Globe,
+  History,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  Moon,
+  ShieldCheck,
+  Sun,
+  User,
+} from 'lucide-react';
+import type { NotificationItem, SessionUser, ThemeMode } from '../types';
+
+interface TopHeaderProps {
+  language: string;
+  resolvedTheme: 'light' | 'dark';
+  themeMode: ThemeMode;
+  sidebarCollapsed: boolean;
+  pageTitle: string;
+  currentUser: SessionUser;
+  currentAvatar: string;
+  currentUserLastLogin: string;
+  unreadNotificationCount: number;
+  unreadNotifications: NotificationItem[];
+  showNotifications: boolean;
+  showUserMenu: boolean;
+  userMenuRef: React.RefObject<HTMLDivElement | null>;
+  renderAvatarContent: (avatarValue: string, fallbackIconSize: number) => React.ReactNode;
+  onToggleSidebar: () => void;
+  onToggleNotifications: () => void;
+  onToggleUserMenu: () => void;
+  onOpenProfile: () => void;
+  onOpenDashboard: () => void;
+  onOpenMonitoring: () => void;
+  onOpenHealth: () => void;
+  onOpenHistory: () => void;
+  onThemeModeChange: (mode: ThemeMode) => void;
+  onLanguageChange: (language: 'en' | 'zh') => void;
+  onLogout: () => void;
+  onMarkAllNotificationsRead: () => void;
+  onMarkNotificationRead: (id: string) => void;
+}
+
+const TopHeader: React.FC<TopHeaderProps> = ({
+  language,
+  resolvedTheme,
+  themeMode,
+  sidebarCollapsed,
+  pageTitle,
+  currentUser,
+  currentAvatar,
+  currentUserLastLogin,
+  unreadNotificationCount,
+  unreadNotifications,
+  showNotifications,
+  showUserMenu,
+  userMenuRef,
+  renderAvatarContent,
+  onToggleSidebar,
+  onToggleNotifications,
+  onToggleUserMenu,
+  onOpenProfile,
+  onOpenDashboard,
+  onOpenMonitoring,
+  onOpenHealth,
+  onOpenHistory,
+  onThemeModeChange,
+  onLanguageChange,
+  onLogout,
+  onMarkAllNotificationsRead,
+  onMarkNotificationRead,
+}) => {
+  return (
+    <header className="theme-header h-14 md:h-16 shadow-sm px-3 md:px-8 flex items-center justify-between z-10">
+      <div className="flex items-center gap-2 md:gap-4 flex-1 min-w-0">
+        <button
+          onClick={onToggleSidebar}
+          title={language === 'zh' ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar')}
+          className={`p-2 rounded-lg transition-all ${resolvedTheme === 'dark' ? 'text-white/55 hover:text-white hover:bg-white/10' : 'text-black/45 hover:text-black hover:bg-black/5'}`}
+        >
+          <Menu size={20} />
+        </button>
+        <div>
+          <h2 className={`text-base md:text-lg font-semibold tracking-tight truncate ${resolvedTheme === 'dark' ? 'text-white/92' : 'text-black/85'}`}>
+            {pageTitle}
+          </h2>
+          <p className={`text-[11px] hidden sm:block ${resolvedTheme === 'dark' ? 'text-white/45' : 'text-black/40'}`}>
+            {new Date().toLocaleDateString()} · NetPilot Control Plane
+          </p>
+        </div>
+      </div>
+
+      <div className="relative flex items-center gap-3" ref={userMenuRef}>
+        <div className="relative">
+          <button
+            onClick={onToggleNotifications}
+            className={`p-2 relative rounded-lg transition-colors ${resolvedTheme === 'dark' ? 'text-white/55 hover:text-white hover:bg-white/10' : 'text-black/40 hover:text-black hover:bg-black/5'}`}
+            title="Notifications"
+          >
+            <Bell size={20} />
+            {unreadNotificationCount > 0 && (
+              <span className={`absolute top-1.5 right-1.5 min-w-2 h-2 px-0.5 bg-red-500 rounded-full border-2 text-[9px] leading-none flex items-center justify-center text-white ${resolvedTheme === 'dark' ? 'border-[#0f1828]' : 'border-white'}`} />
+            )}
+          </button>
+
+          {showNotifications && (
+            <motion.div
+              initial={{ opacity: 0, y: -6, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              transition={{ duration: 0.16, ease: 'easeOut' }}
+              className={`absolute top-12 right-0 w-[calc(100vw-2rem)] sm:w-80 max-w-80 rounded-xl shadow-2xl z-50 overflow-hidden ${resolvedTheme === 'dark' ? 'bg-[#121c2d] border border-white/10' : 'bg-white border border-black/10'}`}
+            >
+              <div className={`px-4 py-3 border-b flex items-center justify-between ${resolvedTheme === 'dark' ? 'border-white/10 bg-white/5' : 'border-black/5 bg-black/[0.02]'}`}>
+                <p className={`text-sm font-semibold ${resolvedTheme === 'dark' ? 'text-white/90' : 'text-black/80'}`}>Notifications</p>
+                <button
+                  onClick={onMarkAllNotificationsRead}
+                  className={`text-[11px] font-semibold ${resolvedTheme === 'dark' ? 'text-[#00bceb] hover:text-[#40d6f6]' : 'text-[#008bb0] hover:text-[#006c8a]'}`}
+                >
+                  Mark all read
+                </button>
+              </div>
+              <div className="max-h-80 overflow-auto">
+                {unreadNotifications.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => onMarkNotificationRead(item.id)}
+                    className={`w-full text-left px-4 py-3 border-b transition-all ${resolvedTheme === 'dark' ? 'border-white/5 hover:bg-white/5' : 'border-black/5 hover:bg-black/[0.02]'}`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${item.read ? 'bg-transparent border border-transparent' : 'bg-[#00bceb]'}`} />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.14em] ${
+                            item.source === 'system_resource'
+                              ? 'bg-red-100 text-red-700'
+                              : item.source === 'network_monitor'
+                                ? 'bg-cyan-100 text-cyan-700'
+                                : 'bg-black/5 text-black/45'
+                          }`}>
+                            {item.source === 'system_resource'
+                              ? (language === 'zh' ? '平台资源' : 'Platform')
+                              : item.source === 'network_monitor'
+                                ? (language === 'zh' ? '网络监控' : 'Network')
+                                : (item.source || (language === 'zh' ? '通知' : 'Notice'))}
+                          </span>
+                          {item.severity && <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.14em] ${
+                            item.severity === 'critical' || item.severity === 'high'
+                              ? 'bg-red-100 text-red-700'
+                              : item.severity === 'major' || item.severity === 'medium'
+                                ? 'bg-amber-100 text-amber-700'
+                                : 'bg-emerald-100 text-emerald-700'
+                          }`}>
+                            {item.severity === 'critical'
+                              ? (language === 'zh' ? '严重' : 'Critical')
+                              : item.severity === 'major'
+                                ? (language === 'zh' ? '主要' : 'Major')
+                                : item.severity === 'warning'
+                                  ? (language === 'zh' ? '次要' : 'Minor')
+                                  : item.severity === 'high'
+                                    ? (language === 'zh' ? '高' : 'High')
+                                    : item.severity === 'medium'
+                                      ? (language === 'zh' ? '中' : 'Medium')
+                                      : (language === 'zh' ? '低' : 'Low')}
+                          </span>}
+                        </div>
+                        <p className={`text-sm font-semibold truncate ${resolvedTheme === 'dark' ? 'text-white/90' : 'text-black/80'}`}>{item.title}</p>
+                        <p className={`text-xs mt-0.5 ${resolvedTheme === 'dark' ? 'text-white/55' : 'text-black/50'}`}>{item.message}</p>
+                        <p className={`text-[10px] mt-1 ${resolvedTheme === 'dark' ? 'text-white/40' : 'text-black/40'}`}>{item.time ? new Date(item.time).toLocaleString() : ''}</p>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+                {unreadNotifications.length === 0 && (
+                  <p className={`px-4 py-6 text-center text-xs ${resolvedTheme === 'dark' ? 'text-white/50' : 'text-black/45'}`}>
+                    No notifications.
+                  </p>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </div>
+
+        <button
+          onClick={onToggleUserMenu}
+          className={`flex items-center gap-2 px-2 py-1.5 rounded-lg transition-all ${resolvedTheme === 'dark' ? 'hover:bg-white/10' : 'hover:bg-black/[0.04]'}`}
+        >
+          <div className={`w-7 h-7 rounded-full border overflow-hidden flex items-center justify-center ${resolvedTheme === 'dark' ? 'bg-white/10 border-white/10 text-white/70' : 'bg-black/10 border-black/5 text-black/60'}`}>
+            {renderAvatarContent(currentAvatar, 15)}
+          </div>
+          <span className={`text-xs font-semibold max-w-24 truncate ${resolvedTheme === 'dark' ? 'text-white/85' : 'text-black/70'}`}>{currentUser.username}</span>
+          <ChevronDown size={14} className={resolvedTheme === 'dark' ? 'text-white/45' : 'text-black/35'} />
+        </button>
+
+        {showUserMenu && (
+          <motion.div
+            initial={{ opacity: 0, y: -6, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ duration: 0.16, ease: 'easeOut' }}
+            className={`absolute top-14 right-0 w-[calc(100vw-2rem)] sm:w-[300px] max-w-[300px] rounded-xl shadow-2xl z-50 overflow-hidden ${resolvedTheme === 'dark' ? 'bg-[#161b22] border border-white/[0.12]' : 'bg-white border border-black/[0.12] shadow-lg'}`}
+          >
+            <div className={`flex items-center gap-3 px-4 py-3 border-b ${resolvedTheme === 'dark' ? 'border-white/[0.08]' : 'border-black/[0.06]'}`}>
+              <div className={`w-9 h-9 rounded-full border overflow-hidden flex-shrink-0 flex items-center justify-center ${resolvedTheme === 'dark' ? 'bg-white/10 border-white/10 text-white/70' : 'bg-black/10 border-black/5 text-black/60'}`}>
+                {renderAvatarContent(currentAvatar, 18)}
+              </div>
+              <div className="min-w-0">
+                <p className={`text-[13px] font-semibold truncate leading-tight ${resolvedTheme === 'dark' ? 'text-white/90' : 'text-black/85'}`}>{currentUser.username}</p>
+                <p className={`text-[11px] truncate ${resolvedTheme === 'dark' ? 'text-white/45' : 'text-black/45'}`}>{currentUser.role || 'Administrator'}</p>
+              </div>
+            </div>
+
+            <div className={`py-1 border-b ${resolvedTheme === 'dark' ? 'border-white/[0.08]' : 'border-black/[0.06]'}`}>
+              <button onClick={onOpenProfile} className={`w-full flex items-center gap-3 px-4 py-[7px] text-[13px] transition-colors ${resolvedTheme === 'dark' ? 'text-white/80 hover:bg-white/[0.06]' : 'text-black/70 hover:bg-black/[0.03]'}`}>
+                <User size={16} className="flex-shrink-0 opacity-70" />
+                {language === 'zh' ? '个人资料' : 'Your profile'}
+              </button>
+              <button onClick={onOpenDashboard} className={`w-full flex items-center gap-3 px-4 py-[7px] text-[13px] transition-colors ${resolvedTheme === 'dark' ? 'text-white/80 hover:bg-white/[0.06]' : 'text-black/70 hover:bg-black/[0.03]'}`}>
+                <LayoutDashboard size={16} className="flex-shrink-0 opacity-70" />
+                {language === 'zh' ? '仪表盘' : 'Dashboard'}
+              </button>
+              <button onClick={onOpenMonitoring} className={`w-full flex items-center gap-3 px-4 py-[7px] text-[13px] transition-colors ${resolvedTheme === 'dark' ? 'text-white/80 hover:bg-white/[0.06]' : 'text-black/70 hover:bg-black/[0.03]'}`}>
+                <Activity size={16} className="flex-shrink-0 opacity-70" />
+                {language === 'zh' ? '监控中心' : 'Monitoring'}
+              </button>
+              <button onClick={onOpenHealth} className={`w-full flex items-center gap-3 px-4 py-[7px] text-[13px] transition-colors ${resolvedTheme === 'dark' ? 'text-white/80 hover:bg-white/[0.06]' : 'text-black/70 hover:bg-black/[0.03]'}`}>
+                <ShieldCheck size={16} className="flex-shrink-0 opacity-70" />
+                {language === 'zh' ? '健康检测' : 'Health Detection'}
+              </button>
+              <button onClick={onOpenHistory} className={`w-full flex items-center gap-3 px-4 py-[7px] text-[13px] transition-colors ${resolvedTheme === 'dark' ? 'text-white/80 hover:bg-white/[0.06]' : 'text-black/70 hover:bg-black/[0.03]'}`}>
+                <History size={16} className="flex-shrink-0 opacity-70" />
+                {language === 'zh' ? '审计日志' : 'Audit logs'}
+              </button>
+            </div>
+
+            <div className={`py-1 border-b ${resolvedTheme === 'dark' ? 'border-white/[0.08]' : 'border-black/[0.06]'}`}>
+              <div className={`w-full flex items-center justify-between px-4 py-[7px] text-[13px] ${resolvedTheme === 'dark' ? 'text-white/80' : 'text-black/70'}`}>
+                <div className="flex items-center gap-3">
+                  {resolvedTheme === 'dark' ? <Moon size={16} className="flex-shrink-0 opacity-70" /> : <Sun size={16} className="flex-shrink-0 opacity-70" />}
+                  <span>{language === 'zh' ? '外观' : 'Appearance'}</span>
+                </div>
+                <div className={`flex items-center rounded-md border p-0.5 ${resolvedTheme === 'dark' ? 'border-white/10 bg-white/5' : 'border-black/10 bg-black/[0.03]'}`}>
+                  <button onClick={() => onThemeModeChange('light')} title="Light" className={`p-1 rounded transition-all ${themeMode === 'light' ? 'bg-[#00bceb]/15 text-[#00bceb]' : (resolvedTheme === 'dark' ? 'text-white/45 hover:text-white' : 'text-black/40 hover:text-black')}`}>
+                    <Sun size={13} />
+                  </button>
+                  <button onClick={() => onThemeModeChange('dark')} title="Dark" className={`p-1 rounded transition-all ${themeMode === 'dark' ? 'bg-[#00bceb]/15 text-[#00bceb]' : (resolvedTheme === 'dark' ? 'text-white/45 hover:text-white' : 'text-black/40 hover:text-black')}`}>
+                    <Moon size={13} />
+                  </button>
+                </div>
+              </div>
+              <div className={`w-full flex items-center justify-between px-4 py-[7px] text-[13px] ${resolvedTheme === 'dark' ? 'text-white/80' : 'text-black/70'}`}>
+                <div className="flex items-center gap-3">
+                  <Globe size={16} className="flex-shrink-0 opacity-70" />
+                  <span>{language === 'zh' ? '语言' : 'Language'}</span>
+                </div>
+                <div className={`flex items-center rounded-md border p-0.5 ${resolvedTheme === 'dark' ? 'border-white/10 bg-white/5' : 'border-black/10 bg-black/[0.03]'}`}>
+                  <button onClick={() => onLanguageChange('en')} className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-all ${language === 'en' ? 'bg-[#00bceb]/15 text-[#00bceb]' : (resolvedTheme === 'dark' ? 'text-white/45 hover:text-white' : 'text-black/40 hover:text-black')}`}>
+                    EN
+                  </button>
+                  <button onClick={() => onLanguageChange('zh')} className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-all ${language === 'zh' ? 'bg-[#00bceb]/15 text-[#00bceb]' : (resolvedTheme === 'dark' ? 'text-white/45 hover:text-white' : 'text-black/40 hover:text-black')}`}>
+                    中文
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className={`px-4 py-2 border-b ${resolvedTheme === 'dark' ? 'border-white/[0.08]' : 'border-black/[0.06]'}`}>
+              <p className={`text-[11px] flex items-center gap-2 ${resolvedTheme === 'dark' ? 'text-white/35' : 'text-black/35'}`}>
+                <Clock size={12} className="flex-shrink-0" />
+                {language === 'zh' ? '上次登录' : 'Last login'}: {currentUserLastLogin}
+              </p>
+            </div>
+
+            <div className="py-1">
+              <button onClick={onLogout} className={`w-full flex items-center gap-3 px-4 py-[7px] text-[13px] transition-colors ${resolvedTheme === 'dark' ? 'text-white/80 hover:bg-white/[0.06]' : 'text-black/70 hover:bg-black/[0.03]'}`}>
+                <LogOut size={16} className="flex-shrink-0 opacity-70" />
+                {language === 'zh' ? '退出登录' : 'Logout'}
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </div>
+    </header>
+  );
+};
+
+export default TopHeader;

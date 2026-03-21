@@ -2,7 +2,7 @@
 
 /**
  * 清理占用的端口（跨平台支持 Windows / Linux / macOS）
- * 在启动开发环境前运行此脚本来清理 8003 和 3000 端口
+ * 在启动开发环境前运行此脚本来清理 8003 和 4300 端口
  */
 
 import { exec } from 'child_process';
@@ -48,10 +48,10 @@ async function killProcessOnPort(port) {
 }
 
 async function main() {
-  console.log('Cleaning up ports 8003 and 3000...');
+  console.log('Cleaning up ports 8003 and 4300...');
   
   await killProcessOnPort(8003);
-  await killProcessOnPort(3000);
+  await killProcessOnPort(4300);
   
   // Wait for ports to be released
   await new Promise(resolve => setTimeout(resolve, 1000));
