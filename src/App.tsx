@@ -15,7 +15,7 @@ import DeviceDetailModal from './components/DeviceDetailModal';
 import CustomCommandModal from './components/CustomCommandModal';
 import AddScenarioModal from './components/AddScenarioModal';
 import CommandPalette from './components/CommandPalette';
-import Sidebar from './components/Sidebar';
+import Sidebar from './components/sidebar';
 import TopHeader from './components/TopHeader';
 import ProfileModal from './components/ProfileModal';
 import CommandPreviewModal from './components/CommandPreviewModal';

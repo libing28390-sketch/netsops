@@ -317,13 +317,29 @@ textarea {
 	color: var(--app-text);
 }
 
+/* ─── Sidebar Shell ─── */
+.sidebar-shell {
+	background: #0d1117;
+}
+
+/* Active indicator: left accent bar */
+.sidebar-active-indicator {
+	position: relative;
+}
+.sidebar-active-indicator::before {
+	content: '';
+	position: absolute;
+	left: 0;
+	top: 4px;
+	bottom: 4px;
+	width: 2px;
+	border-radius: 1px;
+	background: #58a6ff;
+}
+
+/* Keep old class for header compat */
 .theme-sidebar {
-	background:
-		radial-gradient(circle at top left, rgba(34, 211, 238, 0.08), transparent 24%),
-		radial-gradient(circle at 82% 20%, rgba(14, 165, 233, 0.06), transparent 20%),
-		linear-gradient(180deg, rgba(255, 255, 255, 0.028) 0%, rgba(255, 255, 255, 0.008) 12%, rgba(2, 8, 23, 0) 28%),
-		linear-gradient(180deg, #07101d 0%, #06101b 46%, #050c15 100%);
-	box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.03), inset 0 1px 0 rgba(255, 255, 255, 0.02);
+	background: #0d1117;
 }
 
 .theme-header {
@@ -331,80 +347,29 @@ textarea {
 	border-bottom: 1px solid var(--header-border);
 }
 
-/* Sidebar collapsed mini mode (desktop only) */
-.sidebar-mini .sidebar-logo-text,
-.sidebar-mini .sidebar-collapse-btn {
-	display: none;
-}
-
-.sidebar-mini .sidebar-logo-area {
-	justify-content: center;
-	padding: 1.25rem 0.75rem;
-}
-
-.sidebar-mini .sidebar-nav-scroll {
-	padding-left: 0.5rem;
-	padding-right: 0.5rem;
-}
-
-.sidebar-mini .sidebar-pinned,
-.sidebar-mini .sidebar-recent {
-	display: none;
-}
-
-.sidebar-mini .sidebar-section-toggle {
-	display: none;
-}
-
-.sidebar-mini .sidebar-section-divider {
-	margin-top: 0.75rem;
-}
-
-.sidebar-mini .sidebar-nav-item {
-	justify-content: center;
-	padding-left: 0;
-	padding-right: 0;
-	gap: 0;
-}
-
-.sidebar-mini .sidebar-nav-label,
-.sidebar-mini .sidebar-nav-badge,
-.sidebar-mini .sidebar-nav-chevron {
-	display: none;
-}
-
-.sidebar-mini .sidebar-subitems {
-	display: none !important;
-	max-height: 0 !important;
-	opacity: 0 !important;
-}
+/* Sidebar collapsed mini mode — legacy compat (new sidebar handles mini internally) */
 
 .sidebar-nav-scroll {
-	scrollbar-width: auto;
-	scrollbar-color: rgba(56, 189, 248, 0.82) rgba(255, 255, 255, 0.08);
-	scrollbar-gutter: stable both-edges;
+	scrollbar-width: thin;
+	scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
 	overscroll-behavior: contain;
 }
 
 .sidebar-nav-scroll::-webkit-scrollbar {
-	width: 10px;
+	width: 4px;
 }
 
 .sidebar-nav-scroll::-webkit-scrollbar-track {
-	background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.035));
-	border-radius: 9999px;
-	border: 1px solid rgba(255, 255, 255, 0.05);
+	background: transparent;
 }
 
 .sidebar-nav-scroll::-webkit-scrollbar-thumb {
-	background: linear-gradient(180deg, rgba(125, 211, 252, 0.92), rgba(14, 165, 233, 0.86));
+	background: rgba(255, 255, 255, 0.1);
 	border-radius: 9999px;
-	border: 1px solid rgba(255, 255, 255, 0.12);
-	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24);
 }
 
 .sidebar-nav-scroll::-webkit-scrollbar-thumb:hover {
-	background: linear-gradient(180deg, rgba(165, 243, 252, 0.88), rgba(56, 189, 248, 0.86));
+	background: rgba(255, 255, 255, 0.2);
 }
 
 /* Terminal output scrollbar */
