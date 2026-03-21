@@ -126,41 +126,105 @@ const Sidebar: React.FC<SidebarProps> = ({
   setConfigGroupOpen,
   setManagementGroupOpen,
 }) => {
+  const navLabelClass = isMobile
+    ? 'min-w-0 flex-1 text-left whitespace-normal break-words leading-[1.18rem] pr-1 text-[12.25px] font-medium tracking-[0.008em]'
+    : 'min-w-0 flex-1 text-left whitespace-normal break-words leading-[1.12rem] pr-1 text-[12px] font-medium tracking-[0.01em]';
+  const chipLabelClass = isMobile
+    ? 'block max-w-[132px] whitespace-normal break-words leading-4 text-left'
+    : 'block truncate max-w-[112px]';
+  const subItemLabelClass = isMobile
+    ? 'min-w-0 flex-1 text-left text-[12px] whitespace-normal break-words leading-[1.28rem] font-normal text-slate-300/86'
+    : 'min-w-0 flex-1 text-left text-[11.5px] whitespace-normal break-words leading-[1.12rem] font-normal text-slate-300/84';
+  const navButtonClass = isMobile
+    ? 'relative w-full flex items-start gap-2.5 px-4 py-2.75 rounded-xl text-[12.25px] font-medium transition-all border border-transparent'
+    : 'relative w-full flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl text-[12px] font-medium transition-all border border-transparent';
+  const navButtonGroupClass = isMobile
+    ? 'relative w-full flex items-start gap-2.5 px-4 py-2.75 rounded-xl text-[12.25px] font-medium transition-all group border border-transparent'
+    : 'relative w-full flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl text-[12px] font-medium transition-all group border border-transparent';
+  const subItemButtonClass = isMobile
+    ? 'w-full flex items-start gap-2 pl-5 pr-3 py-2 rounded-lg text-[12.5px] transition-all'
+    : 'w-full flex items-start gap-2 pl-5 pr-3 py-1.75 rounded-lg text-[11.5px] transition-all';
+  const groupChevronWrapClass = isMobile
+    ? 'flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-all duration-200 self-center'
+    : 'flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition-all duration-200';
+  const groupChevronIconSize = isMobile ? 12 : 14;
+  const plainChevronClass = isMobile ? 'text-white/30 transition-transform duration-200 self-center shrink-0' : 'text-white/30 transition-transform duration-200';
+  const metricBadgeClass = isMobile
+    ? 'hidden'
+    : `shrink-0 whitespace-nowrap rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em] mr-1 shadow-sm ${hostResourceTone}`;
+  const alertBadgeClass = isMobile
+    ? `shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[8px] font-bold leading-none ${alertNavTone}`
+    : `shrink-0 whitespace-nowrap rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em] mr-1 shadow-sm ${alertNavTone}`;
+  const activePrimaryNavClass = 'border-cyan-400/12 bg-[linear-gradient(90deg,rgba(8,145,178,0.12),rgba(15,23,42,0.93)_18%,rgba(30,41,59,0.86)_100%)] text-white shadow-[inset_2px_0_0_0_rgba(34,211,238,0.78),inset_0_0_0_1px_rgba(56,189,248,0.07),0_8px_18px_rgba(2,8,23,0.14)]';
+  const inactivePrimaryNavClass = 'bg-white/[0.016] text-slate-300/92 hover:bg-white/[0.045] hover:text-slate-50 hover:border-white/7';
+  const sectionToggleClass = isMobile
+    ? 'w-full mt-3 px-3.5 py-2.25 flex items-center gap-2 rounded-xl border border-cyan-300/10 bg-[linear-gradient(90deg,rgba(34,211,238,0.08),rgba(255,255,255,0.028))] text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] transition-all hover:border-cyan-300/16 hover:bg-[linear-gradient(90deg,rgba(34,211,238,0.1),rgba(255,255,255,0.04))]'
+    : 'w-full mt-3 px-3.5 py-2 flex items-center gap-2 rounded-xl border border-cyan-300/10 bg-[linear-gradient(90deg,rgba(34,211,238,0.07),rgba(255,255,255,0.024))] text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] transition-all hover:border-cyan-300/16 hover:bg-[linear-gradient(90deg,rgba(34,211,238,0.09),rgba(255,255,255,0.036))]';
+  const sectionLabelClass = language === 'zh'
+    ? 'flex-1 text-[12.5px] font-bold tracking-[0.16em] text-slate-100/92'
+    : 'flex-1 text-[10px] font-bold uppercase tracking-[0.28em] text-slate-100/82';
+  const sectionMetaLabelClass = language === 'zh'
+    ? 'text-[10.5px] font-semibold tracking-[0.06em] text-slate-400/74'
+    : 'text-[9.5px] font-semibold uppercase tracking-[0.18em] text-slate-400/68';
+  const chipButtonClass = isMobile
+    ? 'max-w-full px-2.5 py-1.5 rounded-lg text-[10px] transition-all border pr-5'
+    : 'max-w-full px-2.5 py-1.5 rounded-lg text-[10.5px] transition-all border pr-5';
+  const mutedChipClass = 'border-white/7 text-white/46 bg-white/[0.028] hover:text-white/72 hover:bg-white/[0.05] hover:border-white/10';
+  const activeChipClass = 'border-cyan-400/24 text-cyan-200 bg-cyan-400/[0.09] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]';
+  const subNavRailClass = isMobile
+    ? 'ml-4 rounded-xl border border-white/4 bg-slate-950/18 pl-2.5 pr-1.5 pt-1.5 pb-1.5 space-y-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.015)]'
+    : 'ml-5 rounded-xl border border-white/4 bg-slate-950/18 pl-2.5 pr-1.5 pt-1.5 pb-1.5 space-y-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.015)]';
+  const activeSubItemClass = 'bg-white/[0.055] text-sky-50 shadow-[inset_2px_0_0_0_rgba(34,211,238,0.82)]';
+  const inactiveSubItemClass = 'text-slate-300/92 hover:bg-white/[0.04] hover:text-slate-100';
+  const shelfClass = 'mx-2 rounded-xl border border-white/5 bg-white/[0.022] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]';
+  const sectionDividerClass = 'hidden';
+  const shellToneLabel = language === 'zh' ? '网络运维中枢' : 'NETWORK OPS';
+
   return (
     <>
       {isMobile && !sidebarCollapsed && (
         <div className="fixed inset-0 z-[25] bg-black/50 md:hidden" onClick={() => setSidebarCollapsed(true)} />
       )}
 
-      <aside className={`theme-sidebar flex flex-col flex-shrink-0 shadow-2xl transition-all duration-300 ease-in-out ${
+      <aside className={`theme-sidebar relative overflow-hidden flex flex-col flex-shrink-0 shadow-2xl transition-all duration-300 ease-in-out border-r border-white/6 ${
         isMobile
-          ? `fixed inset-y-0 left-0 w-72 z-30 ${sidebarCollapsed ? '-translate-x-full' : 'translate-x-0'}`
+          ? `fixed inset-y-0 left-0 w-[20rem] z-30 ${sidebarCollapsed ? '-translate-x-full' : 'translate-x-0'}`
           : `z-20 ${sidebarCollapsed ? 'w-0 min-w-0 overflow-hidden opacity-0' : 'w-72 min-w-72'}`
       }`}>
-        <div className="p-6 border-b border-white/5 flex items-center justify-between">
+        <div className="pointer-events-none absolute inset-0">
+          <div className="absolute -top-16 left-[-3rem] h-36 w-36 rounded-full bg-cyan-400/8 blur-3xl" />
+          <div className="absolute top-56 -right-10 h-28 w-28 rounded-full bg-sky-500/8 blur-3xl" />
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.015),rgba(255,255,255,0)_20%,rgba(2,8,23,0.1)_100%)]" />
+        </div>
+
+        <div className="relative px-5 pt-5 pb-4 border-b border-white/5 bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.008))] flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-[#00bceb] rounded-lg flex items-center justify-center text-white shadow-lg shadow-[#00bceb]/20">
+            <div className="w-10 h-10 rounded-xl border border-cyan-300/14 bg-[linear-gradient(180deg,rgba(34,211,238,0.14),rgba(14,165,233,0.05))] flex items-center justify-center text-white shadow-[0_8px_18px_rgba(14,165,233,0.12)]">
               <Activity size={18} />
             </div>
-            <h1 className="font-bold tracking-tight text-white whitespace-nowrap">NetPilot</h1>
+            <div className="min-w-0">
+              <h1 className="font-semibold text-[1.05rem] tracking-[0.01em] text-white whitespace-nowrap">NetPilot</h1>
+              <p className="mt-0.5 text-[9.5px] font-medium tracking-[0.16em] text-cyan-100/48 whitespace-nowrap">{shellToneLabel}</p>
+            </div>
           </div>
           <button
             onClick={() => setSidebarCollapsed(true)}
             title={language === 'zh' ? '收起侧栏' : 'Collapse sidebar'}
-            className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/10 transition-all"
+            className="mt-0.5 p-2 rounded-lg border border-white/5 bg-white/[0.025] text-white/42 hover:text-white hover:bg-white/[0.06] hover:border-white/10 transition-all"
           >
             <PanelLeftClose size={16} />
           </button>
         </div>
 
-        <nav className="sidebar-nav-scroll flex flex-col flex-1 px-3 py-4 space-y-1 mt-2 overflow-y-auto">
+        <nav className="sidebar-nav-scroll relative min-h-0 flex flex-col flex-1 px-3 py-4 pr-3 pb-6 space-y-1.5 mt-2 overflow-y-scroll overscroll-contain">
+          <div className="pointer-events-none absolute right-1 top-4 bottom-4 w-[3px] rounded-full bg-white/6" />
           {pinnedPaths.length > 0 && (
-            <div className="px-3 pb-2">
-              <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-500 flex items-center gap-1">
-                <Pin size={9} className="opacity-60" />
-                {language === 'zh' ? '固定' : 'PINNED'}
+            <div className={shelfClass}>
+              <p className={`${sectionMetaLabelClass} flex items-center gap-1.5`}>
+                <Pin size={10} className="opacity-65" />
+                {language === 'zh' ? '固定入口' : 'Pinned'}
               </p>
-              <div className="mt-2 flex flex-wrap gap-1.5">
+              <div className="mt-2 flex flex-wrap gap-1.5 opacity-82">
                 {pinnedPaths.map((path) => {
                   const label = getSidebarRecentLabel(path);
                   const active = currentPath === path;
@@ -168,10 +232,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                     <div key={path} className="relative group/pin">
                       <button
                         onClick={() => navTo(path)}
-                        className={`px-2.5 py-1 rounded-md text-[11px] transition-colors border pr-5 ${active ? 'border-[#00bceb]/45 text-[#63dbf6] bg-[#00bceb]/12' : 'border-white/10 text-white/55 hover:text-white hover:bg-white/5'}`}
+                        className={`${chipButtonClass} ${active ? activeChipClass : mutedChipClass}`}
                         title={label}
                       >
-                        <span className="block truncate max-w-[100px]">{label}</span>
+                        <span className={chipLabelClass}>{label}</span>
                       </button>
                       <button
                         onClick={(event) => { event.stopPropagation(); togglePin(path); }}
@@ -188,9 +252,9 @@ const Sidebar: React.FC<SidebarProps> = ({
           )}
 
           {recentSidebarItems.length > 0 && (
-            <div className="px-3 pb-2">
-              <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-500">{language === 'zh' ? '最近访问' : 'RECENT'}</p>
-              <div className="mt-2 flex flex-wrap gap-1.5">
+            <div className={shelfClass}>
+              <p className={sectionMetaLabelClass}>{language === 'zh' ? '最近访问' : 'Recent'}</p>
+              <div className="mt-2 flex flex-wrap gap-1.5 opacity-76">
                 {recentSidebarItems.map((item) => {
                   const isPinned = pinnedPaths.includes(item.path);
                   const active = currentPath === item.path;
@@ -198,10 +262,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                     <div key={item.path} className="relative group/recent">
                       <button
                         onClick={() => navTo(item.path)}
-                        className={`max-w-full px-2.5 py-1 rounded-md text-[11px] transition-colors border pr-5 ${active ? 'border-[#00bceb]/45 text-[#63dbf6] bg-[#00bceb]/12' : 'border-white/10 text-white/55 hover:text-white hover:bg-white/5'}`}
+                        className={`${chipButtonClass} ${active ? activeChipClass : mutedChipClass}`}
                         title={item.label}
                       >
-                        <span className="block truncate max-w-[100px]">{item.label}</span>
+                        <span className={chipLabelClass}>{item.label}</span>
                       </button>
                       <button
                         onClick={(event) => { event.stopPropagation(); togglePin(item.path); }}
@@ -219,23 +283,25 @@ const Sidebar: React.FC<SidebarProps> = ({
 
           <button
             onClick={() => setRealtimeSectionOpen((value) => !value)}
-            className="w-full px-3 pt-2 pb-1 flex items-center gap-1.5 text-left hover:opacity-80 transition-opacity"
+            className={sectionToggleClass}
           >
-            <ChevronRight size={10} className={`text-white/30 transition-transform duration-150 shrink-0 ${realtimeSectionOpen ? 'rotate-90' : ''}`} />
-            <p className="flex-1 text-[11px] font-semibold uppercase tracking-widest text-slate-500">{language === 'zh' ? '实时监控' : 'REAL-TIME'}</p>
+            <span className="flex h-5 w-5 items-center justify-center rounded-md border border-cyan-300/12 bg-slate-950/24 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
+              <ChevronRight size={10} className={`text-white/34 transition-transform duration-150 shrink-0 ${realtimeSectionOpen ? 'rotate-90' : ''}`} />
+            </span>
+            <p className={sectionLabelClass}>{language === 'zh' ? '实时监控' : 'Real-time'}</p>
           </button>
-          <div className="mx-3 mb-1.5 h-px bg-white/10" />
-          <div className={`space-y-1 overflow-hidden transition-all duration-200 ease-in-out ${realtimeSectionOpen ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none'}`}>
+          <div className={sectionDividerClass} />
+          <div className={realtimeSectionOpen ? 'space-y-1' : 'hidden'}>
             <button
               onClick={() => setActiveTab('dashboard')}
-              className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+              className={`${navButtonClass} ${
                 activeTab === 'dashboard'
-                  ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
-                  : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
+                  ? activePrimaryNavClass
+                  : inactivePrimaryNavClass
               }`}
             >
-              <LayoutDashboard size={17} className={`shrink-0 ${activeTab === 'dashboard' ? 'text-[#00bceb]' : ''}`} />
-              <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{t('dashboard')}</span>
+              <LayoutDashboard size={17} className={`shrink-0 ${activeTab === 'dashboard' ? 'text-[#5fe6ff]' : 'text-white/72'}`} />
+              <span className={navLabelClass}>{t('dashboard')}</span>
             </button>
 
             <div>
@@ -247,29 +313,29 @@ const Sidebar: React.FC<SidebarProps> = ({
                     setActiveTab('monitoring');
                   }
                 }}
-                className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
+                className={`${navButtonGroupClass} ${
                   activeTab === 'monitoring' || currentPath === '/inventory/interfaces'
-                    ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
-                    : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
+                    ? activePrimaryNavClass
+                    : inactivePrimaryNavClass
                 }`}
               >
-                <TrendingUp size={17} className={activeTab === 'monitoring' || currentPath === '/inventory/interfaces' ? 'text-[#00bceb]' : ''} />
-                <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? '监控中心' : 'Monitoring'}</span>
-                <span className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em] mr-1 ${hostResourceTone}`} title={hostResourceSummary}>
+                <TrendingUp size={17} className={activeTab === 'monitoring' || currentPath === '/inventory/interfaces' ? 'text-[#5fe6ff]' : 'text-white/72'} />
+                <span className={navLabelClass}>{language === 'zh' ? '监控中心' : 'Monitoring'}</span>
+                <span className={metricBadgeClass} title={hostResourceSummary}>
                   {hostResources
                     ? `${formatCompactResourcePercent(hostResources.cpu_percent)}/${formatCompactResourcePercent(hostResources.memory_percent)}`
                     : '--/--'}
                 </span>
-                <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition-all duration-200 ${
+                <span className={`${groupChevronWrapClass} ${
                   monitoringGroupOpen
                     ? 'border-[#00bceb]/35 bg-[#00bceb]/12 text-[#7ddfff]'
                     : 'border-white/10 bg-white/[0.04] text-white/45 group-hover:border-white/20 group-hover:text-white/70'
                 }`}>
-                  <ChevronRight size={14} className={`transition-transform duration-200 ${monitoringGroupOpen ? 'rotate-90' : ''}`} />
+                  <ChevronRight size={groupChevronIconSize} className={`transition-transform duration-200 ${monitoringGroupOpen ? 'rotate-90' : ''}`} />
                 </span>
               </button>
-              <div className={`overflow-hidden transition-all duration-200 ease-in-out ${monitoringGroupOpen ? 'max-h-48 opacity-100' : 'max-h-0 opacity-0'}`}>
-                <div className="ml-5 border-l border-slate-600/80 pl-3 pr-1 pt-0.5 pb-1 space-y-0.5">
+              <div className={monitoringGroupOpen ? 'mt-1' : 'hidden'}>
+                <div className={subNavRailClass}>
                   {([
                     { id: 'monitoring', path: null, icon: Monitor, label: language === 'zh' ? '平台资源' : 'Host Resources' },
                     { id: 'inventory-interfaces', path: '/inventory/interfaces', icon: Activity, label: t('interfaceMonitoring') },
@@ -279,15 +345,15 @@ const Sidebar: React.FC<SidebarProps> = ({
                       <button
                         key={item.id}
                         onClick={() => item.path ? navTo(item.path) : setActiveTab('monitoring')}
-                        className={`w-full flex items-center gap-2.5 pl-8 pr-3 py-2 rounded-lg text-sm transition-all ${
+                        className={`${subItemButtonClass} ${
                           isActive
-                            ? 'bg-slate-700/60 text-white font-semibold'
-                            : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100 font-medium'
+                            ? `${activeSubItemClass} font-semibold`
+                            : `${inactiveSubItemClass} font-medium`
                         }`}
                       >
-                        {isActive ? <span className="w-1 h-1 rounded-full bg-[#00bceb] flex-shrink-0" /> : <span className="w-1 h-1 flex-shrink-0" />}
-                        <item.icon size={14} />
-                        <span className="text-[13px]">{item.label}</span>
+                        {isActive ? <span className="mt-2 h-1.5 w-1.5 rounded-full bg-[#38e8ff] flex-shrink-0" /> : <span className="mt-2 h-1.5 w-1.5 rounded-full bg-white/10 flex-shrink-0" />}
+                        <item.icon size={14} className={isActive ? 'text-[#74ecff]' : 'text-white/55'} />
+                        <span className={subItemLabelClass}>{item.label}</span>
                       </button>
                     );
                   })}
@@ -302,27 +368,29 @@ const Sidebar: React.FC<SidebarProps> = ({
               <button
                 key={item.id}
                 onClick={() => setActiveTab(item.id)}
-                className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                className={`${navButtonClass} ${
                   activeTab === item.id
-                    ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
-                    : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
+                    ? activePrimaryNavClass
+                    : inactivePrimaryNavClass
                 }`}
               >
-                <item.icon size={17} className={`shrink-0 ${activeTab === item.id ? 'text-[#00bceb]' : ''}`} />
-                <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{item.label}</span>
+                <item.icon size={17} className={`shrink-0 ${activeTab === item.id ? 'text-[#5fe6ff]' : 'text-white/72'}`} />
+                <span className={navLabelClass}>{item.label}</span>
               </button>
             ))}
           </div>
 
           <button
             onClick={() => setAlertsSectionOpen((value) => !value)}
-            className="w-full px-3 pt-5 pb-1 flex items-center gap-1.5 text-left hover:opacity-80 transition-opacity"
+            className={sectionToggleClass}
           >
-            <ChevronRight size={10} className={`text-white/30 transition-transform duration-150 shrink-0 ${alertsSectionOpen ? 'rotate-90' : ''}`} />
-            <p className="flex-1 text-[11px] font-semibold uppercase tracking-widest text-slate-500">{language === 'zh' ? '告警处置' : 'ALERTS'}</p>
+            <span className="flex h-5 w-5 items-center justify-center rounded-md border border-cyan-300/12 bg-slate-950/24 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
+              <ChevronRight size={10} className={`text-white/34 transition-transform duration-150 shrink-0 ${alertsSectionOpen ? 'rotate-90' : ''}`} />
+            </span>
+            <p className={sectionLabelClass}>{language === 'zh' ? '告警处置' : 'Alerts'}</p>
           </button>
-          <div className="mx-3 mb-1.5 h-px bg-white/10" />
-          <div className={`space-y-1 overflow-hidden transition-all duration-200 ease-in-out ${alertsSectionOpen ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none'}`}>
+          <div className={sectionDividerClass} />
+          <div className={alertsSectionOpen ? 'space-y-1' : 'hidden'}>
             <div>
               <button
                 onClick={() => {
@@ -332,21 +400,21 @@ const Sidebar: React.FC<SidebarProps> = ({
                     setActiveTab('alerts');
                   }
                 }}
-                className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
+                className={`${navButtonGroupClass} ${
                   ['alerts', 'alert-rules', 'maintenance'].includes(activeTab)
-                    ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
-                    : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
+                    ? activePrimaryNavClass
+                    : inactivePrimaryNavClass
                 }`}
               >
-                <AlertTriangle size={17} className={['alerts', 'alert-rules', 'maintenance'].includes(activeTab) ? 'text-[#00bceb]' : ''} />
-                <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? '告警中心' : 'Alert Center'}</span>
-                <span className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em] mr-1 ${alertNavTone}`} title={language === 'zh' ? '未读通知' : 'Unread notifications'}>
+                <AlertTriangle size={17} className={['alerts', 'alert-rules', 'maintenance'].includes(activeTab) ? 'text-[#5fe6ff]' : 'text-white/72'} />
+                <span className={navLabelClass}>{language === 'zh' ? '告警中心' : 'Alert Center'}</span>
+                <span className={alertBadgeClass} title={language === 'zh' ? '未读通知' : 'Unread notifications'}>
                   {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
                 </span>
-                <ChevronRight size={14} className={`text-white/30 transition-transform duration-200 ${alertGroupOpen ? 'rotate-90 text-white/55' : ''}`} />
+                <ChevronRight size={groupChevronIconSize} className={`${plainChevronClass} ${alertGroupOpen ? 'rotate-90 text-white/55' : ''}`} />
               </button>
-              <div className={`overflow-hidden transition-all duration-200 ease-in-out ${alertGroupOpen ? 'max-h-48 opacity-100' : 'max-h-0 opacity-0'}`}>
-                <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5 border-l border-slate-700">
+              <div className={alertGroupOpen ? 'mt-1' : 'hidden'}>
+                <div className={subNavRailClass}>
                   {([
                     { id: 'alerts', icon: AlertTriangle, label: language === 'zh' ? '告警信息' : 'Alert Desk' },
                     { id: 'alert-rules', icon: Settings, label: language === 'zh' ? '告警规则' : 'Alert Rules' },
@@ -357,15 +425,15 @@ const Sidebar: React.FC<SidebarProps> = ({
                       <button
                         key={item.id}
                         onClick={() => setActiveTab(item.id)}
-                        className={`w-full flex items-center gap-2.5 pl-8 pr-3 py-2 rounded-lg text-sm transition-all ${
+                        className={`${subItemButtonClass} ${
                           isActive
-                            ? 'bg-slate-700/60 text-white font-semibold'
-                            : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100 font-medium'
+                            ? `${activeSubItemClass} font-semibold`
+                            : `${inactiveSubItemClass} font-medium`
                         }`}
                       >
-                        {isActive ? <span className="w-1 h-1 rounded-full bg-[#00bceb] flex-shrink-0" /> : <span className="w-1 h-1 flex-shrink-0" />}
-                        <item.icon size={14} />
-                        <span className="text-[13px]">{item.label}</span>
+                        {isActive ? <span className="mt-2 h-1.5 w-1.5 rounded-full bg-[#38e8ff] flex-shrink-0" /> : <span className="mt-2 h-1.5 w-1.5 rounded-full bg-white/10 flex-shrink-0" />}
+                        <item.icon size={14} className={isActive ? 'text-[#74ecff]' : 'text-white/55'} />
+                        <span className={subItemLabelClass}>{item.label}</span>
                       </button>
                     );
                   })}
@@ -376,13 +444,15 @@ const Sidebar: React.FC<SidebarProps> = ({
 
           <button
             onClick={() => setAssetsSectionOpen((value) => !value)}
-            className="w-full px-3 pt-5 pb-1 flex items-center gap-1.5 text-left hover:opacity-80 transition-opacity"
+            className={sectionToggleClass}
           >
-            <ChevronRight size={10} className={`text-white/30 transition-transform duration-150 shrink-0 ${assetsSectionOpen ? 'rotate-90' : ''}`} />
-            <p className="flex-1 text-[11px] font-semibold uppercase tracking-widest text-slate-500">{language === 'zh' ? '资产与配置' : 'ASSETS & CONFIG'}</p>
+            <span className="flex h-5 w-5 items-center justify-center rounded-md border border-cyan-300/12 bg-slate-950/24 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
+              <ChevronRight size={10} className={`text-white/34 transition-transform duration-150 shrink-0 ${assetsSectionOpen ? 'rotate-90' : ''}`} />
+            </span>
+            <p className={sectionLabelClass}>{language === 'zh' ? '资产与配置' : 'Assets & Config'}</p>
           </button>
-          <div className="mx-3 mb-1.5 h-px bg-white/10" />
-          <div className={`space-y-1 overflow-hidden transition-all duration-200 ease-in-out ${assetsSectionOpen ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none'}`}>
+          <div className={sectionDividerClass} />
+          <div className={assetsSectionOpen ? 'space-y-1' : 'hidden'}>
             <div>
               <button
                 onClick={() => {
@@ -390,24 +460,24 @@ const Sidebar: React.FC<SidebarProps> = ({
                   setInventoryGroupOpen(next);
                   if (next && !(currentPath.startsWith('/inventory') || activeTab === 'ipam')) navTo('/inventory/devices');
                 }}
-                className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
+                className={`${navButtonGroupClass} ${
                   activeTab === 'inventory' || activeTab === 'ipam'
-                    ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
-                    : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
+                    ? activePrimaryNavClass
+                    : inactivePrimaryNavClass
                 }`}
               >
-                <Database size={17} className={activeTab === 'inventory' || activeTab === 'ipam' ? 'text-[#00bceb]' : ''} />
-                <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{t('inventory')}</span>
-                <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition-all duration-200 ${
+                <Database size={17} className={activeTab === 'inventory' || activeTab === 'ipam' ? 'text-[#5fe6ff]' : 'text-white/72'} />
+                <span className={navLabelClass}>{t('inventory')}</span>
+                <span className={`${groupChevronWrapClass} ${
                   inventoryGroupOpen
                     ? 'border-[#00bceb]/35 bg-[#00bceb]/12 text-[#7ddfff]'
                     : 'border-white/10 bg-white/[0.04] text-white/45 group-hover:border-white/20 group-hover:text-white/70'
                 }`}>
-                  <ChevronRight size={14} className={`transition-transform duration-200 ${inventoryGroupOpen ? 'rotate-90' : ''}`} />
+                  <ChevronRight size={groupChevronIconSize} className={`transition-transform duration-200 ${inventoryGroupOpen ? 'rotate-90' : ''}`} />
                 </span>
               </button>
-              <div className={`overflow-hidden transition-all duration-200 ease-in-out ${inventoryGroupOpen ? 'max-h-48 opacity-100' : 'max-h-0 opacity-0'}`}>
-                <div className="ml-5 border-l border-slate-600/80 pl-3 pr-1 pt-0.5 pb-1 space-y-0.5">
+              <div className={inventoryGroupOpen ? 'mt-1' : 'hidden'}>
+                <div className={subNavRailClass}>
                   {([
                     { path: 'inventory/devices', icon: Server, label: t('deviceList') },
                     { path: 'ipam', icon: Network, label: language === 'zh' ? 'IP/VLAN管理' : 'IP/VLAN Mgmt' },
@@ -417,15 +487,15 @@ const Sidebar: React.FC<SidebarProps> = ({
                       <button
                         key={item.path}
                         onClick={() => item.path === 'ipam' ? setActiveTab('ipam') : navTo(`/${item.path}`)}
-                        className={`w-full flex items-center gap-2.5 pl-8 pr-3 py-2 rounded-lg text-sm transition-all ${
+                        className={`${subItemButtonClass} ${
                           isActive
-                            ? 'bg-slate-700/60 text-white font-semibold'
-                            : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100 font-medium'
+                            ? `${activeSubItemClass} font-semibold`
+                            : `${inactiveSubItemClass} font-medium`
                         }`}
                       >
-                        {isActive ? <span className="w-1 h-1 rounded-full bg-[#00bceb] flex-shrink-0" /> : <span className="w-1 h-1 flex-shrink-0" />}
-                        <item.icon size={14} />
-                        <span className="text-[13px]">{item.label}</span>
+                        {isActive ? <span className="mt-2 h-1.5 w-1.5 rounded-full bg-[#38e8ff] flex-shrink-0" /> : <span className="mt-2 h-1.5 w-1.5 rounded-full bg-white/10 flex-shrink-0" />}
+                        <item.icon size={14} className={isActive ? 'text-[#74ecff]' : 'text-white/55'} />
+                        <span className={subItemLabelClass}>{item.label}</span>
                       </button>
                     );
                   })}
@@ -436,13 +506,15 @@ const Sidebar: React.FC<SidebarProps> = ({
 
           <button
             onClick={() => setAutomationSectionOpen((value) => !value)}
-            className="w-full px-3 pt-5 pb-1 flex items-center gap-1.5 text-left hover:opacity-80 transition-opacity"
+            className={sectionToggleClass}
           >
-            <ChevronRight size={10} className={`text-white/30 transition-transform duration-150 shrink-0 ${automationSectionOpen ? 'rotate-90' : ''}`} />
-            <p className="flex-1 text-[11px] font-semibold uppercase tracking-widest text-slate-500">{language === 'zh' ? '自动化与合规' : 'AUTOMATION'}</p>
+            <span className="flex h-5 w-5 items-center justify-center rounded-md border border-cyan-300/12 bg-slate-950/24 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
+              <ChevronRight size={10} className={`text-white/34 transition-transform duration-150 shrink-0 ${automationSectionOpen ? 'rotate-90' : ''}`} />
+            </span>
+            <p className={sectionLabelClass}>{language === 'zh' ? '自动化与合规' : 'Automation'}</p>
           </button>
-          <div className="mx-3 mb-1.5 h-px bg-white/10" />
-          <div className={`space-y-1 overflow-hidden transition-all duration-200 ease-in-out ${automationSectionOpen ? 'max-h-[800px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none'}`}>
+          <div className={sectionDividerClass} />
+          <div className={automationSectionOpen ? 'space-y-1' : 'hidden'}>
             <div>
               <button
                 onClick={() => {
@@ -450,24 +522,24 @@ const Sidebar: React.FC<SidebarProps> = ({
                   setAutomationGroupOpen(next);
                   if (next && !currentPath.startsWith('/automation')) navTo('/automation/execute');
                 }}
-                className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
+                className={`${navButtonGroupClass} ${
                   activeTab === 'automation'
-                    ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
-                    : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
+                    ? activePrimaryNavClass
+                    : inactivePrimaryNavClass
                 }`}
               >
-                <Zap size={17} className={activeTab === 'automation' ? 'text-[#00bceb]' : ''} />
-                <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{t('automation')}</span>
-                <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition-all duration-200 ${
+                <Zap size={17} className={activeTab === 'automation' ? 'text-[#5fe6ff]' : 'text-white/72'} />
+                <span className={navLabelClass}>{t('automation')}</span>
+                <span className={`${groupChevronWrapClass} ${
                   automationGroupOpen
                     ? 'border-[#00bceb]/35 bg-[#00bceb]/12 text-[#7ddfff]'
                     : 'border-white/10 bg-white/[0.04] text-white/45 group-hover:border-white/20 group-hover:text-white/70'
                 }`}>
-                  <ChevronRight size={14} className={`transition-transform duration-200 ${automationGroupOpen ? 'rotate-90' : ''}`} />
+                  <ChevronRight size={groupChevronIconSize} className={`transition-transform duration-200 ${automationGroupOpen ? 'rotate-90' : ''}`} />
                 </span>
               </button>
-              <div className={`overflow-hidden transition-all duration-200 ease-in-out ${automationGroupOpen ? 'max-h-48 opacity-100' : 'max-h-0 opacity-0'}`}>
-                <div className="ml-5 border-l border-slate-600/80 pl-3 pr-1 pt-0.5 pb-1 space-y-0.5">
+              <div className={automationGroupOpen ? 'mt-1' : 'hidden'}>
+                <div className={subNavRailClass}>
                   {([
                     { path: 'automation/execute', icon: Zap, label: t('directExecution') },
                     { path: 'automation/scenarios', icon: FolderOpen, label: t('scenarioLibrary') },
@@ -478,15 +550,15 @@ const Sidebar: React.FC<SidebarProps> = ({
                       <button
                         key={item.path}
                         onClick={() => navTo(`/${item.path}`)}
-                        className={`w-full flex items-center gap-2.5 pl-8 pr-3 py-2 rounded-lg text-sm transition-all ${
+                        className={`${subItemButtonClass} ${
                           isActive
-                            ? 'bg-slate-700/60 text-white font-semibold'
-                            : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100 font-medium'
+                            ? `${activeSubItemClass} font-semibold`
+                            : `${inactiveSubItemClass} font-medium`
                         }`}
                       >
-                        {isActive ? <span className="w-1 h-1 rounded-full bg-[#00bceb] flex-shrink-0" /> : <span className="w-1 h-1 flex-shrink-0" />}
-                        <item.icon size={14} />
-                        <span className="text-[13px]">{item.label}</span>
+                        {isActive ? <span className="mt-2 h-1.5 w-1.5 rounded-full bg-[#38e8ff] flex-shrink-0" /> : <span className="mt-2 h-1.5 w-1.5 rounded-full bg-white/10 flex-shrink-0" />}
+                        <item.icon size={14} className={isActive ? 'text-[#74ecff]' : 'text-white/55'} />
+                        <span className={subItemLabelClass}>{item.label}</span>
                       </button>
                     );
                   })}
@@ -501,24 +573,24 @@ const Sidebar: React.FC<SidebarProps> = ({
                   setConfigGroupOpen(next);
                   if (next && !currentPath.startsWith('/config')) navTo('/config/backup');
                 }}
-                className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
+                className={`${navButtonGroupClass} ${
                   activeTab === 'config' || activeTab === 'compliance'
-                    ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
-                    : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
+                    ? activePrimaryNavClass
+                    : inactivePrimaryNavClass
                 }`}
               >
-                <FolderOpen size={17} className={activeTab === 'config' || activeTab === 'compliance' ? 'text-[#00bceb]' : ''} />
-                <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? '配置与合规' : 'Config & Compliance'}</span>
-                <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition-all duration-200 ${
+                <FolderOpen size={17} className={activeTab === 'config' || activeTab === 'compliance' ? 'text-[#5fe6ff]' : 'text-white/72'} />
+                <span className={navLabelClass}>{language === 'zh' ? '配置与合规' : 'Config & Compliance'}</span>
+                <span className={`${groupChevronWrapClass} ${
                   configGroupOpen
                     ? 'border-[#00bceb]/35 bg-[#00bceb]/12 text-[#7ddfff]'
                     : 'border-white/10 bg-white/[0.04] text-white/45 group-hover:border-white/20 group-hover:text-white/70'
                 }`}>
-                  <ChevronRight size={14} className={`transition-transform duration-200 ${configGroupOpen ? 'rotate-90' : ''}`} />
+                  <ChevronRight size={groupChevronIconSize} className={`transition-transform duration-200 ${configGroupOpen ? 'rotate-90' : ''}`} />
                 </span>
               </button>
-              <div className={`overflow-hidden transition-all duration-200 ease-in-out ${configGroupOpen ? 'max-h-64 opacity-100' : 'max-h-0 opacity-0'}`}>
-                <div className="ml-5 border-l border-slate-600/80 pl-3 pr-1 pt-0.5 pb-1 space-y-0.5">
+              <div className={configGroupOpen ? 'mt-1' : 'hidden'}>
+                <div className={subNavRailClass}>
                   {([
                     { path: 'config/backup', icon: Download, label: t('backupHistory') },
                     { path: 'config/diff', icon: FileText, label: t('diffCompare') },
@@ -532,15 +604,15 @@ const Sidebar: React.FC<SidebarProps> = ({
                       <button
                         key={item.path}
                         onClick={() => item.path === 'compliance' ? setActiveTab('compliance') : navTo(`/${item.path}`)}
-                        className={`w-full flex items-center gap-2.5 pl-8 pr-3 py-2 rounded-lg text-sm transition-all ${
+                        className={`${subItemButtonClass} ${
                           isActive
-                            ? 'bg-slate-700/60 text-white font-semibold'
-                            : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100 font-medium'
+                            ? `${activeSubItemClass} font-semibold`
+                            : `${inactiveSubItemClass} font-medium`
                         }`}
                       >
-                        {isActive ? <span className="w-1 h-1 rounded-full bg-[#00bceb] flex-shrink-0" /> : <span className="w-1 h-1 flex-shrink-0" />}
-                        <item.icon size={14} />
-                        <span className="text-[13px]">{item.label}</span>
+                        {isActive ? <span className="mt-2 h-1.5 w-1.5 rounded-full bg-[#38e8ff] flex-shrink-0" /> : <span className="mt-2 h-1.5 w-1.5 rounded-full bg-white/10 flex-shrink-0" />}
+                        <item.icon size={14} className={isActive ? 'text-[#74ecff]' : 'text-white/55'} />
+                        <span className={subItemLabelClass}>{item.label}</span>
                       </button>
                     );
                   })}
@@ -551,47 +623,51 @@ const Sidebar: React.FC<SidebarProps> = ({
 
           <button
             onClick={() => setCapacitySectionOpen((value) => !value)}
-            className="w-full px-3 pt-5 pb-1 flex items-center gap-1.5 text-left hover:opacity-80 transition-opacity"
+            className={sectionToggleClass}
           >
-            <ChevronRight size={10} className={`text-white/30 transition-transform duration-150 shrink-0 ${capacitySectionOpen ? 'rotate-90' : ''}`} />
-            <p className="flex-1 text-[11px] font-semibold uppercase tracking-widest text-slate-500">{language === 'zh' ? '容量与报表' : 'CAPACITY'}</p>
+            <span className="flex h-5 w-5 items-center justify-center rounded-md border border-cyan-300/12 bg-slate-950/24 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
+              <ChevronRight size={10} className={`text-white/34 transition-transform duration-150 shrink-0 ${capacitySectionOpen ? 'rotate-90' : ''}`} />
+            </span>
+            <p className={sectionLabelClass}>{language === 'zh' ? '容量与报表' : 'Capacity & Reports'}</p>
           </button>
-          <div className="mx-3 mb-1.5 h-px bg-white/10" />
-          <div className={`space-y-1 overflow-hidden transition-all duration-200 ease-in-out ${capacitySectionOpen ? 'max-h-[400px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none'}`}>
+          <div className={sectionDividerClass} />
+          <div className={capacitySectionOpen ? 'space-y-1' : 'hidden'}>
             <button
               onClick={() => setActiveTab('capacity')}
-              className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+              className={`${navButtonClass} ${
                 activeTab === 'capacity'
-                  ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
-                  : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
+                  ? activePrimaryNavClass
+                  : inactivePrimaryNavClass
               }`}
             >
-              <Cpu size={17} className={`shrink-0 ${activeTab === 'capacity' ? 'text-[#00bceb]' : ''}`} />
-              <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? '容量规划' : 'Capacity'}</span>
+              <Cpu size={17} className={`shrink-0 ${activeTab === 'capacity' ? 'text-[#5fe6ff]' : 'text-white/72'}`} />
+              <span className={navLabelClass}>{language === 'zh' ? '容量规划' : 'Capacity'}</span>
             </button>
 
             <button
               onClick={() => setActiveTab('reports')}
-              className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+              className={`${navButtonClass} ${
                 activeTab === 'reports'
-                  ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
-                  : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
+                  ? activePrimaryNavClass
+                  : inactivePrimaryNavClass
               }`}
             >
-              <BarChart3 size={17} className={`shrink-0 ${activeTab === 'reports' ? 'text-[#00bceb]' : ''}`} />
-              <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? '报表中心' : 'Reports'}</span>
+              <BarChart3 size={17} className={`shrink-0 ${activeTab === 'reports' ? 'text-[#5fe6ff]' : 'text-white/72'}`} />
+              <span className={navLabelClass}>{language === 'zh' ? '报表中心' : 'Reports'}</span>
             </button>
           </div>
 
           <button
             onClick={() => setManagementSectionOpen((value) => !value)}
-            className="w-full px-3 pt-5 pb-1 flex items-center gap-1.5 text-left hover:opacity-80 transition-opacity"
+            className={sectionToggleClass}
           >
-            <ChevronRight size={10} className={`text-white/30 transition-transform duration-150 shrink-0 ${managementSectionOpen ? 'rotate-90' : ''}`} />
-            <p className="flex-1 text-[11px] font-semibold uppercase tracking-widest text-slate-500">{language === 'zh' ? '平台管理' : 'MANAGEMENT'}</p>
+            <span className="flex h-5 w-5 items-center justify-center rounded-md border border-cyan-300/12 bg-slate-950/24 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
+              <ChevronRight size={10} className={`text-white/34 transition-transform duration-150 shrink-0 ${managementSectionOpen ? 'rotate-90' : ''}`} />
+            </span>
+            <p className={sectionLabelClass}>{language === 'zh' ? '平台管理' : 'Management'}</p>
           </button>
-          <div className="mx-3 mb-1.5 h-px bg-white/10" />
-          <div className={`space-y-1 overflow-hidden transition-all duration-200 ease-in-out ${managementSectionOpen ? 'max-h-[400px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none'}`}>
+          <div className={sectionDividerClass} />
+          <div className={managementSectionOpen ? 'space-y-1' : 'hidden'}>
             <div>
               <button
                 onClick={() => {
@@ -601,18 +677,18 @@ const Sidebar: React.FC<SidebarProps> = ({
                     setActiveTab('history');
                   }
                 }}
-                className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all group ${
+                className={`${navButtonGroupClass} ${
                   ['history', 'configuration', 'users'].includes(activeTab)
-                    ? 'bg-slate-800/95 text-white shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
-                    : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
+                    ? activePrimaryNavClass
+                    : inactivePrimaryNavClass
                 }`}
               >
-                <Settings size={17} className={['history', 'configuration', 'users'].includes(activeTab) ? 'text-[#00bceb]' : ''} />
-                <span className="min-w-0 flex-1 text-left truncate whitespace-nowrap">{language === 'zh' ? '平台管理' : 'Management'}</span>
-                <ChevronRight size={14} className={`text-white/30 transition-transform duration-200 ${managementGroupOpen ? 'rotate-90 text-white/55' : ''}`} />
+                <Settings size={17} className={['history', 'configuration', 'users'].includes(activeTab) ? 'text-[#5fe6ff]' : 'text-white/72'} />
+                <span className={navLabelClass}>{language === 'zh' ? '平台管理' : 'Management'}</span>
+                <ChevronRight size={groupChevronIconSize} className={`${plainChevronClass} ${managementGroupOpen ? 'rotate-90 text-white/55' : ''}`} />
               </button>
-              <div className={`overflow-hidden transition-all duration-200 ease-in-out ${managementGroupOpen ? 'max-h-48 opacity-100' : 'max-h-0 opacity-0'}`}>
-                <div className="pl-3 pr-1 pt-0.5 pb-1 space-y-0.5 border-l border-slate-700">
+              <div className={managementGroupOpen ? 'mt-1' : 'hidden'}>
+                <div className={subNavRailClass}>
                   {([
                     { id: 'history', icon: History, label: t('auditLogs') },
                     { id: 'configuration', icon: Settings, label: t('configuration') },
@@ -623,15 +699,15 @@ const Sidebar: React.FC<SidebarProps> = ({
                       <button
                         key={item.id}
                         onClick={() => setActiveTab(item.id)}
-                        className={`w-full flex items-center gap-2.5 pl-8 pr-3 py-2 rounded-lg text-sm transition-all ${
+                        className={`${subItemButtonClass} ${
                           isActive
-                            ? 'bg-slate-700/60 text-white font-semibold'
-                            : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100 font-medium'
+                            ? `${activeSubItemClass} font-semibold`
+                            : `${inactiveSubItemClass} font-medium`
                         }`}
                       >
-                        {isActive ? <span className="w-1 h-1 rounded-full bg-[#00bceb] flex-shrink-0" /> : <span className="w-1 h-1 flex-shrink-0" />}
-                        <item.icon size={14} />
-                        <span className="text-[13px]">{item.label}</span>
+                        {isActive ? <span className="mt-2 h-1.5 w-1.5 rounded-full bg-[#38e8ff] flex-shrink-0" /> : <span className="mt-2 h-1.5 w-1.5 rounded-full bg-white/10 flex-shrink-0" />}
+                        <item.icon size={14} className={isActive ? 'text-[#74ecff]' : 'text-white/55'} />
+                        <span className={subItemLabelClass}>{item.label}</span>
                       </button>
                     );
                   })}
